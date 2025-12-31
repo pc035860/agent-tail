@@ -76,18 +76,48 @@ class CodexLineParser implements LineParser {
 
     try {
       const data = JSON.parse(line);
-      const type = data.type || 'unknown';
       const timestamp = data.timestamp || '';
+      const formatted = this.format(data);
+
+      // 空內容不輸出
+      if (!formatted) return null;
+
+      // 決定顯示類型
+      const type = this.getDisplayType(data);
 
       return {
         type,
         timestamp,
         raw: data,
-        formatted: this.format(data),
+        formatted,
       };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 根據資料內容決定顯示類型
+   */
+  private getDisplayType(data: Record<string, unknown>): string {
+    const type = data.type as string;
+
+    if (type === 'session_meta') return 'session_meta';
+
+    if (type === 'response_item') {
+      const payload = data.payload as Record<string, unknown>;
+      const subType = payload.type as string;
+
+      if (subType === 'message') {
+        const role = payload.role as string;
+        return role || 'message';
+      }
+      if (subType === 'function_call') return 'function_call';
+      if (subType === 'function_call_output') return 'output';
+      if (subType === 'reasoning') return 'reasoning';
+    }
+
+    return type || 'unknown';
   }
 
   private format(data: Record<string, unknown>): string {
@@ -96,7 +126,7 @@ class CodexLineParser implements LineParser {
     switch (type) {
       case 'session_meta': {
         const payload = data.payload as Record<string, unknown>;
-        return `Session started: ${payload.cwd || 'unknown'} (${payload.cli_version || ''})`;
+        return `Session: ${payload.cwd || 'unknown'} (v${payload.cli_version || '?'})`;
       }
 
       case 'response_item': {
@@ -109,8 +139,10 @@ class CodexLineParser implements LineParser {
             const content = payload.content as Array<{ type: string; text?: string }>;
             const text =
               content?.find((c) => c.type === 'input_text' || c.type === 'output_text')?.text || '';
+            if (!text.trim()) return '';
             const preview = truncateByLines(text, { verbose: this.verbose });
-            return `[${role?.toUpperCase()}]${formatMultiline(preview)}`;
+            // 不再重複顯示 role，由 pretty-formatter 處理
+            return formatMultiline(preview);
           }
 
           case 'function_call': {
@@ -135,63 +167,58 @@ class CodexLineParser implements LineParser {
             }
             const exitCode = output.metadata?.exit_code;
             const content = output.output || '';
-            const exitInfo = exitCode !== undefined ? ` (exit: ${exitCode})` : '';
+            // 沒內容且 exit code 正常就不顯示
+            if (!content && (exitCode === undefined || exitCode === 0)) return '';
+            const exitInfo = exitCode !== undefined && exitCode !== 0 ? ` (exit: ${exitCode})` : '';
             if (!content) return `[OUTPUT${exitInfo}]`;
             const preview = truncateByLines(content, { verbose: this.verbose });
-            return `[OUTPUT${exitInfo}]${formatMultiline(preview)}`;
+            return `${exitInfo ? `[exit: ${exitCode}]` : ''}${formatMultiline(preview)}`;
           }
 
           case 'reasoning': {
             const summary = payload.summary as Array<{ type: string; text?: string }> | undefined;
             const text = summary?.find((s) => s.type === 'summary_text')?.text || '';
-            if (!text) return '[REASONING]';
+            if (!text) return '';
             const preview = truncateByLines(text, { verbose: this.verbose });
-            return `[REASONING] ${preview}`;
+            return `💭 ${preview}`;
           }
 
+          // 忽略的子類型
+          case 'ghost_snapshot':
+            return '';
+
           default:
-            return `[RESPONSE: ${subType}]`;
+            return '';
         }
       }
 
       case 'event_msg': {
         const payload = data.payload as Record<string, unknown>;
-        const eventType = payload.type as string; // 修正：使用 type 而非 event_type
+        const eventType = payload.type as string;
 
         switch (eventType) {
           case 'token_count': {
-            const info = payload.info as {
-              total_token_usage?: {
-                input_tokens?: number;
-                output_tokens?: number;
-                total_tokens?: number;
-              };
-            };
-            const usage = info?.total_token_usage;
-            if (usage) {
-              return `[TOKENS] in:${usage.input_tokens || 0} out:${usage.output_tokens || 0} total:${usage.total_tokens || 0}`;
-            }
-            return '[TOKENS]';
+            // 略過 token 統計，太 noisy
+            return '';
           }
 
           case 'agent_reasoning': {
-            const text = payload.text as string | undefined;
-            if (!text) return '[AGENT_REASONING]';
-            const preview = truncateByLines(text, { verbose: this.verbose });
-            return `[AGENT_REASONING] ${preview}`;
+            // 與 response_item.reasoning 重複，略過
+            return '';
           }
 
+          // 略過其他事件
           default:
-            return `[EVENT: ${eventType}]`;
+            return '';
         }
       }
 
-      case 'turn_context': {
-        return '[TURN_CONTEXT]';
-      }
+      // 略過 turn_context
+      case 'turn_context':
+        return '';
 
       default:
-        return `[${type}]`;
+        return '';
     }
   }
 }

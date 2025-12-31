@@ -63,6 +63,12 @@ class GeminiSessionFinder implements SessionFinder {
  */
 class GeminiLineParser implements LineParser {
   private processedMessageIds = new Set<string>();
+  /** 追蹤 gemini message 內部的處理進度：toolCalls index 和 content 是否已處理 */
+  private currentMessageState: {
+    messageId: string;
+    toolCallIndex: number;
+    contentProcessed: boolean;
+  } | null = null;
   private verbose: boolean;
 
   constructor(options: ParserOptions = { verbose: false }) {
@@ -89,7 +95,8 @@ class GeminiLineParser implements LineParser {
   }
 
   /**
-   * 解析完整 session JSON，只回傳新的 messages
+   * 解析完整 session JSON，逐個回傳 message 的各個部分
+   * gemini 類型的 message 會被拆分成多個輸出（每個 toolCall 和 content）
    */
   private parseSessionJson(session: {
     sessionId?: string;
@@ -104,101 +111,128 @@ class GeminiLineParser implements LineParser {
   }): ParsedLine | null {
     const messages = session.messages || [];
 
-    // 找到新的 messages（尚未處理過的）
-    const newMessages = messages.filter((m) => !this.processedMessageIds.has(m.id));
-
-    if (newMessages.length === 0) return null;
-
-    // 標記這些 messages 為已處理
-    for (const msg of newMessages) {
-      this.processedMessageIds.add(msg.id);
+    // 如果正在處理某個 gemini message 的內部狀態
+    if (this.currentMessageState) {
+      const msg = messages.find((m) => m.id === this.currentMessageState!.messageId);
+      if (msg) {
+        const result = this.processGeminiMessagePart(msg);
+        if (result) return result;
+      }
+      // 當前 message 處理完畢
+      this.currentMessageState = null;
     }
 
-    // 組合所有新 messages 的輸出
-    const formattedParts = newMessages.map((msg) => this.formatMessage(msg));
+    // 找到下一個未處理的 message
+    const nextMessage = messages.find((m) => !this.processedMessageIds.has(m.id));
+    if (!nextMessage) return null;
 
-    // 回傳第一個新 message 的資訊，formatted 包含所有新 messages
-    const firstNew = newMessages[0];
-    if (!firstNew) return null;
+    // user 類型直接輸出
+    if (nextMessage.type === 'user') {
+      this.processedMessageIds.add(nextMessage.id);
+      const content = nextMessage.content || '';
+      if (!content.trim()) {
+        return this.parseSessionJson(session);
+      }
+      const preview = truncateByLines(content, { verbose: this.verbose });
+      return {
+        type: 'user',
+        timestamp: nextMessage.timestamp,
+        raw: nextMessage,
+        formatted: formatMultiline(preview),
+      };
+    }
 
+    // gemini 類型需要拆分處理
+    if (nextMessage.type === 'gemini') {
+      this.processedMessageIds.add(nextMessage.id);
+      // 初始化內部狀態
+      this.currentMessageState = {
+        messageId: nextMessage.id,
+        toolCallIndex: 0,
+        contentProcessed: false,
+      };
+      const result = this.processGeminiMessagePart(nextMessage);
+      if (result) return result;
+      // 如果沒有內容，處理下一個 message
+      this.currentMessageState = null;
+      return this.parseSessionJson(session);
+    }
+
+    // 其他類型
+    this.processedMessageIds.add(nextMessage.id);
+    const content = nextMessage.content || '';
+    const preview = truncateByLines(content, { verbose: this.verbose });
     return {
-      type: firstNew.type,
-      timestamp: firstNew.timestamp,
-      raw: newMessages.length === 1 ? firstNew : newMessages,
-      formatted: formattedParts.join('\n'),
+      type: nextMessage.type,
+      timestamp: nextMessage.timestamp,
+      raw: nextMessage,
+      formatted: formatMultiline(preview),
     };
   }
 
   /**
-   * 解析單一 message
+   * 處理 gemini message 的下一個部分（toolCall 或 content）
+   */
+  private processGeminiMessagePart(msg: {
+    id: string;
+    timestamp: string;
+    content: string;
+    toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
+  }): ParsedLine | null {
+    if (!this.currentMessageState) return null;
+
+    const toolCalls = msg.toolCalls || [];
+
+    // 先處理 toolCalls
+    if (this.currentMessageState.toolCallIndex < toolCalls.length) {
+      const tc = toolCalls[this.currentMessageState.toolCallIndex];
+      this.currentMessageState.toolCallIndex++;
+      if (tc) {
+        const status = tc.status === 'error' ? ' ❌' : '';
+        return {
+          type: 'function_call',
+          timestamp: msg.timestamp,
+          raw: tc,
+          formatted: formatToolUse(tc.name || 'unknown', tc.args, { verbose: this.verbose }) + status,
+        };
+      }
+    }
+
+    // 然後處理 content
+    if (!this.currentMessageState.contentProcessed) {
+      this.currentMessageState.contentProcessed = true;
+      const content = msg.content || '';
+      if (content.trim()) {
+        const preview = truncateByLines(content, { verbose: this.verbose });
+        return {
+          type: 'gemini',
+          timestamp: msg.timestamp,
+          raw: msg,
+          formatted: formatMultiline(preview),
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * 解析單一 message（非 session JSON 的情況，較少見）
    */
   private parseSingleMessage(data: Record<string, unknown>): ParsedLine | null {
     const type = (data.type as string) || 'unknown';
     const timestamp = (data.timestamp as string) || '';
+    const content = (data.content as string) || '';
 
+    if (!content.trim()) return null;
+
+    const preview = truncateByLines(content, { verbose: this.verbose });
     return {
       type,
       timestamp,
       raw: data,
-      formatted: this.formatMessage(data as {
-        type: string;
-        content: string;
-        tokens?: Record<string, number>;
-        toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
-      }),
+      formatted: formatMultiline(preview),
     };
-  }
-
-  /**
-   * 格式化單一 message
-   */
-  private formatMessage(msg: {
-    type: string;
-    content: string;
-    tokens?: Record<string, number>;
-    toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
-  }): string {
-    const type = msg.type || 'unknown';
-    const content = msg.content || '';
-    const preview = truncateByLines(content, { verbose: this.verbose });
-
-    switch (type) {
-      case 'user':
-        return `[USER]${formatMultiline(preview)}`;
-
-      case 'gemini': {
-        const parts: string[] = [];
-
-        // Token 統計
-        const tokens = msg.tokens;
-        if (tokens?.total) {
-          parts.push(
-            `[TOKENS] in:${tokens.input || 0} out:${tokens.output || 0} total:${tokens.total}`
-          );
-        }
-
-        // 工具呼叫（使用共用 formatToolUse）
-        const toolCalls = msg.toolCalls;
-        if (toolCalls && toolCalls.length > 0) {
-          for (const tc of toolCalls) {
-            const status = tc.status === 'error' ? ' [ERROR]' : '';
-            parts.push(
-              formatToolUse(tc.name || 'unknown', tc.args, { verbose: this.verbose }) + status
-            );
-          }
-        }
-
-        // 主要內容
-        if (content) {
-          parts.push(`[GEMINI]${formatMultiline(preview)}`);
-        }
-
-        return parts.join('\n');
-      }
-
-      default:
-        return `[${type.toUpperCase()}]${formatMultiline(preview)}`;
-    }
   }
 }
 

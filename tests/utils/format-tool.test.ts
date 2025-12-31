@@ -170,25 +170,25 @@ describe('formatToolUse', () => {
         const result = formatToolUse('shell', {
           command: ['/bin/zsh', '-lc', 'git status --short'],
         });
-        expect(result).toBe('[TOOL: shell] git status --short');
+        expect(result).toBe('$ git status --short');
       });
 
       test('shows command from string', () => {
         const result = formatToolUse('shell', { command: 'ls -la' });
-        expect(result).toBe('[TOOL: shell] ls -la');
+        expect(result).toBe('$ ls -la');
       });
 
       test('truncates long command', () => {
         const longCmd = 'echo ' + 'a'.repeat(200);
         const result = formatToolUse('shell', { command: longCmd });
-        expect(result).toContain('[TOOL: shell]');
+        expect(result).toContain('$');
         expect(result).toContain('...');
       });
 
       test('does not truncate in verbose mode', () => {
         const longCmd = 'echo ' + 'a'.repeat(200);
         const result = formatToolUse('shell', { command: longCmd }, { verbose: true });
-        expect(result).toBe(`[TOOL: shell] ${longCmd}`);
+        expect(result).toBe(`$ ${longCmd}`);
       });
 
       test('handles missing command', () => {

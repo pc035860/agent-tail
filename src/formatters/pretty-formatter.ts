@@ -33,21 +33,19 @@ export class PrettyFormatter implements Formatter {
       case 'user':
         return chalk.green.bold('USER');
       case 'assistant':
+      case 'gemini':
+        // 統一 agent 回覆的顯示
         return chalk.blue.bold('ASST');
       case 'session_meta':
         return chalk.yellow('META');
-      case 'response_item':
-        return chalk.cyan('RESP');
-      case 'event_msg':
-        return chalk.gray('EVNT');
       case 'function_call':
         return chalk.magenta('FUNC');
-      case 'file-history-snapshot':
-        return chalk.gray('SNAP');
-      case 'gemini':
-        return chalk.magenta.bold('GEMI');
+      case 'output':
+        return chalk.cyan('OUT ');
+      case 'reasoning':
+        return chalk.gray('THINK');
       default:
-        return chalk.white(type.toUpperCase().slice(0, 4));
+        return chalk.white(type.toUpperCase().slice(0, 4).padEnd(4));
     }
   }
 }

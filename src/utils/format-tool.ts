@@ -103,9 +103,10 @@ export function formatToolUse(
     }
 
     // Codex 工具
-    case 'shell': {
+    case 'shell':
+    case 'shell_command': {
       const command = input.command as string | string[] | undefined;
-      // Codex shell command 格式: ['/bin/zsh', '-lc', 'actual command']
+      // Codex shell command 格式: ['/bin/zsh', '-lc', 'actual command'] 或直接字串
       const cmdStr = Array.isArray(command) ? command.slice(2).join(' ') : command || '';
       if (cmdStr) {
         const summary = truncate(cmdStr, {
@@ -113,7 +114,7 @@ export function formatToolUse(
           headLength: 80,
           tailLength: 40,
         });
-        return `[TOOL: shell] ${summary}`;
+        return `$ ${summary}`;
       }
       return `[TOOL: shell]`;
     }

@@ -84,12 +84,16 @@ class ClaudeLineParser implements LineParser {
       const data = JSON.parse(line);
       const type = data.type || 'unknown';
       const timestamp = data.timestamp || '';
+      const formatted = this.format(data);
+
+      // 空內容不輸出
+      if (!formatted) return null;
 
       return {
         type,
         timestamp,
         raw: data,
-        formatted: this.format(data),
+        formatted,
       };
     } catch {
       return null;
@@ -101,14 +105,14 @@ class ClaudeLineParser implements LineParser {
 
     switch (type) {
       case 'file-history-snapshot': {
-        return '[SNAPSHOT]';
+        return '';  // 不顯示 snapshot
       }
 
       case 'user': {
         const message = data.message as { content: unknown };
         const content = contentToString(message?.content);
         const preview = truncateByLines(content, { verbose: this.verbose });
-        return `[USER]${formatMultiline(preview)}`;
+        return formatMultiline(preview);
       }
 
       case 'assistant': {
@@ -125,6 +129,12 @@ class ClaudeLineParser implements LineParser {
         const model = message?.model || '';
         const content = message?.content || [];
 
+        // 簡化 model 顯示
+        const modelShort = model
+          .replace('claude-', '')
+          .replace('-20251101', '')
+          .replace('-', ' ');
+
         // 提取文字內容和 tool_use
         const parts: string[] = [];
         for (const part of content) {
@@ -136,12 +146,13 @@ class ClaudeLineParser implements LineParser {
         }
 
         const text = parts.join(' ');
-        const modelShort = model.replace('claude-', '').replace('-20251101', '');
-        return `[ASSISTANT${modelShort ? ` (${modelShort})` : ''}]${formatMultiline(text)}`;
+        // 若有 model 資訊，顯示在第一行
+        const modelInfo = modelShort ? `(${modelShort})` : '';
+        return `${modelInfo}${formatMultiline(text)}`;
       }
 
       default:
-        return `[${type}]`;
+        return '';
     }
   }
 }
