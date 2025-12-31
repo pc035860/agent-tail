@@ -5,7 +5,9 @@ const program = new Command();
 
 program
   .name('agent-tail')
-  .description('Tail agent session logs (Codex, Claude Code & Gemini CLI) in real-time')
+  .description(
+    'Tail agent session logs (Codex, Claude Code & Gemini CLI) in real-time'
+  )
   .version('0.1.0')
   .argument('<agent-type>', 'Agent type: codex, claude, or gemini')
   .option('--raw', 'Output raw JSONL instead of formatted output', false)
@@ -24,8 +26,14 @@ export function parseArgs(args: string[]): CliOptions {
   const opts = program.opts();
 
   // 驗證 agent 類型
-  if (agentTypeArg !== 'codex' && agentTypeArg !== 'claude' && agentTypeArg !== 'gemini') {
-    console.error(`Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", or "gemini".`);
+  if (
+    agentTypeArg !== 'codex' &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'gemini'
+  ) {
+    console.error(
+      `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", or "gemini".`
+    );
     process.exit(1);
   }
 

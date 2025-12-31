@@ -168,7 +168,11 @@ describe('GeminiAgent parser', () => {
             content: '',
             timestamp: '2024-01-01T00:00:00Z',
             toolCalls: [
-              { name: 'run_shell_command', args: { command: 'fail' }, status: 'error' },
+              {
+                name: 'run_shell_command',
+                args: { command: 'fail' },
+                status: 'error',
+              },
             ],
           },
         ],
@@ -209,7 +213,9 @@ describe('GeminiAgent parser', () => {
             type: 'gemini',
             content: '',
             timestamp: '2024-01-01T00:00:03Z',
-            toolCalls: [{ name: 'run_shell_command', args: { command: 'echo hi' } }],
+            toolCalls: [
+              { name: 'run_shell_command', args: { command: 'echo hi' } },
+            ],
           },
         ],
       });

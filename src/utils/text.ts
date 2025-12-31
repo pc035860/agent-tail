@@ -38,7 +38,10 @@ export interface TruncateByLinesOptions {
  * 截斷文字，保留前後行數（行數計算）
  * 格式: "前10行\n... (N lines omitted) ...\n後10行"
  */
-export function truncateByLines(text: string, options: TruncateByLinesOptions = {}): string {
+export function truncateByLines(
+  text: string,
+  options: TruncateByLinesOptions = {}
+): string {
   const { verbose = false, headLines = 10, tailLines = 10 } = options;
 
   // verbose 模式不截斷
@@ -70,7 +73,8 @@ export function contentToString(content: unknown): string {
           // 處理 { type: 'text', text: '...' } 格式
           if ('text' in item && typeof item.text === 'string') return item.text;
           // 處理 { type: 'tool_result', content: '...' } 格式
-          if ('content' in item && typeof item.content === 'string') return item.content;
+          if ('content' in item && typeof item.content === 'string')
+            return item.content;
           // 處理其他 type
           if ('type' in item) return `[${item.type}]`;
         }
@@ -96,7 +100,10 @@ export function contentToString(content: unknown): string {
  * 單行 → 直接回傳 " content"
  * 多行 → 換行後每行加 4 空格縮排
  */
-export function formatMultiline(content: string, indent: string = '    '): string {
+export function formatMultiline(
+  content: string,
+  indent: string = '    '
+): string {
   if (!content.includes('\n')) {
     return ` ${content}`;
   }

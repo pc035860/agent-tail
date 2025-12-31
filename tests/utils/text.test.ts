@@ -1,5 +1,10 @@
 import { describe, test, expect } from 'bun:test';
-import { truncate, truncateByLines, contentToString, formatMultiline } from '../../src/utils/text';
+import {
+  truncate,
+  truncateByLines,
+  contentToString,
+  formatMultiline,
+} from '../../src/utils/text';
 
 describe('truncate', () => {
   test('returns short text unchanged', () => {

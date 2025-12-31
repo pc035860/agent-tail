@@ -3,8 +3,16 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
-import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
-import { contentToString, formatMultiline, truncateByLines } from '../../utils/text.ts';
+import type {
+  ParsedLine,
+  ParserOptions,
+  SessionFile,
+} from '../../core/types.ts';
+import {
+  contentToString,
+  formatMultiline,
+  truncateByLines,
+} from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
@@ -33,7 +41,8 @@ class ClaudeSessionFinder implements SessionFinder {
       if (filename.startsWith('agent-')) continue;
 
       // 只匹配 UUID 格式的檔案名
-      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+      const uuidPattern =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
       if (!uuidPattern.test(filename)) continue;
 
       // 如果有 project filter，做模糊比對
@@ -139,7 +148,10 @@ class ClaudeLineParser implements LineParser {
   /**
    * 解析 assistant message，拆分成多個部分
    */
-  private parseAssistantMessage(data: Record<string, unknown>, timestamp: string): ParsedLine | null {
+  private parseAssistantMessage(
+    data: Record<string, unknown>,
+    _timestamp: string
+  ): ParsedLine | null {
     const message = data.message as {
       model?: string;
       content: Array<{
@@ -160,7 +172,9 @@ class ClaudeLineParser implements LineParser {
 
     // 過濾有效的部分（text 或 tool_use）
     const validParts = content.filter(
-      (part) => (part.type === 'text' && part.text?.trim()) || (part.type === 'tool_use' && part.name)
+      (part) =>
+        (part.type === 'text' && part.text?.trim()) ||
+        (part.type === 'tool_use' && part.name)
     );
 
     if (validParts.length === 0) return null;
@@ -183,7 +197,8 @@ class ClaudeLineParser implements LineParser {
   private processAssistantPart(): ParsedLine | null {
     if (!this.currentMessageState) return null;
 
-    const { data, contentParts, partIndex, modelShort, hasTextBefore } = this.currentMessageState;
+    const { data, contentParts, partIndex, modelShort, hasTextBefore } =
+      this.currentMessageState;
     if (partIndex >= contentParts.length) return null;
 
     const part = contentParts[partIndex];
@@ -209,7 +224,9 @@ class ClaudeLineParser implements LineParser {
         type: 'function_call',
         timestamp,
         raw: part,
-        formatted: formatToolUse(part.name, part.input, { verbose: this.verbose }),
+        formatted: formatToolUse(part.name, part.input, {
+          verbose: this.verbose,
+        }),
         toolName: part.name,
       };
     }
@@ -222,7 +239,7 @@ class ClaudeLineParser implements LineParser {
 
     switch (type) {
       case 'file-history-snapshot': {
-        return '';  // 不顯示 snapshot
+        return ''; // 不顯示 snapshot
       }
 
       case 'user': {

@@ -18,6 +18,10 @@ bun start                          # requires agent-type argument
 # Development commands
 bun test                           # run tests
 bun run typecheck                  # TypeScript type checking
+bun run lint                       # ESLint check
+bun run lint:fix                   # ESLint auto-fix
+bun run format                     # Prettier format all files
+bun run format:check               # Check Prettier formatting
 
 # CLI options
 agent-tail <agent-type>            # basic usage
@@ -66,3 +70,10 @@ src/
 4. Export Agent class combining finder and parser
 5. Add to AgentType union in `src/core/types.ts`
 6. Add case in `src/index.ts` and `src/cli/parser.ts`
+
+## Code Quality
+
+- **ESLint**: v9 flat config (`eslint.config.js`) with TypeScript support
+- **Prettier**: Code formatting (`prettier.config.js`)
+- **Husky + lint-staged**: Pre-commit hooks auto-run lint and format on staged `.ts` files
+

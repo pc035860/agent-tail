@@ -1,4 +1,4 @@
-import { truncate, type TruncateOptions } from './text.ts';
+import { truncate } from './text.ts';
 
 /**
  * 統一的 ToolCall 介面
@@ -17,7 +17,13 @@ export interface FormatToolOptions {
 /**
  * Tool 類別（用於顏色區分）
  */
-export type ToolCategory = 'shell' | 'file' | 'search' | 'web' | 'task' | 'other';
+export type ToolCategory =
+  | 'shell'
+  | 'file'
+  | 'search'
+  | 'web'
+  | 'task'
+  | 'other';
 
 /**
  * 根據 tool 名稱取得類別
@@ -142,7 +148,9 @@ export function formatToolUse(
     case 'shell_command': {
       const command = input.command as string | string[] | undefined;
       // Codex shell command 格式: ['/bin/zsh', '-lc', 'actual command'] 或直接字串
-      const cmdStr = Array.isArray(command) ? command.slice(2).join(' ') : command || '';
+      const cmdStr = Array.isArray(command)
+        ? command.slice(2).join(' ')
+        : command || '';
       if (cmdStr) {
         const summary = truncate(cmdStr, {
           verbose,
@@ -157,9 +165,11 @@ export function formatToolUse(
     // Gemini 工具（snake_case 命名）
     case 'run_shell_command': {
       // Gemini shell command - 參數可能是 command 或其他欄位
-      const command = (input.command || input.cmd || Object.values(input).find(
-        (v) => typeof v === 'string' && v.length > 0
-      )) as string | undefined;
+      const command = (input.command ||
+        input.cmd ||
+        Object.values(input).find(
+          (v) => typeof v === 'string' && v.length > 0
+        )) as string | undefined;
       if (command) {
         const summary = truncate(command, {
           verbose,

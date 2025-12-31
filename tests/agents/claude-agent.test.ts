@@ -113,7 +113,11 @@ describe('ClaudeAgent parser', () => {
           model: 'claude-sonnet-4-20250514',
           content: [
             { type: 'tool_use', name: 'Bash', input: { command: 'ls' } },
-            { type: 'tool_use', name: 'Read', input: { file_path: '/tmp/test' } },
+            {
+              type: 'tool_use',
+              name: 'Read',
+              input: { file_path: '/tmp/test' },
+            },
           ],
         },
       });
@@ -137,7 +141,11 @@ describe('ClaudeAgent parser', () => {
           model: 'claude-sonnet-4-20250514',
           content: [
             { type: 'text', text: 'Let me check that for you' },
-            { type: 'tool_use', name: 'Bash', input: { command: 'cat file.txt' } },
+            {
+              type: 'tool_use',
+              name: 'Bash',
+              input: { command: 'cat file.txt' },
+            },
             { type: 'tool_use', name: 'Grep', input: { pattern: 'error' } },
           ],
         },

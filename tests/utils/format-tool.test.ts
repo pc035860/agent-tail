@@ -26,7 +26,11 @@ describe('formatToolUse', () => {
 
     test('does not truncate in verbose mode', () => {
       const longPrompt = 'a'.repeat(200);
-      const result = formatToolUse('Task', { prompt: longPrompt }, { verbose: true });
+      const result = formatToolUse(
+        'Task',
+        { prompt: longPrompt },
+        { verbose: true }
+      );
 
       expect(result).toBe(`[TOOL: Task] ${longPrompt}`);
     });
@@ -128,20 +132,27 @@ describe('formatToolUse', () => {
     });
 
     test('WebSearch shows query', () => {
-      const result = formatToolUse('WebSearch', { query: 'bun test framework' });
+      const result = formatToolUse('WebSearch', {
+        query: 'bun test framework',
+      });
       expect(result).toBe('[TOOL: WebSearch] "bun test framework"');
     });
   });
 
   describe('TodoWrite tool', () => {
     test('returns simple format', () => {
-      expect(formatToolUse('TodoWrite', { todos: [] })).toBe('[TOOL: TodoWrite]');
+      expect(formatToolUse('TodoWrite', { todos: [] })).toBe(
+        '[TOOL: TodoWrite]'
+      );
     });
   });
 
   describe('unknown tools', () => {
     test('shows first string value', () => {
-      const result = formatToolUse('CustomTool', { param: 'value', other: 123 });
+      const result = formatToolUse('CustomTool', {
+        param: 'value',
+        other: 123,
+      });
       expect(result).toBe('[TOOL: CustomTool] value');
     });
 
@@ -187,7 +198,11 @@ describe('formatToolUse', () => {
 
       test('does not truncate in verbose mode', () => {
         const longCmd = 'echo ' + 'a'.repeat(200);
-        const result = formatToolUse('shell', { command: longCmd }, { verbose: true });
+        const result = formatToolUse(
+          'shell',
+          { command: longCmd },
+          { verbose: true }
+        );
         expect(result).toBe(`$ ${longCmd}`);
       });
 
@@ -203,7 +218,9 @@ describe('formatToolUse', () => {
 
   describe('Gemini tools (snake_case)', () => {
     test('run_shell_command shows command with shell prompt style', () => {
-      const result = formatToolUse('run_shell_command', { command: 'cat file.txt' });
+      const result = formatToolUse('run_shell_command', {
+        command: 'cat file.txt',
+      });
       expect(result).toBe('$ cat file.txt');
     });
 

@@ -7,7 +7,7 @@ import type { ParsedLine } from '../../src/core/types';
  * 模擬 while loop 收集所有 parsed lines
  * Codex 使用單次處理模式，但仍測試確保不會有意外迴圈
  */
-function collectAllParsedLines(
+function _collectAllParsedLines(
   parser: LineParser,
   line: string,
   maxIterations = 100
@@ -179,7 +179,9 @@ describe('CodexAgent parser', () => {
         timestamp: '2024-01-01T00:00:00Z',
         payload: {
           type: 'reasoning',
-          summary: [{ type: 'summary_text', text: 'Thinking about the problem' }],
+          summary: [
+            { type: 'summary_text', text: 'Thinking about the problem' },
+          ],
         },
       });
 

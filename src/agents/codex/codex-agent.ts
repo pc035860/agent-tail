@@ -3,7 +3,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
-import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
+import type {
+  ParsedLine,
+  ParserOptions,
+  SessionFile,
+} from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 
@@ -152,10 +156,15 @@ class CodexLineParser implements LineParser {
 
         switch (subType) {
           case 'message': {
-            const role = payload.role as string;
-            const content = payload.content as Array<{ type: string; text?: string }>;
+            const _role = payload.role as string;
+            const content = payload.content as Array<{
+              type: string;
+              text?: string;
+            }>;
             const text =
-              content?.find((c) => c.type === 'input_text' || c.type === 'output_text')?.text || '';
+              content?.find(
+                (c) => c.type === 'input_text' || c.type === 'output_text'
+              )?.text || '';
             if (!text.trim()) return '';
             const preview = truncateByLines(text, { verbose: this.verbose });
             // 不再重複顯示 role，由 pretty-formatter 處理
@@ -176,7 +185,8 @@ class CodexLineParser implements LineParser {
 
           case 'function_call_output': {
             const outputStr = payload.output as string;
-            let output: { output?: string; metadata?: { exit_code?: number } } = {};
+            let output: { output?: string; metadata?: { exit_code?: number } } =
+              {};
             try {
               output = JSON.parse(outputStr);
             } catch {
@@ -185,16 +195,23 @@ class CodexLineParser implements LineParser {
             const exitCode = output.metadata?.exit_code;
             const content = output.output || '';
             // 沒內容且 exit code 正常就不顯示
-            if (!content && (exitCode === undefined || exitCode === 0)) return '';
-            const exitInfo = exitCode !== undefined && exitCode !== 0 ? ` (exit: ${exitCode})` : '';
+            if (!content && (exitCode === undefined || exitCode === 0))
+              return '';
+            const exitInfo =
+              exitCode !== undefined && exitCode !== 0
+                ? ` (exit: ${exitCode})`
+                : '';
             if (!content) return `[OUTPUT${exitInfo}]`;
             const preview = truncateByLines(content, { verbose: this.verbose });
             return `${exitInfo ? `[exit: ${exitCode}]` : ''}${formatMultiline(preview)}`;
           }
 
           case 'reasoning': {
-            const summary = payload.summary as Array<{ type: string; text?: string }> | undefined;
-            const text = summary?.find((s) => s.type === 'summary_text')?.text || '';
+            const summary = payload.summary as
+              | Array<{ type: string; text?: string }>
+              | undefined;
+            const text =
+              summary?.find((s) => s.type === 'summary_text')?.text || '';
             if (!text) return '';
             const preview = truncateByLines(text, { verbose: this.verbose });
             return preview;

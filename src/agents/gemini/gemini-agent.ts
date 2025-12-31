@@ -3,7 +3,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
-import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
+import type {
+  ParsedLine,
+  ParserOptions,
+  SessionFile,
+} from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 
@@ -106,14 +110,20 @@ class GeminiLineParser implements LineParser {
       content: string;
       timestamp: string;
       tokens?: Record<string, number>;
-      toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
+      toolCalls?: Array<{
+        name?: string;
+        args?: Record<string, unknown>;
+        status?: string;
+      }>;
     }>;
   }): ParsedLine | null {
     const messages = session.messages || [];
 
     // 如果正在處理某個 gemini message 的內部狀態
     if (this.currentMessageState) {
-      const msg = messages.find((m) => m.id === this.currentMessageState!.messageId);
+      const msg = messages.find(
+        (m) => m.id === this.currentMessageState!.messageId
+      );
       if (msg) {
         const result = this.processGeminiMessagePart(msg);
         if (result) return result;
@@ -123,7 +133,9 @@ class GeminiLineParser implements LineParser {
     }
 
     // 找到下一個未處理的 message
-    const nextMessage = messages.find((m) => !this.processedMessageIds.has(m.id));
+    const nextMessage = messages.find(
+      (m) => !this.processedMessageIds.has(m.id)
+    );
     if (!nextMessage) return null;
 
     // user 類型直接輸出
@@ -177,7 +189,11 @@ class GeminiLineParser implements LineParser {
     id: string;
     timestamp: string;
     content: string;
-    toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
+    toolCalls?: Array<{
+      name?: string;
+      args?: Record<string, unknown>;
+      status?: string;
+    }>;
   }): ParsedLine | null {
     if (!this.currentMessageState) return null;
 
@@ -194,7 +210,9 @@ class GeminiLineParser implements LineParser {
           type: 'function_call',
           timestamp: msg.timestamp,
           raw: tc,
-          formatted: formatToolUse(toolName, tc.args, { verbose: this.verbose }) + status,
+          formatted:
+            formatToolUse(toolName, tc.args, { verbose: this.verbose }) +
+            status,
           toolName,
         };
       }
