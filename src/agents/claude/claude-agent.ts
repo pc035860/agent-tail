@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
-import { contentToString, formatMultiline, truncate } from '../../utils/text.ts';
+import { contentToString, formatMultiline, truncateByLines } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
@@ -107,7 +107,7 @@ class ClaudeLineParser implements LineParser {
       case 'user': {
         const message = data.message as { content: unknown };
         const content = contentToString(message?.content);
-        const preview = truncate(content, { verbose: this.verbose });
+        const preview = truncateByLines(content, { verbose: this.verbose });
         return `[USER]${formatMultiline(preview)}`;
       }
 
@@ -129,7 +129,7 @@ class ClaudeLineParser implements LineParser {
         const parts: string[] = [];
         for (const part of content) {
           if (part.type === 'text' && part.text) {
-            parts.push(truncate(part.text, { verbose: this.verbose }));
+            parts.push(truncateByLines(part.text, { verbose: this.verbose }));
           } else if (part.type === 'tool_use' && part.name) {
             parts.push(formatToolUse(part.name, part.input, { verbose: this.verbose }));
           }

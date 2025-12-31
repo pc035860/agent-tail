@@ -8,7 +8,7 @@ export interface TruncateOptions {
 }
 
 /**
- * 截斷文字，保留前後段落
+ * 截斷文字，保留前後段落（字元計算）
  * 格式: "前100字...後100字"
  */
 export function truncate(text: string, options: TruncateOptions = {}): string {
@@ -23,6 +23,36 @@ export function truncate(text: string, options: TruncateOptions = {}): string {
   const head = text.slice(0, headLength);
   const tail = text.slice(-tailLength);
   return `${head}...${tail}`;
+}
+
+export interface TruncateByLinesOptions {
+  /** 是否啟用 verbose 模式（不截斷） */
+  verbose?: boolean;
+  /** 前段保留行數，預設 10 */
+  headLines?: number;
+  /** 後段保留行數，預設 10 */
+  tailLines?: number;
+}
+
+/**
+ * 截斷文字，保留前後行數（行數計算）
+ * 格式: "前10行\n... (N lines omitted) ...\n後10行"
+ */
+export function truncateByLines(text: string, options: TruncateByLinesOptions = {}): string {
+  const { verbose = false, headLines = 10, tailLines = 10 } = options;
+
+  // verbose 模式不截斷
+  if (verbose) return text;
+
+  const lines = text.split('\n');
+  const threshold = headLines + tailLines + 2;
+  if (lines.length <= threshold) return text;
+
+  const head = lines.slice(0, headLines);
+  const tail = lines.slice(-tailLines);
+  const omitted = lines.length - headLines - tailLines;
+
+  return [...head, `... (${omitted} lines omitted) ...`, ...tail].join('\n');
 }
 
 /**

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
-import { truncate, formatMultiline } from '../../utils/text.ts';
+import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
@@ -109,7 +109,7 @@ class CodexLineParser implements LineParser {
             const content = payload.content as Array<{ type: string; text?: string }>;
             const text =
               content?.find((c) => c.type === 'input_text' || c.type === 'output_text')?.text || '';
-            const preview = truncate(text, { verbose: this.verbose });
+            const preview = truncateByLines(text, { verbose: this.verbose });
             return `[${role?.toUpperCase()}]${formatMultiline(preview)}`;
           }
 
@@ -137,11 +137,7 @@ class CodexLineParser implements LineParser {
             const content = output.output || '';
             const exitInfo = exitCode !== undefined ? ` (exit: ${exitCode})` : '';
             if (!content) return `[OUTPUT${exitInfo}]`;
-            const preview = truncate(content, {
-              verbose: this.verbose,
-              headLength: 100,
-              tailLength: 50,
-            });
+            const preview = truncateByLines(content, { verbose: this.verbose });
             return `[OUTPUT${exitInfo}]${formatMultiline(preview)}`;
           }
 
@@ -149,11 +145,7 @@ class CodexLineParser implements LineParser {
             const summary = payload.summary as Array<{ type: string; text?: string }> | undefined;
             const text = summary?.find((s) => s.type === 'summary_text')?.text || '';
             if (!text) return '[REASONING]';
-            const preview = truncate(text, {
-              verbose: this.verbose,
-              headLength: 80,
-              tailLength: 40,
-            });
+            const preview = truncateByLines(text, { verbose: this.verbose });
             return `[REASONING] ${preview}`;
           }
 
@@ -185,11 +177,7 @@ class CodexLineParser implements LineParser {
           case 'agent_reasoning': {
             const text = payload.text as string | undefined;
             if (!text) return '[AGENT_REASONING]';
-            const preview = truncate(text, {
-              verbose: this.verbose,
-              headLength: 60,
-              tailLength: 30,
-            });
+            const preview = truncateByLines(text, { verbose: this.verbose });
             return `[AGENT_REASONING] ${preview}`;
           }
 

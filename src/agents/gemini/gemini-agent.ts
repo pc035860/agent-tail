@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
-import { truncate, formatMultiline } from '../../utils/text.ts';
+import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
@@ -160,7 +160,7 @@ class GeminiLineParser implements LineParser {
   }): string {
     const type = msg.type || 'unknown';
     const content = msg.content || '';
-    const preview = truncate(content, { verbose: this.verbose });
+    const preview = truncateByLines(content, { verbose: this.verbose });
 
     switch (type) {
       case 'user':

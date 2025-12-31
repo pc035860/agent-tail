@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { truncate, contentToString, formatMultiline } from '../../src/utils/text';
+import { truncate, truncateByLines, contentToString, formatMultiline } from '../../src/utils/text';
 
 describe('truncate', () => {
   test('returns short text unchanged', () => {
@@ -38,6 +38,56 @@ describe('truncate', () => {
 
     const overThreshold = 'a'.repeat(211);
     expect(truncate(overThreshold)).toContain('...');
+  });
+});
+
+describe('truncateByLines', () => {
+  test('returns text with few lines unchanged', () => {
+    const text = 'line1\nline2\nline3';
+    expect(truncateByLines(text)).toBe(text);
+  });
+
+  test('returns text at threshold unchanged', () => {
+    // threshold = headLines(10) + tailLines(10) + 2 = 22
+    const lines = Array.from({ length: 22 }, (_, i) => `line ${i + 1}`);
+    const text = lines.join('\n');
+    expect(truncateByLines(text)).toBe(text);
+  });
+
+  test('truncates long text preserving head and tail lines', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+    const text = lines.join('\n');
+    const result = truncateByLines(text);
+
+    // 30 lines - 10 head - 10 tail = 10 omitted
+    expect(result).toContain('line 1');
+    expect(result).toContain('line 10');
+    expect(result).toContain('... (10 lines omitted) ...');
+    expect(result).toContain('line 21');
+    expect(result).toContain('line 30');
+    expect(result).not.toContain('line 11');
+    expect(result).not.toContain('line 20');
+  });
+
+  test('does not truncate in verbose mode', () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`);
+    const text = lines.join('\n');
+    expect(truncateByLines(text, { verbose: true })).toBe(text);
+  });
+
+  test('respects custom headLines and tailLines', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const text = lines.join('\n');
+    const result = truncateByLines(text, { headLines: 3, tailLines: 3 });
+
+    // 20 lines - 3 head - 3 tail = 14 omitted
+    expect(result).toContain('line 1');
+    expect(result).toContain('line 3');
+    expect(result).toContain('... (14 lines omitted) ...');
+    expect(result).toContain('line 18');
+    expect(result).toContain('line 20');
+    expect(result).not.toContain('line 4');
+    expect(result).not.toContain('line 17');
   });
 });
 
