@@ -197,7 +197,7 @@ class CodexLineParser implements LineParser {
             const text = summary?.find((s) => s.type === 'summary_text')?.text || '';
             if (!text) return '';
             const preview = truncateByLines(text, { verbose: this.verbose });
-            return `💭 ${preview}`;
+            return preview;
           }
 
           // 忽略的子類型

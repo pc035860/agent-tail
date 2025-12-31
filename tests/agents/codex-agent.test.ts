@@ -187,7 +187,7 @@ describe('CodexAgent parser', () => {
 
       expect(result).not.toBeNull();
       expect(result!.type).toBe('reasoning');
-      expect(result!.formatted).toContain('💭');
+      expect(result!.formatted).toContain('Thinking about the problem');
     });
   });
 

@@ -38,7 +38,7 @@ export class PrettyFormatter implements Formatter {
       case 'task':
         return chalk.magenta('TASK');
       default:
-        return chalk.white('FUNC');
+        return chalk.redBright('FUNC');
     }
   }
 
