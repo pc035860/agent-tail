@@ -85,15 +85,32 @@ class CodexLineParser implements LineParser {
       // 決定顯示類型
       const type = this.getDisplayType(data);
 
+      // 取得 tool name（僅 function_call 類型）
+      const toolName = this.getToolName(data);
+
       return {
         type,
         timestamp,
         raw: data,
         formatted,
+        ...(toolName && { toolName }),
       };
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 取得 tool 名稱（僅 function_call 類型）
+   */
+  private getToolName(data: Record<string, unknown>): string | undefined {
+    const type = data.type as string;
+    if (type !== 'response_item') return undefined;
+
+    const payload = data.payload as Record<string, unknown>;
+    if (payload.type !== 'function_call') return undefined;
+
+    return payload.name as string | undefined;
   }
 
   /**

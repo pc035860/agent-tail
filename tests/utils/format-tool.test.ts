@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { formatToolUse } from '../../src/utils/format-tool';
+import { formatToolUse, getToolCategory } from '../../src/utils/format-tool';
 
 describe('formatToolUse', () => {
   describe('without input', () => {
@@ -53,22 +53,22 @@ describe('formatToolUse', () => {
     });
   });
 
-  describe('Bash tool', () => {
-    test('shows command', () => {
+  describe('Bash tool (Claude)', () => {
+    test('shows command with shell prompt style', () => {
       const result = formatToolUse('Bash', { command: 'ls -la' });
-      expect(result).toBe('[TOOL: Bash] ls -la');
+      expect(result).toBe('$ ls -la');
     });
 
     test('truncates long command', () => {
       const longCommand = 'echo ' + 'a'.repeat(200);
       const result = formatToolUse('Bash', { command: longCommand });
 
-      expect(result).toContain('[TOOL: Bash]');
+      expect(result).toContain('$');
       expect(result).toContain('...');
     });
 
     test('handles missing command', () => {
-      expect(formatToolUse('Bash', {})).toBe('[TOOL: Bash]');
+      expect(formatToolUse('Bash', {})).toBe('$ (empty)');
     });
   });
 
@@ -202,6 +202,22 @@ describe('formatToolUse', () => {
   });
 
   describe('Gemini tools (snake_case)', () => {
+    test('run_shell_command shows command with shell prompt style', () => {
+      const result = formatToolUse('run_shell_command', { command: 'cat file.txt' });
+      expect(result).toBe('$ cat file.txt');
+    });
+
+    test('run_shell_command truncates long command', () => {
+      const longCmd = 'echo ' + 'a'.repeat(200);
+      const result = formatToolUse('run_shell_command', { command: longCmd });
+      expect(result).toContain('$');
+      expect(result).toContain('...');
+    });
+
+    test('run_shell_command handles missing command', () => {
+      expect(formatToolUse('run_shell_command', {})).toBe('$ (empty)');
+    });
+
     test('read_file shows path', () => {
       const result = formatToolUse('read_file', { file_path: 'src/index.ts' });
       expect(result).toBe('[TOOL: read_file] src/index.ts');
@@ -222,5 +238,48 @@ describe('formatToolUse', () => {
       expect(formatToolUse('edit_file', {})).toBe('[TOOL: edit_file] ');
       expect(formatToolUse('write_file', {})).toBe('[TOOL: write_file] ');
     });
+  });
+});
+
+describe('getToolCategory', () => {
+  test('identifies shell tools', () => {
+    expect(getToolCategory('Bash')).toBe('shell');
+    expect(getToolCategory('shell')).toBe('shell');
+    expect(getToolCategory('shell_command')).toBe('shell');
+    expect(getToolCategory('run_shell_command')).toBe('shell');
+  });
+
+  test('identifies file tools', () => {
+    expect(getToolCategory('Read')).toBe('file');
+    expect(getToolCategory('Edit')).toBe('file');
+    expect(getToolCategory('Write')).toBe('file');
+    expect(getToolCategory('read_file')).toBe('file');
+    expect(getToolCategory('edit_file')).toBe('file');
+    expect(getToolCategory('write_file')).toBe('file');
+  });
+
+  test('identifies search tools', () => {
+    expect(getToolCategory('Grep')).toBe('search');
+    expect(getToolCategory('Glob')).toBe('search');
+  });
+
+  test('identifies web tools', () => {
+    expect(getToolCategory('WebFetch')).toBe('web');
+    expect(getToolCategory('WebSearch')).toBe('web');
+  });
+
+  test('identifies task tools', () => {
+    expect(getToolCategory('Task')).toBe('task');
+  });
+
+  test('returns other for unknown tools', () => {
+    expect(getToolCategory('UnknownTool')).toBe('other');
+    expect(getToolCategory('CustomTool')).toBe('other');
+  });
+
+  test('is case insensitive', () => {
+    expect(getToolCategory('BASH')).toBe('shell');
+    expect(getToolCategory('bash')).toBe('shell');
+    expect(getToolCategory('READ')).toBe('file');
   });
 });

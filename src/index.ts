@@ -63,16 +63,16 @@ async function main(): Promise<void> {
     // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
     jsonMode: options.agentType === 'gemini',
     onLine: (line) => {
-      if (options.agentType === 'gemini') {
-        // Gemini JSON 模式：parser 有狀態追蹤，每次只回傳一個 message
-        // 需要反覆呼叫直到沒有更多 messages
+      if (options.agentType === 'gemini' || options.agentType === 'claude') {
+        // Gemini/Claude 模式：parser 有狀態追蹤，每次只回傳一個部分
+        // 需要反覆呼叫直到沒有更多內容
         let parsed = agent.parser.parse(line);
         while (parsed) {
           console.log(formatter.format(parsed));
           parsed = agent.parser.parse(line);
         }
       } else {
-        // Claude/Codex JSONL 模式：每行一個事件，單次處理
+        // Codex JSONL 模式：每行一個事件，單次處理
         const parsed = agent.parser.parse(line);
         if (parsed) {
           console.log(formatter.format(parsed));

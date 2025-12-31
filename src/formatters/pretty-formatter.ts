@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import type { ParsedLine } from '../core/types.ts';
 import type { Formatter } from './formatter.interface.ts';
+import { getToolCategory, type ToolCategory } from '../utils/format-tool.ts';
 
 /**
  * 格式化可讀輸出
@@ -8,10 +9,37 @@ import type { Formatter } from './formatter.interface.ts';
 export class PrettyFormatter implements Formatter {
   format(parsed: ParsedLine): string {
     const time = this.formatTime(parsed.timestamp);
-    const typeLabel = this.formatType(parsed.type);
     const content = parsed.formatted;
 
+    // function_call 類型使用 tool category 顏色
+    if (parsed.type === 'function_call' && parsed.toolName) {
+      const category = getToolCategory(parsed.toolName);
+      const typeLabel = this.formatToolCategory(category);
+      return `${chalk.gray(time)} ${typeLabel} ${content}`;
+    }
+
+    const typeLabel = this.formatType(parsed.type);
     return `${chalk.gray(time)} ${typeLabel} ${content}`;
+  }
+
+  /**
+   * 根據 tool category 回傳對應顏色的標籤
+   */
+  private formatToolCategory(category: ToolCategory): string {
+    switch (category) {
+      case 'shell':
+        return chalk.yellow('SHELL');
+      case 'file':
+        return chalk.green('FILE');
+      case 'search':
+        return chalk.cyan('SEARCH');
+      case 'web':
+        return chalk.blue('WEB');
+      case 'task':
+        return chalk.magenta('TASK');
+      default:
+        return chalk.white('FUNC');
+    }
   }
 
   private formatTime(timestamp: string): string {

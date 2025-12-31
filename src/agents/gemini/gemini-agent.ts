@@ -189,11 +189,13 @@ class GeminiLineParser implements LineParser {
       this.currentMessageState.toolCallIndex++;
       if (tc) {
         const status = tc.status === 'error' ? ' ❌' : '';
+        const toolName = tc.name || 'unknown';
         return {
           type: 'function_call',
           timestamp: msg.timestamp,
           raw: tc,
-          formatted: formatToolUse(tc.name || 'unknown', tc.args, { verbose: this.verbose }) + status,
+          formatted: formatToolUse(toolName, tc.args, { verbose: this.verbose }) + status,
+          toolName,
         };
       }
     }

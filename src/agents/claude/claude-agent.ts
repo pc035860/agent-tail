@@ -72,18 +72,54 @@ class ClaudeSessionFinder implements SessionFinder {
  */
 class ClaudeLineParser implements LineParser {
   private verbose: boolean;
+  /** 追蹤 assistant message 內部的處理進度 */
+  private currentMessageState: {
+    data: Record<string, unknown>;
+    contentParts: Array<{
+      type: string;
+      text?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+    }>;
+    partIndex: number;
+    modelShort: string;
+    hasTextBefore: boolean;
+  } | null = null;
+  /** 追蹤已處理的 line，避免 while 迴圈重複處理 */
+  private lastProcessedLine: string | null = null;
 
   constructor(options: ParserOptions = { verbose: false }) {
     this.verbose = options.verbose;
   }
 
   parse(line: string): ParsedLine | null {
+    // 如果正在處理 assistant message 的內部狀態
+    if (this.currentMessageState) {
+      const result = this.processAssistantPart();
+      if (result) return result;
+      // 處理完畢，清除狀態並回傳 null
+      this.currentMessageState = null;
+      return null;
+    }
+
     if (!line.trim()) return null;
+
+    // 避免重複處理同一個 line（非 assistant message 不需要 while 迴圈）
+    if (line === this.lastProcessedLine) {
+      return null;
+    }
+    this.lastProcessedLine = line;
 
     try {
       const data = JSON.parse(line);
       const type = data.type || 'unknown';
       const timestamp = data.timestamp || '';
+
+      // assistant message 需要特殊處理（可能包含多個 tool_use）
+      if (type === 'assistant') {
+        return this.parseAssistantMessage(data, timestamp);
+      }
+
       const formatted = this.format(data);
 
       // 空內容不輸出
@@ -98,6 +134,87 @@ class ClaudeLineParser implements LineParser {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 解析 assistant message，拆分成多個部分
+   */
+  private parseAssistantMessage(data: Record<string, unknown>, timestamp: string): ParsedLine | null {
+    const message = data.message as {
+      model?: string;
+      content: Array<{
+        type: string;
+        text?: string;
+        name?: string;
+        input?: Record<string, unknown>;
+      }>;
+    };
+    const model = message?.model || '';
+    const content = message?.content || [];
+
+    // 簡化 model 顯示
+    const modelShort = model
+      .replace('claude-', '')
+      .replace('-20251101', '')
+      .replace('-', ' ');
+
+    // 過濾有效的部分（text 或 tool_use）
+    const validParts = content.filter(
+      (part) => (part.type === 'text' && part.text?.trim()) || (part.type === 'tool_use' && part.name)
+    );
+
+    if (validParts.length === 0) return null;
+
+    // 初始化狀態
+    this.currentMessageState = {
+      data,
+      contentParts: validParts,
+      partIndex: 0,
+      modelShort,
+      hasTextBefore: false,
+    };
+
+    return this.processAssistantPart();
+  }
+
+  /**
+   * 處理 assistant message 的下一個部分
+   */
+  private processAssistantPart(): ParsedLine | null {
+    if (!this.currentMessageState) return null;
+
+    const { data, contentParts, partIndex, modelShort, hasTextBefore } = this.currentMessageState;
+    if (partIndex >= contentParts.length) return null;
+
+    const part = contentParts[partIndex];
+    if (!part) return null;
+
+    this.currentMessageState.partIndex++;
+    const timestamp = (data as { timestamp?: string }).timestamp || '';
+
+    if (part.type === 'text' && part.text) {
+      this.currentMessageState.hasTextBefore = true;
+      const preview = truncateByLines(part.text, { verbose: this.verbose });
+      const modelInfo = modelShort && !hasTextBefore ? `(${modelShort})` : '';
+      return {
+        type: 'assistant',
+        timestamp,
+        raw: data,
+        formatted: `${modelInfo}${formatMultiline(preview)}`,
+      };
+    }
+
+    if (part.type === 'tool_use' && part.name) {
+      return {
+        type: 'function_call',
+        timestamp,
+        raw: part,
+        formatted: formatToolUse(part.name, part.input, { verbose: this.verbose }),
+        toolName: part.name,
+      };
+    }
+
+    return null;
   }
 
   private format(data: Record<string, unknown>): string {
@@ -115,41 +232,7 @@ class ClaudeLineParser implements LineParser {
         return formatMultiline(preview);
       }
 
-      case 'assistant': {
-        const message = data.message as {
-          model?: string;
-          content: Array<{
-            type: string;
-            text?: string;
-            thinking?: string;
-            name?: string;
-            input?: Record<string, unknown>;
-          }>;
-        };
-        const model = message?.model || '';
-        const content = message?.content || [];
-
-        // 簡化 model 顯示
-        const modelShort = model
-          .replace('claude-', '')
-          .replace('-20251101', '')
-          .replace('-', ' ');
-
-        // 提取文字內容和 tool_use
-        const parts: string[] = [];
-        for (const part of content) {
-          if (part.type === 'text' && part.text) {
-            parts.push(truncateByLines(part.text, { verbose: this.verbose }));
-          } else if (part.type === 'tool_use' && part.name) {
-            parts.push(formatToolUse(part.name, part.input, { verbose: this.verbose }));
-          }
-        }
-
-        const text = parts.join(' ');
-        // 若有 model 資訊，顯示在第一行
-        const modelInfo = modelShort ? `(${modelShort})` : '';
-        return `${modelInfo}${formatMultiline(text)}`;
-      }
+      // assistant 由 parseAssistantMessage 處理
 
       default:
         return '';

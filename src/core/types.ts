@@ -38,4 +38,6 @@ export interface ParsedLine {
   timestamp: string;
   raw: unknown;
   formatted: string;
+  /** Tool 名稱（僅 function_call 類型使用，用於顏色判斷） */
+  toolName?: string;
 }

@@ -15,6 +15,41 @@ export interface FormatToolOptions {
 }
 
 /**
+ * Tool 類別（用於顏色區分）
+ */
+export type ToolCategory = 'shell' | 'file' | 'search' | 'web' | 'task' | 'other';
+
+/**
+ * 根據 tool 名稱取得類別
+ */
+export function getToolCategory(toolName: string): ToolCategory {
+  switch (toolName.toLowerCase()) {
+    case 'bash':
+    case 'shell':
+    case 'shell_command':
+    case 'run_shell_command':
+      return 'shell';
+    case 'read':
+    case 'edit':
+    case 'write':
+    case 'read_file':
+    case 'edit_file':
+    case 'write_file':
+      return 'file';
+    case 'grep':
+    case 'glob':
+      return 'search';
+    case 'webfetch':
+    case 'websearch':
+      return 'web';
+    case 'task':
+      return 'task';
+    default:
+      return 'other';
+  }
+}
+
+/**
  * 格式化 tool_use，顯示關鍵參數摘要
  */
 export function formatToolUse(
@@ -55,9 +90,9 @@ export function formatToolUse(
           headLength: 80,
           tailLength: 40,
         });
-        return `[TOOL: Bash] ${summary}`;
+        return `$ ${summary}`;
       }
-      return `[TOOL: Bash]`;
+      return `$ (empty)`;
     }
 
     case 'Read': {
@@ -120,6 +155,22 @@ export function formatToolUse(
     }
 
     // Gemini 工具（snake_case 命名）
+    case 'run_shell_command': {
+      // Gemini shell command - 參數可能是 command 或其他欄位
+      const command = (input.command || input.cmd || Object.values(input).find(
+        (v) => typeof v === 'string' && v.length > 0
+      )) as string | undefined;
+      if (command) {
+        const summary = truncate(command, {
+          verbose,
+          headLength: 80,
+          tailLength: 40,
+        });
+        return `$ ${summary}`;
+      }
+      return `$ (empty)`;
+    }
+
     case 'read_file': {
       const filePath = input.file_path as string | undefined;
       return `[TOOL: read_file] ${filePath || ''}`;
