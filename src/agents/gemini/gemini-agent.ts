@@ -44,9 +44,12 @@ class GeminiSessionFinder implements SessionFinder {
     // 按修改時間排序，取最新的
     files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
+    const latest = files[0];
+    if (!latest) return null;
+
     return {
-      path: files[0].path,
-      mtime: files[0].mtime,
+      path: latest.path,
+      mtime: latest.mtime,
       agentType: 'gemini',
     };
   }
@@ -109,6 +112,8 @@ class GeminiLineParser implements LineParser {
 
     // 回傳第一個新 message 的資訊，formatted 包含所有新 messages
     const firstNew = newMessages[0];
+    if (!firstNew) return null;
+
     return {
       type: firstNew.type,
       timestamp: firstNew.timestamp,

@@ -5,6 +5,7 @@ import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
 import { contentToString, formatMultiline, truncate } from '../../utils/text.ts';
+import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
  * Claude Code Session Finder
@@ -55,9 +56,12 @@ class ClaudeSessionFinder implements SessionFinder {
     // 按修改時間排序，取最新的
     files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
+    const latest = files[0];
+    if (!latest) return null;
+
     return {
-      path: files[0].path,
-      mtime: files[0].mtime,
+      path: latest.path,
+      mtime: latest.mtime,
       agentType: 'claude',
     };
   }
@@ -127,7 +131,7 @@ class ClaudeLineParser implements LineParser {
           if (part.type === 'text' && part.text) {
             parts.push(truncate(part.text, { verbose: this.verbose }));
           } else if (part.type === 'tool_use' && part.name) {
-            parts.push(this.formatToolUse(part.name, part.input));
+            parts.push(formatToolUse(part.name, part.input, { verbose: this.verbose }));
           }
         }
 
@@ -138,106 +142,6 @@ class ClaudeLineParser implements LineParser {
 
       default:
         return `[${type}]`;
-    }
-  }
-
-  /**
-   * 格式化 tool_use，顯示關鍵參數摘要
-   */
-  private formatToolUse(name: string, input?: Record<string, unknown>): string {
-    if (!input) return `[TOOL: ${name}]`;
-
-    switch (name) {
-      case 'Task': {
-        const prompt = input.prompt as string | undefined;
-        if (prompt) {
-          const summary = truncate(prompt, {
-            verbose: this.verbose,
-            headLength: 50,
-            tailLength: 50,
-          });
-          return `[TOOL: Task] ${summary}`;
-        }
-        return `[TOOL: Task]`;
-      }
-
-      case 'Grep': {
-        const pattern = input.pattern as string | undefined;
-        const path = input.path as string | undefined;
-        const pathStr = path ? ` in ${path}` : '';
-        return `[TOOL: Grep] "${pattern || ''}"${pathStr}`;
-      }
-
-      case 'Bash': {
-        const command = input.command as string | undefined;
-        if (command) {
-          const summary = truncate(command, {
-            verbose: this.verbose,
-            headLength: 80,
-            tailLength: 40,
-          });
-          return `[TOOL: Bash] ${summary}`;
-        }
-        return `[TOOL: Bash]`;
-      }
-
-      case 'Read': {
-        const filePath = input.file_path as string | undefined;
-        return `[TOOL: Read] ${filePath || ''}`;
-      }
-
-      case 'Edit': {
-        const filePath = input.file_path as string | undefined;
-        return `[TOOL: Edit] ${filePath || ''}`;
-      }
-
-      case 'Write': {
-        const filePath = input.file_path as string | undefined;
-        return `[TOOL: Write] ${filePath || ''}`;
-      }
-
-      case 'Glob': {
-        const pattern = input.pattern as string | undefined;
-        const path = input.path as string | undefined;
-        const pathStr = path ? ` in ${path}` : '';
-        return `[TOOL: Glob] "${pattern || ''}"${pathStr}`;
-      }
-
-      case 'LSP': {
-        const operation = input.operation as string | undefined;
-        const filePath = input.filePath as string | undefined;
-        return `[TOOL: LSP] ${operation || ''} ${filePath || ''}`;
-      }
-
-      case 'WebFetch': {
-        const url = input.url as string | undefined;
-        return `[TOOL: WebFetch] ${url || ''}`;
-      }
-
-      case 'WebSearch': {
-        const query = input.query as string | undefined;
-        return `[TOOL: WebSearch] "${query || ''}"`;
-      }
-
-      case 'TodoWrite': {
-        return `[TOOL: TodoWrite]`;
-      }
-
-      default: {
-        // 其他 tool 顯示第一個有意義的參數
-        const firstValue = Object.values(input).find(
-          (v) => typeof v === 'string' && v.length > 0
-        ) as string | undefined;
-        if (firstValue) {
-          const summary = truncate(firstValue, {
-            verbose: this.verbose,
-            headLength: 40,
-            tailLength: 20,
-          });
-          return `[TOOL: ${name}] ${summary}`;
-        }
-        return `[TOOL: ${name}]`;
-      }
     }
   }
 }

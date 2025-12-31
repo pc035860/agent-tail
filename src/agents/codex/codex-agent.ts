@@ -48,9 +48,12 @@ class CodexSessionFinder implements SessionFinder {
     // 按修改時間排序，取最新的
     files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
+    const latest = files[0];
+    if (!latest) return null;
+
     return {
-      path: files[0].path,
-      mtime: files[0].mtime,
+      path: latest.path,
+      mtime: latest.mtime,
       agentType: 'codex',
     };
   }
