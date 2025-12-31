@@ -15,9 +15,9 @@ async function main(): Promise<void> {
   // 選擇 Agent
   const agent: Agent =
     options.agentType === 'codex'
-      ? new CodexAgent()
+      ? new CodexAgent({ verbose: options.verbose })
       : options.agentType === 'gemini'
-        ? new GeminiAgent()
+        ? new GeminiAgent({ verbose: options.verbose })
         : new ClaudeAgent({ verbose: options.verbose });
 
   // 選擇 Formatter

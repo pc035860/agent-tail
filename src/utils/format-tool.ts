@@ -102,6 +102,38 @@ export function formatToolUse(
       return `[TOOL: TodoWrite]`;
     }
 
+    // Codex 工具
+    case 'shell': {
+      const command = input.command as string | string[] | undefined;
+      // Codex shell command 格式: ['/bin/zsh', '-lc', 'actual command']
+      const cmdStr = Array.isArray(command) ? command.slice(2).join(' ') : command || '';
+      if (cmdStr) {
+        const summary = truncate(cmdStr, {
+          verbose,
+          headLength: 80,
+          tailLength: 40,
+        });
+        return `[TOOL: shell] ${summary}`;
+      }
+      return `[TOOL: shell]`;
+    }
+
+    // Gemini 工具（snake_case 命名）
+    case 'read_file': {
+      const filePath = input.file_path as string | undefined;
+      return `[TOOL: read_file] ${filePath || ''}`;
+    }
+
+    case 'edit_file': {
+      const filePath = input.file_path as string | undefined;
+      return `[TOOL: edit_file] ${filePath || ''}`;
+    }
+
+    case 'write_file': {
+      const filePath = input.file_path as string | undefined;
+      return `[TOOL: write_file] ${filePath || ''}`;
+    }
+
     default: {
       // 其他 tool 顯示第一個有意義的參數
       const firstValue = Object.values(input).find(

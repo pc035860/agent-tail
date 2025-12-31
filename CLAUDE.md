@@ -20,6 +20,7 @@ agent-tail <agent-type>            # basic usage
 agent-tail claude --raw            # output raw JSONL
 agent-tail codex -p myproject      # filter by project (fuzzy match)
 agent-tail gemini --no-follow      # don't follow, only show existing content
+agent-tail claude -v               # verbose mode (no truncation)
 ```
 
 ## Architecture
@@ -36,10 +37,13 @@ src/
 │   ├── codex/codex-agent.ts
 │   ├── claude/claude-agent.ts
 │   └── gemini/gemini-agent.ts
-└── formatters/
-    ├── formatter.interface.ts
-    ├── raw-formatter.ts
-    └── pretty-formatter.ts
+├── formatters/
+│   ├── formatter.interface.ts
+│   ├── raw-formatter.ts
+│   └── pretty-formatter.ts
+└── utils/
+    ├── text.ts           # Text utilities (truncate, formatMultiline, contentToString)
+    └── format-tool.ts    # Tool call formatting for all agents
 ```
 
 **Key Patterns:**

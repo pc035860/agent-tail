@@ -3,7 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
-import type { ParsedLine, SessionFile } from '../../core/types.ts';
+import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
+import { truncate, formatMultiline } from '../../utils/text.ts';
+import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
  * Gemini CLI Session Finder
@@ -61,6 +63,11 @@ class GeminiSessionFinder implements SessionFinder {
  */
 class GeminiLineParser implements LineParser {
   private processedMessageIds = new Set<string>();
+  private verbose: boolean;
+
+  constructor(options: ParserOptions = { verbose: false }) {
+    this.verbose = options.verbose;
+  }
 
   parse(line: string): ParsedLine | null {
     if (!line.trim()) return null;
@@ -92,7 +99,7 @@ class GeminiLineParser implements LineParser {
       content: string;
       timestamp: string;
       tokens?: Record<string, number>;
-      toolCalls?: unknown[];
+      toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
     }>;
   }): ParsedLine | null {
     const messages = session.messages || [];
@@ -137,7 +144,7 @@ class GeminiLineParser implements LineParser {
         type: string;
         content: string;
         tokens?: Record<string, number>;
-        toolCalls?: unknown[];
+        toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
       }),
     };
   }
@@ -149,27 +156,48 @@ class GeminiLineParser implements LineParser {
     type: string;
     content: string;
     tokens?: Record<string, number>;
-    toolCalls?: unknown[];
+    toolCalls?: Array<{ name?: string; args?: Record<string, unknown>; status?: string }>;
   }): string {
     const type = msg.type || 'unknown';
     const content = msg.content || '';
-    const preview = content.length > 200 ? content.slice(0, 200) + '...' : content;
+    const preview = truncate(content, { verbose: this.verbose });
 
     switch (type) {
       case 'user':
-        return `[USER] ${preview}`;
+        return `[USER]${formatMultiline(preview)}`;
 
       case 'gemini': {
+        const parts: string[] = [];
+
+        // Token 統計
         const tokens = msg.tokens;
-        const tokenInfo = tokens ? ` (${tokens.total || 0} tokens)` : '';
+        if (tokens?.total) {
+          parts.push(
+            `[TOKENS] in:${tokens.input || 0} out:${tokens.output || 0} total:${tokens.total}`
+          );
+        }
+
+        // 工具呼叫（使用共用 formatToolUse）
         const toolCalls = msg.toolCalls;
-        const toolInfo =
-          toolCalls && toolCalls.length > 0 ? ` [${toolCalls.length} tool calls]` : '';
-        return `[GEMINI${tokenInfo}${toolInfo}] ${preview}`;
+        if (toolCalls && toolCalls.length > 0) {
+          for (const tc of toolCalls) {
+            const status = tc.status === 'error' ? ' [ERROR]' : '';
+            parts.push(
+              formatToolUse(tc.name || 'unknown', tc.args, { verbose: this.verbose }) + status
+            );
+          }
+        }
+
+        // 主要內容
+        if (content) {
+          parts.push(`[GEMINI]${formatMultiline(preview)}`);
+        }
+
+        return parts.join('\n');
       }
 
       default:
-        return `[${type.toUpperCase()}] ${preview}`;
+        return `[${type.toUpperCase()}]${formatMultiline(preview)}`;
     }
   }
 }
@@ -182,8 +210,8 @@ export class GeminiAgent implements Agent {
   readonly finder: SessionFinder;
   readonly parser: LineParser;
 
-  constructor() {
+  constructor(options: ParserOptions = { verbose: false }) {
     this.finder = new GeminiSessionFinder();
-    this.parser = new GeminiLineParser();
+    this.parser = new GeminiLineParser(options);
   }
 }

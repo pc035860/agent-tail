@@ -163,4 +163,64 @@ describe('formatToolUse', () => {
       expect(result).toBe('[TOOL: CustomTool]');
     });
   });
+
+  describe('Codex tools', () => {
+    describe('shell tool', () => {
+      test('shows command from array format', () => {
+        const result = formatToolUse('shell', {
+          command: ['/bin/zsh', '-lc', 'git status --short'],
+        });
+        expect(result).toBe('[TOOL: shell] git status --short');
+      });
+
+      test('shows command from string', () => {
+        const result = formatToolUse('shell', { command: 'ls -la' });
+        expect(result).toBe('[TOOL: shell] ls -la');
+      });
+
+      test('truncates long command', () => {
+        const longCmd = 'echo ' + 'a'.repeat(200);
+        const result = formatToolUse('shell', { command: longCmd });
+        expect(result).toContain('[TOOL: shell]');
+        expect(result).toContain('...');
+      });
+
+      test('does not truncate in verbose mode', () => {
+        const longCmd = 'echo ' + 'a'.repeat(200);
+        const result = formatToolUse('shell', { command: longCmd }, { verbose: true });
+        expect(result).toBe(`[TOOL: shell] ${longCmd}`);
+      });
+
+      test('handles missing command', () => {
+        expect(formatToolUse('shell', {})).toBe('[TOOL: shell]');
+      });
+
+      test('handles empty array', () => {
+        expect(formatToolUse('shell', { command: [] })).toBe('[TOOL: shell]');
+      });
+    });
+  });
+
+  describe('Gemini tools (snake_case)', () => {
+    test('read_file shows path', () => {
+      const result = formatToolUse('read_file', { file_path: 'src/index.ts' });
+      expect(result).toBe('[TOOL: read_file] src/index.ts');
+    });
+
+    test('edit_file shows path', () => {
+      const result = formatToolUse('edit_file', { file_path: 'src/utils.ts' });
+      expect(result).toBe('[TOOL: edit_file] src/utils.ts');
+    });
+
+    test('write_file shows path', () => {
+      const result = formatToolUse('write_file', { file_path: 'src/new.ts' });
+      expect(result).toBe('[TOOL: write_file] src/new.ts');
+    });
+
+    test('handles missing file path', () => {
+      expect(formatToolUse('read_file', {})).toBe('[TOOL: read_file] ');
+      expect(formatToolUse('edit_file', {})).toBe('[TOOL: edit_file] ');
+      expect(formatToolUse('write_file', {})).toBe('[TOOL: write_file] ');
+    });
+  });
 });

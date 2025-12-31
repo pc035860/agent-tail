@@ -3,7 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
-import type { ParsedLine, SessionFile } from '../../core/types.ts';
+import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
+import { truncate, formatMultiline } from '../../utils/text.ts';
+import { formatToolUse } from '../../utils/format-tool.ts';
 
 /**
  * Codex Session Finder
@@ -63,6 +65,12 @@ class CodexSessionFinder implements SessionFinder {
  * Codex JSONL 解析器
  */
 class CodexLineParser implements LineParser {
+  private verbose: boolean;
+
+  constructor(options: ParserOptions = { verbose: false }) {
+    this.verbose = options.verbose;
+  }
+
   parse(line: string): ParsedLine | null {
     if (!line.trim()) return null;
 
@@ -93,23 +101,105 @@ class CodexLineParser implements LineParser {
 
       case 'response_item': {
         const payload = data.payload as Record<string, unknown>;
-        const role = payload.role as string;
-        const content = payload.content as Array<{ type: string; text?: string }>;
-        const text = content?.find((c) => c.type === 'input_text' || c.type === 'output_text')?.text || '';
-        const preview = text.length > 200 ? text.slice(0, 200) + '...' : text;
-        return `[${role?.toUpperCase()}] ${preview}`;
+        const subType = payload.type as string;
+
+        switch (subType) {
+          case 'message': {
+            const role = payload.role as string;
+            const content = payload.content as Array<{ type: string; text?: string }>;
+            const text =
+              content?.find((c) => c.type === 'input_text' || c.type === 'output_text')?.text || '';
+            const preview = truncate(text, { verbose: this.verbose });
+            return `[${role?.toUpperCase()}]${formatMultiline(preview)}`;
+          }
+
+          case 'function_call': {
+            const name = payload.name as string;
+            const argsStr = payload.arguments as string;
+            let args: Record<string, unknown> = {};
+            try {
+              args = JSON.parse(argsStr);
+            } catch {
+              /* ignore */
+            }
+            return formatToolUse(name, args, { verbose: this.verbose });
+          }
+
+          case 'function_call_output': {
+            const outputStr = payload.output as string;
+            let output: { output?: string; metadata?: { exit_code?: number } } = {};
+            try {
+              output = JSON.parse(outputStr);
+            } catch {
+              /* ignore */
+            }
+            const exitCode = output.metadata?.exit_code;
+            const content = output.output || '';
+            const exitInfo = exitCode !== undefined ? ` (exit: ${exitCode})` : '';
+            if (!content) return `[OUTPUT${exitInfo}]`;
+            const preview = truncate(content, {
+              verbose: this.verbose,
+              headLength: 100,
+              tailLength: 50,
+            });
+            return `[OUTPUT${exitInfo}]${formatMultiline(preview)}`;
+          }
+
+          case 'reasoning': {
+            const summary = payload.summary as Array<{ type: string; text?: string }> | undefined;
+            const text = summary?.find((s) => s.type === 'summary_text')?.text || '';
+            if (!text) return '[REASONING]';
+            const preview = truncate(text, {
+              verbose: this.verbose,
+              headLength: 80,
+              tailLength: 40,
+            });
+            return `[REASONING] ${preview}`;
+          }
+
+          default:
+            return `[RESPONSE: ${subType}]`;
+        }
       }
 
       case 'event_msg': {
         const payload = data.payload as Record<string, unknown>;
-        const eventType = payload.event_type as string;
-        return `[EVENT] ${eventType}`;
+        const eventType = payload.type as string; // 修正：使用 type 而非 event_type
+
+        switch (eventType) {
+          case 'token_count': {
+            const info = payload.info as {
+              total_token_usage?: {
+                input_tokens?: number;
+                output_tokens?: number;
+                total_tokens?: number;
+              };
+            };
+            const usage = info?.total_token_usage;
+            if (usage) {
+              return `[TOKENS] in:${usage.input_tokens || 0} out:${usage.output_tokens || 0} total:${usage.total_tokens || 0}`;
+            }
+            return '[TOKENS]';
+          }
+
+          case 'agent_reasoning': {
+            const text = payload.text as string | undefined;
+            if (!text) return '[AGENT_REASONING]';
+            const preview = truncate(text, {
+              verbose: this.verbose,
+              headLength: 60,
+              tailLength: 30,
+            });
+            return `[AGENT_REASONING] ${preview}`;
+          }
+
+          default:
+            return `[EVENT: ${eventType}]`;
+        }
       }
 
-      case 'function_call': {
-        const payload = data.payload as Record<string, unknown>;
-        const name = payload.name as string;
-        return `[FUNCTION] ${name}`;
+      case 'turn_context': {
+        return '[TURN_CONTEXT]';
       }
 
       default:
@@ -126,8 +216,8 @@ export class CodexAgent implements Agent {
   readonly finder: SessionFinder;
   readonly parser: LineParser;
 
-  constructor() {
+  constructor(options: ParserOptions = { verbose: false }) {
     this.finder = new CodexSessionFinder();
-    this.parser = new CodexLineParser();
+    this.parser = new CodexLineParser(options);
   }
 }
