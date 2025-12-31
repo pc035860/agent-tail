@@ -4,6 +4,7 @@ import { FileWatcher } from './core/file-watcher.ts';
 import type { Agent } from './agents/agent.interface.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
+import { GeminiAgent } from './agents/gemini/gemini-agent.ts';
 import type { Formatter } from './formatters/formatter.interface.ts';
 import { RawFormatter } from './formatters/raw-formatter.ts';
 import { PrettyFormatter } from './formatters/pretty-formatter.ts';
@@ -13,7 +14,11 @@ async function main(): Promise<void> {
 
   // 選擇 Agent
   const agent: Agent =
-    options.agentType === 'codex' ? new CodexAgent() : new ClaudeAgent();
+    options.agentType === 'codex'
+      ? new CodexAgent()
+      : options.agentType === 'gemini'
+        ? new GeminiAgent()
+        : new ClaudeAgent();
 
   // 選擇 Formatter
   const formatter: Formatter = options.raw
@@ -55,6 +60,8 @@ async function main(): Promise<void> {
   // 開始監控
   await watcher.start(sessionFile.path, {
     follow: options.follow,
+    // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
+    jsonMode: options.agentType === 'gemini',
     onLine: (line) => {
       const parsed = agent.parser.parse(line);
       if (parsed) {

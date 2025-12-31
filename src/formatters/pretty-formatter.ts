@@ -44,6 +44,8 @@ export class PrettyFormatter implements Formatter {
         return chalk.magenta('FUNC');
       case 'file-history-snapshot':
         return chalk.gray('SNAP');
+      case 'gemini':
+        return chalk.magenta.bold('GEMI');
       default:
         return chalk.white(type.toUpperCase().slice(0, 4));
     }

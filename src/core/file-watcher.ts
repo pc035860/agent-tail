@@ -4,6 +4,8 @@ export interface WatchOptions {
   follow: boolean;
   onLine: (line: string) => void;
   onError?: (error: Error) => void;
+  /** JSON 模式：不分割行，把整個檔案當作一個整體傳給 onLine */
+  jsonMode?: boolean;
 }
 
 /**
@@ -13,11 +15,15 @@ export class FileWatcher {
   private watcher: FSWatcher | null = null;
   private processedLines = 0;
   private isWatching = false;
+  private jsonMode = false;
+  private lastContentHash = '';
 
   /**
    * 開始監控檔案
    */
   async start(filePath: string, options: WatchOptions): Promise<void> {
+    this.jsonMode = options.jsonMode || false;
+
     // 初始讀取現有內容
     await this.readAndProcess(filePath, options.onLine);
 
@@ -51,15 +57,27 @@ export class FileWatcher {
   ): Promise<void> {
     const file = Bun.file(filePath);
     const content = await file.text();
-    const lines = content.split('\n').filter(Boolean);
 
-    // 只處理新增的行
-    const newLines = lines.slice(this.processedLines);
-    for (const line of newLines) {
-      onLine(line);
+    if (this.jsonMode) {
+      // JSON 模式：把整個檔案當作一個整體
+      // 使用簡單的 hash 來檢測內容是否有變化
+      const contentHash = Bun.hash(content).toString();
+      if (contentHash !== this.lastContentHash) {
+        this.lastContentHash = contentHash;
+        onLine(content);
+      }
+    } else {
+      // JSONL 模式：按行分割
+      const lines = content.split('\n').filter(Boolean);
+
+      // 只處理新增的行
+      const newLines = lines.slice(this.processedLines);
+      for (const line of newLines) {
+        onLine(line);
+      }
+
+      this.processedLines = lines.length;
     }
-
-    this.processedLines = lines.length;
   }
 
   /**
