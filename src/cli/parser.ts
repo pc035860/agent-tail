@@ -11,7 +11,8 @@ program
   .option('--raw', 'Output raw JSONL instead of formatted output', false)
   .option('-p, --project <pattern>', 'Filter by project name (fuzzy match)')
   .option('-f, --follow', 'Follow file changes (default: true)', true)
-  .option('--no-follow', 'Do not follow, only output existing content');
+  .option('--no-follow', 'Do not follow, only output existing content')
+  .option('-v, --verbose', 'Show full content without truncation', false);
 
 /**
  * 解析 CLI 參數
@@ -33,5 +34,6 @@ export function parseArgs(args: string[]): CliOptions {
     raw: opts.raw,
     project: opts.project,
     follow: opts.follow,
+    verbose: opts.verbose,
   };
 }

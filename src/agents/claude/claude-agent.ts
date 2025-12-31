@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
-import type { ParsedLine, SessionFile } from '../../core/types.ts';
+import type { ParsedLine, ParserOptions, SessionFile } from '../../core/types.ts';
+import { contentToString, formatMultiline, truncate } from '../../utils/text.ts';
 
 /**
  * Claude Code Session Finder
@@ -66,6 +67,12 @@ class ClaudeSessionFinder implements SessionFinder {
  * Claude Code JSONL 解析器
  */
 class ClaudeLineParser implements LineParser {
+  private verbose: boolean;
+
+  constructor(options: ParserOptions = { verbose: false }) {
+    this.verbose = options.verbose;
+  }
+
   parse(line: string): ParsedLine | null {
     if (!line.trim()) return null;
 
@@ -94,38 +101,143 @@ class ClaudeLineParser implements LineParser {
       }
 
       case 'user': {
-        const message = data.message as { content: string };
-        const content = message?.content || '';
-        const preview = content.length > 200 ? content.slice(0, 200) + '...' : content;
-        return `[USER] ${preview}`;
+        const message = data.message as { content: unknown };
+        const content = contentToString(message?.content);
+        const preview = truncate(content, { verbose: this.verbose });
+        return `[USER]${formatMultiline(preview)}`;
       }
 
       case 'assistant': {
         const message = data.message as {
           model?: string;
-          content: Array<{ type: string; text?: string; thinking?: string; name?: string }>;
+          content: Array<{
+            type: string;
+            text?: string;
+            thinking?: string;
+            name?: string;
+            input?: Record<string, unknown>;
+          }>;
         };
         const model = message?.model || '';
         const content = message?.content || [];
 
-        // 提取文字內容
-        const textParts: string[] = [];
+        // 提取文字內容和 tool_use
+        const parts: string[] = [];
         for (const part of content) {
           if (part.type === 'text' && part.text) {
-            textParts.push(part.text);
+            parts.push(truncate(part.text, { verbose: this.verbose }));
           } else if (part.type === 'tool_use' && part.name) {
-            textParts.push(`[TOOL: ${part.name}]`);
+            parts.push(this.formatToolUse(part.name, part.input));
           }
         }
 
-        const text = textParts.join(' ');
-        const preview = text.length > 200 ? text.slice(0, 200) + '...' : text;
+        const text = parts.join(' ');
         const modelShort = model.replace('claude-', '').replace('-20251101', '');
-        return `[ASSISTANT${modelShort ? ` (${modelShort})` : ''}] ${preview}`;
+        return `[ASSISTANT${modelShort ? ` (${modelShort})` : ''}]${formatMultiline(text)}`;
       }
 
       default:
         return `[${type}]`;
+    }
+  }
+
+  /**
+   * 格式化 tool_use，顯示關鍵參數摘要
+   */
+  private formatToolUse(name: string, input?: Record<string, unknown>): string {
+    if (!input) return `[TOOL: ${name}]`;
+
+    switch (name) {
+      case 'Task': {
+        const prompt = input.prompt as string | undefined;
+        if (prompt) {
+          const summary = truncate(prompt, {
+            verbose: this.verbose,
+            headLength: 50,
+            tailLength: 50,
+          });
+          return `[TOOL: Task] ${summary}`;
+        }
+        return `[TOOL: Task]`;
+      }
+
+      case 'Grep': {
+        const pattern = input.pattern as string | undefined;
+        const path = input.path as string | undefined;
+        const pathStr = path ? ` in ${path}` : '';
+        return `[TOOL: Grep] "${pattern || ''}"${pathStr}`;
+      }
+
+      case 'Bash': {
+        const command = input.command as string | undefined;
+        if (command) {
+          const summary = truncate(command, {
+            verbose: this.verbose,
+            headLength: 80,
+            tailLength: 40,
+          });
+          return `[TOOL: Bash] ${summary}`;
+        }
+        return `[TOOL: Bash]`;
+      }
+
+      case 'Read': {
+        const filePath = input.file_path as string | undefined;
+        return `[TOOL: Read] ${filePath || ''}`;
+      }
+
+      case 'Edit': {
+        const filePath = input.file_path as string | undefined;
+        return `[TOOL: Edit] ${filePath || ''}`;
+      }
+
+      case 'Write': {
+        const filePath = input.file_path as string | undefined;
+        return `[TOOL: Write] ${filePath || ''}`;
+      }
+
+      case 'Glob': {
+        const pattern = input.pattern as string | undefined;
+        const path = input.path as string | undefined;
+        const pathStr = path ? ` in ${path}` : '';
+        return `[TOOL: Glob] "${pattern || ''}"${pathStr}`;
+      }
+
+      case 'LSP': {
+        const operation = input.operation as string | undefined;
+        const filePath = input.filePath as string | undefined;
+        return `[TOOL: LSP] ${operation || ''} ${filePath || ''}`;
+      }
+
+      case 'WebFetch': {
+        const url = input.url as string | undefined;
+        return `[TOOL: WebFetch] ${url || ''}`;
+      }
+
+      case 'WebSearch': {
+        const query = input.query as string | undefined;
+        return `[TOOL: WebSearch] "${query || ''}"`;
+      }
+
+      case 'TodoWrite': {
+        return `[TOOL: TodoWrite]`;
+      }
+
+      default: {
+        // 其他 tool 顯示第一個有意義的參數
+        const firstValue = Object.values(input).find(
+          (v) => typeof v === 'string' && v.length > 0
+        ) as string | undefined;
+        if (firstValue) {
+          const summary = truncate(firstValue, {
+            verbose: this.verbose,
+            headLength: 40,
+            tailLength: 20,
+          });
+          return `[TOOL: ${name}] ${summary}`;
+        }
+        return `[TOOL: ${name}]`;
+      }
     }
   }
 }
@@ -138,8 +250,8 @@ export class ClaudeAgent implements Agent {
   readonly finder: SessionFinder;
   readonly parser: LineParser;
 
-  constructor() {
+  constructor(options: ParserOptions = { verbose: false }) {
     this.finder = new ClaudeSessionFinder();
-    this.parser = new ClaudeLineParser();
+    this.parser = new ClaudeLineParser(options);
   }
 }

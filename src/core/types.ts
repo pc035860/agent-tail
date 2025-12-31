@@ -11,6 +11,14 @@ export interface CliOptions {
   raw: boolean;
   project?: string;
   follow: boolean;
+  verbose: boolean;
+}
+
+/**
+ * Parser 設定選項
+ */
+export interface ParserOptions {
+  verbose: boolean;
 }
 
 /**

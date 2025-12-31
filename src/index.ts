@@ -18,7 +18,7 @@ async function main(): Promise<void> {
       ? new CodexAgent()
       : options.agentType === 'gemini'
         ? new GeminiAgent()
-        : new ClaudeAgent();
+        : new ClaudeAgent({ verbose: options.verbose });
 
   // 選擇 Formatter
   const formatter: Formatter = options.raw
