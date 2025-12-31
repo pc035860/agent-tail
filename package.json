@@ -2,6 +2,7 @@
   "name": "agent-tail",
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
   "description": "Tail agent session logs (Codex & Claude Code) in real-time",
   "bin": {
     "agent-tail": "./bin/agent-tail"
