@@ -15,6 +15,10 @@ bun run src/index.ts <agent-type>  # agent-type: codex | claude | gemini
 # Or via npm script
 bun start                          # requires agent-type argument
 
+# Development commands
+bun test                           # run tests
+bun run typecheck                  # TypeScript type checking
+
 # CLI options
 agent-tail <agent-type>            # basic usage
 agent-tail claude --raw            # output raw JSONL
@@ -42,7 +46,7 @@ src/
 │   ├── raw-formatter.ts
 │   └── pretty-formatter.ts
 └── utils/
-    ├── text.ts           # Text utilities (truncate, formatMultiline, contentToString)
+    ├── text.ts           # Text utilities (truncate, truncateByLines, formatMultiline, contentToString)
     └── format-tool.ts    # Tool call formatting for all agents
 ```
 
