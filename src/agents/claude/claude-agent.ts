@@ -1,0 +1,145 @@
+import { stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { Glob } from 'bun';
+import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
+import type { ParsedLine, SessionFile } from '../../core/types.ts';
+
+/**
+ * Claude Code Session Finder
+ * 目錄結構: ~/.claude/projects/{encoded-path}/{UUID}.jsonl
+ */
+class ClaudeSessionFinder implements SessionFinder {
+  private baseDir: string;
+
+  constructor() {
+    this.baseDir = join(homedir(), '.claude', 'projects');
+  }
+
+  getBaseDir(): string {
+    return this.baseDir;
+  }
+
+  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+    const glob = new Glob('**/*.jsonl');
+    const files: { path: string; mtime: Date }[] = [];
+
+    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+      const filename = file.split('/').pop() || '';
+
+      // 排除 agent-* 開頭的檔案
+      if (filename.startsWith('agent-')) continue;
+
+      // 只匹配 UUID 格式的檔案名
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+      if (!uuidPattern.test(filename)) continue;
+
+      // 如果有 project filter，做模糊比對
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        // 對路徑做模糊比對（包含專案目錄名稱）
+        if (!file.toLowerCase().includes(pattern)) continue;
+      }
+
+      try {
+        const stats = await stat(file);
+        files.push({ path: file, mtime: stats.mtime });
+      } catch {
+        // 忽略無法讀取的檔案
+      }
+    }
+
+    if (files.length === 0) return null;
+
+    // 按修改時間排序，取最新的
+    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+    return {
+      path: files[0].path,
+      mtime: files[0].mtime,
+      agentType: 'claude',
+    };
+  }
+}
+
+/**
+ * Claude Code JSONL 解析器
+ */
+class ClaudeLineParser implements LineParser {
+  parse(line: string): ParsedLine | null {
+    if (!line.trim()) return null;
+
+    try {
+      const data = JSON.parse(line);
+      const type = data.type || 'unknown';
+      const timestamp = data.timestamp || '';
+
+      return {
+        type,
+        timestamp,
+        raw: data,
+        formatted: this.format(data),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private format(data: Record<string, unknown>): string {
+    const type = data.type as string;
+
+    switch (type) {
+      case 'file-history-snapshot': {
+        return '[SNAPSHOT]';
+      }
+
+      case 'user': {
+        const message = data.message as { content: string };
+        const content = message?.content || '';
+        const preview = content.length > 200 ? content.slice(0, 200) + '...' : content;
+        return `[USER] ${preview}`;
+      }
+
+      case 'assistant': {
+        const message = data.message as {
+          model?: string;
+          content: Array<{ type: string; text?: string; thinking?: string; name?: string }>;
+        };
+        const model = message?.model || '';
+        const content = message?.content || [];
+
+        // 提取文字內容
+        const textParts: string[] = [];
+        for (const part of content) {
+          if (part.type === 'text' && part.text) {
+            textParts.push(part.text);
+          } else if (part.type === 'tool_use' && part.name) {
+            textParts.push(`[TOOL: ${part.name}]`);
+          }
+        }
+
+        const text = textParts.join(' ');
+        const preview = text.length > 200 ? text.slice(0, 200) + '...' : text;
+        const modelShort = model.replace('claude-', '').replace('-20251101', '');
+        return `[ASSISTANT${modelShort ? ` (${modelShort})` : ''}] ${preview}`;
+      }
+
+      default:
+        return `[${type}]`;
+    }
+  }
+}
+
+/**
+ * Claude Code Agent
+ */
+export class ClaudeAgent implements Agent {
+  readonly type = 'claude' as const;
+  readonly finder: SessionFinder;
+  readonly parser: LineParser;
+
+  constructor() {
+    this.finder = new ClaudeSessionFinder();
+    this.parser = new ClaudeLineParser();
+  }
+}
