@@ -192,6 +192,63 @@ describe('ClaudeAgent parser', () => {
     });
   });
 
+  describe('toolUseResult (subagent completion)', () => {
+    test('should parse toolUseResult with agentId', () => {
+      const line = JSON.stringify({
+        uuid: 'f32695c5-7183-412e-857c-fdb946d2a0af',
+        timestamp: '2024-01-01T00:00:00Z',
+        toolUseResult: {
+          status: 'completed',
+          agentId: 'a0627b6',
+          totalDurationMs: 36628,
+          totalTokens: 42215,
+        },
+      });
+
+      const results = collectAllParsedLines(parser, line);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.type).toBe('tool_result');
+      expect(results[0]!.formatted).toContain('completed');
+      expect(results[0]!.formatted).toContain('agent:a0627b6');
+      expect(results[0]!.formatted).toContain('36.6s');
+      expect(results[0]!.formatted).toContain('42215 tokens');
+    });
+
+    test('should parse toolUseResult without agentId', () => {
+      const line = JSON.stringify({
+        uuid: 'test-uuid',
+        timestamp: '2024-01-01T00:00:00Z',
+        toolUseResult: {
+          status: 'completed',
+          totalDurationMs: 1000,
+        },
+      });
+
+      const results = collectAllParsedLines(parser, line);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.type).toBe('tool_result');
+      expect(results[0]!.formatted).toContain('completed');
+      expect(results[0]!.formatted).not.toContain('agent:');
+    });
+
+    test('should not loop on toolUseResult', () => {
+      const line = JSON.stringify({
+        uuid: 'test-uuid',
+        timestamp: '2024-01-01T00:00:00Z',
+        toolUseResult: {
+          status: 'completed',
+          agentId: 'abc123',
+        },
+      });
+
+      // Should not throw infinite loop error
+      const results = collectAllParsedLines(parser, line);
+      expect(results).toHaveLength(1);
+    });
+  });
+
   describe('multiple different lines', () => {
     test('should handle different lines correctly', () => {
       const line1 = JSON.stringify({

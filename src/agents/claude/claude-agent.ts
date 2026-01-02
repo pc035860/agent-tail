@@ -129,6 +129,11 @@ class ClaudeLineParser implements LineParser {
         return this.parseAssistantMessage(data, timestamp);
       }
 
+      // toolUseResult 記錄（subagent 完成時的回傳）
+      if (data.toolUseResult) {
+        return this.parseToolUseResult(data, timestamp);
+      }
+
       const formatted = this.format(data);
 
       // 空內容不輸出
@@ -232,6 +237,42 @@ class ClaudeLineParser implements LineParser {
     }
 
     return null;
+  }
+
+  /**
+   * 解析 toolUseResult 記錄（subagent 完成時的回傳）
+   */
+  private parseToolUseResult(
+    data: Record<string, unknown>,
+    timestamp: string
+  ): ParsedLine | null {
+    const toolUseResult = data.toolUseResult as {
+      status?: string;
+      agentId?: string;
+      prompt?: string;
+      totalDurationMs?: number;
+      totalTokens?: number;
+    };
+
+    if (!toolUseResult) return null;
+
+    const { status, agentId, totalDurationMs, totalTokens } = toolUseResult;
+
+    // 格式化輸出
+    const parts: string[] = [];
+    if (status) parts.push(status);
+    if (agentId) parts.push(`agent:${agentId}`);
+    if (totalDurationMs) parts.push(`${(totalDurationMs / 1000).toFixed(1)}s`);
+    if (totalTokens) parts.push(`${totalTokens} tokens`);
+
+    const formatted = parts.length > 0 ? `(${parts.join(', ')})` : '';
+
+    return {
+      type: 'tool_result',
+      timestamp,
+      raw: data,
+      formatted,
+    };
   }
 
   private format(data: Record<string, unknown>): string {

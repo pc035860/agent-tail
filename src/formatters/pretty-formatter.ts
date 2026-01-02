@@ -11,15 +11,20 @@ export class PrettyFormatter implements Formatter {
     const time = this.formatTime(parsed.timestamp);
     const content = parsed.formatted;
 
+    // 來源標籤（多檔案監控時用於區分來源）
+    const sourceLabel = parsed.sourceLabel
+      ? chalk.cyan(parsed.sourceLabel.padEnd(10)) + ' '
+      : '';
+
     // function_call 類型使用 tool category 顏色
     if (parsed.type === 'function_call' && parsed.toolName) {
       const category = getToolCategory(parsed.toolName);
       const typeLabel = this.formatToolCategory(category);
-      return `${chalk.gray(time)} ${typeLabel} ${content}`;
+      return `${chalk.gray(time)} ${sourceLabel}${typeLabel} ${content}`;
     }
 
     const typeLabel = this.formatType(parsed.type);
-    return `${chalk.gray(time)} ${typeLabel} ${content}`;
+    return `${chalk.gray(time)} ${sourceLabel}${typeLabel} ${content}`;
   }
 
   /**
@@ -68,6 +73,8 @@ export class PrettyFormatter implements Formatter {
         return chalk.yellow('META');
       case 'function_call':
         return chalk.magenta('FUNC');
+      case 'tool_result':
+        return chalk.green('DONE');
       case 'output':
         return chalk.cyan('OUT ');
       case 'reasoning':
