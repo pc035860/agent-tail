@@ -5,7 +5,7 @@ import { FileWatcher, type WatchOptions } from './file-watcher.ts';
  */
 export interface WatchedFile {
   path: string;
-  label: string; // "[M]" 或 "[agentId]"
+  label: string; // "[MAIN]" 或 "[agentId]"
 }
 
 /**

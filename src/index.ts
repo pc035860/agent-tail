@@ -101,7 +101,7 @@ async function startClaudeMultiWatch(
   const sessionDir = dirname(sessionFile.path);
 
   // 建立監控檔案列表（主 session）
-  const files: WatchedFile[] = [{ path: sessionFile.path, label: '[M]' }];
+  const files: WatchedFile[] = [{ path: sessionFile.path, label: '[MAIN]' }];
 
   // 掃描現有的 subagent
   const existingAgentIds = await extractAgentIds(sessionFile.path);
@@ -156,7 +156,7 @@ async function startClaudeMultiWatch(
         console.log(formatter.format(parsed));
 
         // 檢查是否有新的 subagent（從主 session 的 toolUseResult）
-        if (label === '[M]' && options.follow) {
+        if (label === '[MAIN]' && options.follow) {
           const raw = parsed.raw as { toolUseResult?: { agentId?: string } };
           const newAgentId = raw?.toolUseResult?.agentId;
           if (newAgentId && !knownAgentIds.has(newAgentId)) {

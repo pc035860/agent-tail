@@ -40,6 +40,6 @@ export interface ParsedLine {
   formatted: string;
   /** Tool 名稱（僅 function_call 類型使用，用於顏色判斷） */
   toolName?: string;
-  /** 來源標籤（多檔案監控時用於區分來源，如 "[M]" 或 "[a0627b6]"） */
+  /** 來源標籤（多檔案監控時用於區分來源，如 "[MAIN]" 或 "[a0627b6]"） */
   sourceLabel?: string;
 }
