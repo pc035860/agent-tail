@@ -31,14 +31,45 @@ async function main(): Promise<void> {
     ? new RawFormatter()
     : new PrettyFormatter();
 
-  // 找到最新的 session 檔案
+  // 找到目標 session 檔案
+  const searchType =
+    options.agentType === 'claude' && options.subagent !== undefined
+      ? 'subagent'
+      : 'session';
   console.log(
-    chalk.gray(`Searching for latest ${options.agentType} session...`)
+    chalk.gray(`Searching for latest ${options.agentType} ${searchType}...`)
   );
 
-  const sessionFile = await agent.finder.findLatest({
-    project: options.project,
-  });
+  let sessionFile: SessionFile | null = null;
+
+  // Claude subagent 模式
+  if (options.agentType === 'claude' && options.subagent !== undefined) {
+    const finder = agent.finder;
+    if (finder.findSubagent) {
+      const subagentId =
+        typeof options.subagent === 'string' ? options.subagent : undefined;
+
+      sessionFile = await finder.findSubagent({
+        project: options.project,
+        subagentId,
+      });
+
+      if (!sessionFile) {
+        const idInfo = subagentId ? ` (id: ${subagentId})` : '';
+        const projectInfo = options.project
+          ? ` in project "${options.project}"`
+          : '';
+        console.error(
+          chalk.red(`No subagent file found${idInfo}${projectInfo}`)
+        );
+        process.exit(1);
+      }
+    }
+  } else {
+    sessionFile = await agent.finder.findLatest({
+      project: options.project,
+    });
+  }
 
   if (!sessionFile) {
     console.error(
@@ -52,13 +83,21 @@ async function main(): Promise<void> {
   console.log(chalk.green(`Found: ${sessionFile.path}`));
   console.log(chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
 
-  // Claude 模式：支援 subagent 多檔案監控
-  if (options.agentType === 'claude') {
+  // Claude 主 session 模式：支援 subagent 多檔案監控
+  // Claude subagent 模式：單檔案監控
+  if (options.agentType === 'claude' && options.subagent === undefined) {
     await startClaudeMultiWatch(sessionFile, formatter, options);
   } else {
-    // 其他 agent：單檔案監控
+    // 其他 agent 或 Claude subagent 模式：單檔案監控
     await startSingleWatch(agent, sessionFile, formatter, options);
   }
+}
+
+/**
+ * 驗證 agentId 格式（7 位十六進制）
+ */
+function isValidAgentId(agentId: string): boolean {
+  return /^[0-9a-f]{7}$/i.test(agentId);
 }
 
 /**
@@ -75,9 +114,10 @@ async function extractAgentIds(sessionPath: string): Promise<Set<string>> {
     for (const line of lines) {
       try {
         const data = JSON.parse(line);
-        // 從 toolUseResult 中提取 agentId
-        if (data.toolUseResult?.agentId) {
-          agentIds.add(data.toolUseResult.agentId);
+        // 從 toolUseResult 中提取 agentId，並驗證格式以防止路徑穿越
+        const agentId = data.toolUseResult?.agentId;
+        if (agentId && isValidAgentId(agentId)) {
+          agentIds.add(agentId);
         }
       } catch {
         // 忽略解析錯誤
@@ -159,7 +199,13 @@ async function startClaudeMultiWatch(
         if (label === '[MAIN]' && options.follow) {
           const raw = parsed.raw as { toolUseResult?: { agentId?: string } };
           const newAgentId = raw?.toolUseResult?.agentId;
-          if (newAgentId && !knownAgentIds.has(newAgentId)) {
+
+          // 驗證 agentId 格式以防止路徑穿越
+          if (
+            newAgentId &&
+            isValidAgentId(newAgentId) &&
+            !knownAgentIds.has(newAgentId)
+          ) {
             knownAgentIds.add(newAgentId);
             // 動態新增 subagent 監控
             const subagentPath = join(sessionDir, `agent-${newAgentId}.jsonl`);
@@ -168,13 +214,36 @@ async function startClaudeMultiWatch(
               label: `[${newAgentId}]`,
             };
             console.log(chalk.yellow(`New subagent detected: ${newAgentId}`));
-            // 延遲一下再新增，確保檔案已創建
-            setTimeout(async () => {
-              const subagentFile = Bun.file(subagentPath);
-              if (await subagentFile.exists()) {
-                await multiWatcher.addFile(newFile);
+
+            // 重試邏輯：等待檔案建立，最多重試 5 次
+            const tryAddSubagent = async (retries = 5): Promise<void> => {
+              try {
+                const subagentFile = Bun.file(subagentPath);
+                if (await subagentFile.exists()) {
+                  await multiWatcher.addFile(newFile);
+                } else if (retries > 0) {
+                  setTimeout(() => tryAddSubagent(retries - 1), 100);
+                } else {
+                  console.log(
+                    chalk.gray(
+                      `Subagent file not found after retries: ${newAgentId}`
+                    )
+                  );
+                }
+              } catch (error) {
+                console.log(
+                  chalk.gray(
+                    `Failed to add subagent watcher: ${newAgentId} - ${error}`
+                  )
+                );
               }
-            }, 100);
+            };
+            // 初次延遲 100ms 後開始嘗試
+            setTimeout(() => tryAddSubagent(), 100);
+          } else if (newAgentId && !isValidAgentId(newAgentId)) {
+            console.log(
+              chalk.gray(`Ignoring invalid agentId format: ${newAgentId}`)
+            );
           }
         }
 
