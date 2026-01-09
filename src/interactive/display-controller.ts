@@ -60,7 +60,16 @@ export class DisplayController {
     process.stdout.on('resize', () => {
       this.terminalRows = process.stdout.rows || 24;
       this.terminalCols = process.stdout.columns || 80;
-      if (this.isInitialized && this.persistentStatusLine) {
+      if (
+        this.isInitialized &&
+        this.persistentStatusLine &&
+        process.stdout.isTTY
+      ) {
+        // 重設 scroll region 以適應新的終端大小
+        process.stdout.write(ANSI.setScrollRegion(1, this.terminalRows - 1));
+        // 移動游標到內容區
+        process.stdout.write(`\x1b[${this.terminalRows - 1};1H`);
+        // 刷新狀態列
         this.refreshStatusLine();
       }
     });

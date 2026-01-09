@@ -163,11 +163,11 @@ export class SessionManager {
   }
 
   /**
-   * 取得 session 的緩衝內容
+   * 取得 session 的緩衝內容（回傳 copy 以防止外部意外修改）
    */
   getSessionBuffer(id: string): string[] {
     const session = this.sessions.find((s) => s.id === id);
-    return session?.buffer ?? [];
+    return session?.buffer.slice() ?? [];
   }
 
   /**
