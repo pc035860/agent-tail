@@ -285,6 +285,19 @@ async function startClaudeInteractiveWatch(
   formatter: Formatter,
   options: CliOptions
 ): Promise<void> {
+  // TTY 檢查：非 TTY 環境自動降級到普通多檔案監控模式
+  if (!process.stdin.isTTY) {
+    console.warn(
+      chalk.yellow(
+        'Warning: Interactive mode not available in non-TTY environment.\n' +
+          'Switching to standard multi-watch mode.\n' +
+          'Keyboard controls (Tab to switch) will not be available.'
+      )
+    );
+    await startClaudeMultiWatch(sessionFile, formatter, options);
+    return;
+  }
+
   const projectDir = dirname(sessionFile.path);
   const sessionId = basename(sessionFile.path, '.jsonl');
   const subagentsDir = join(projectDir, sessionId, 'subagents');
