@@ -139,7 +139,7 @@ export class SessionManager {
 
   /**
    * 處理輸出
-   * - active session: 直接輸出
+   * - active session: 直接輸出，同時存入 buffer（供切換後回看）
    * - 非 active session: 存入 buffer
    */
   handleOutput(label: string, content: string): void {
@@ -148,17 +148,17 @@ export class SessionManager {
 
     const activeSession = this.getActiveSession();
 
-    if (session === activeSession) {
-      // Active session - 直接輸出
-      this.options.onOutput(content, session);
-    } else {
-      // 非 active - 存入 buffer
-      session.buffer.push(content);
+    // 所有 session 都存入 buffer（全量緩衝）
+    session.buffer.push(content);
 
-      // 限制 buffer 大小
-      if (session.buffer.length > this.bufferSize) {
-        session.buffer.shift();
-      }
+    // 限制 buffer 大小
+    if (session.buffer.length > this.bufferSize) {
+      session.buffer.shift();
+    }
+
+    // Active session 同時輸出到顯示
+    if (session === activeSession) {
+      this.options.onOutput(content, session);
     }
   }
 

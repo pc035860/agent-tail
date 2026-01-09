@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { Glob } from 'bun';
 import { basename, dirname, join } from 'node:path';
 import { parseArgs } from './cli/parser.ts';
 import { FileWatcher } from './core/file-watcher.ts';
@@ -139,6 +140,39 @@ async function extractAgentIds(sessionPath: string): Promise<Set<string>> {
 }
 
 /**
+ * 掃描 subagents 目錄，找出尚未被監控的新 subagent 檔案
+ * @param subagentsDir subagents 目錄路徑
+ * @param knownAgentIds 已知的 agentId 集合
+ * @returns 新發現的 agentId 陣列
+ */
+async function scanForNewSubagents(
+  subagentsDir: string,
+  knownAgentIds: Set<string>
+): Promise<string[]> {
+  const newAgentIds: string[] = [];
+
+  try {
+    // 使用已 import 的 Glob
+    const glob = new Glob('agent-*.jsonl');
+    for await (const file of glob.scan({ cwd: subagentsDir })) {
+      // 從檔名 "agent-{id}.jsonl" 提取 id
+      const match = file.match(/^agent-([0-9a-f]{7})\.jsonl$/i);
+      if (match && match[1]) {
+        const agentId = match[1];
+        if (!knownAgentIds.has(agentId)) {
+          newAgentIds.push(agentId);
+        }
+      }
+    }
+  } catch {
+    // 目錄不存在或無法存取時靜默忽略
+    // 這是預期行為：subagent 可能尚未建立目錄
+  }
+
+  return newAgentIds;
+}
+
+/**
  * Claude 多檔案監控（主 session + subagents）
  */
 async function startClaudeMultiWatch(
@@ -205,7 +239,48 @@ async function startClaudeMultiWatch(
         parsed.sourceLabel = label;
         console.log(formatter.format(parsed));
 
-        // 檢查是否有新的 subagent（從主 session 的 toolUseResult）
+        // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
+        if (label === '[MAIN]' && parsed.isTaskToolUse && options.follow) {
+          // 延遲一小段時間讓檔案有機會建立
+          setTimeout(async () => {
+            const newAgentIds = await scanForNewSubagents(
+              subagentsDir,
+              knownAgentIds
+            );
+
+            for (const agentId of newAgentIds) {
+              knownAgentIds.add(agentId);
+
+              const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
+              const newFile: WatchedFile = {
+                path: subagentPath,
+                label: `[${agentId}]`,
+              };
+
+              console.log(chalk.yellow(`Early subagent detected: ${agentId}`));
+
+              // 重試邏輯：等待檔案建立
+              const tryAddSubagent = async (retries = 10): Promise<void> => {
+                try {
+                  const subagentFile = Bun.file(subagentPath);
+                  if (await subagentFile.exists()) {
+                    await multiWatcher.addFile(newFile);
+                  } else if (retries > 0) {
+                    setTimeout(() => tryAddSubagent(retries - 1), 100);
+                  }
+                } catch (error) {
+                  console.error(
+                    chalk.red(`Failed to add early subagent: ${error}`)
+                  );
+                }
+              };
+
+              tryAddSubagent();
+            }
+          }, 50); // 50ms 延遲
+        }
+
+        // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
         if (label === '[MAIN]' && options.follow) {
           const raw = parsed.raw as { toolUseResult?: { agentId?: string } };
           const newAgentId = raw?.toolUseResult?.agentId;
@@ -341,10 +416,7 @@ async function startClaudeInteractiveWatch(
       // 顯示切換訊息和歷史內容
       displayController.showSwitchMessage(session, historyContent);
 
-      // 只清空還在進行中的 session，已完成的保留 buffer 以供回看
-      if (!session.isDone) {
-        sessionManager.clearSessionBuffer(session.id);
-      }
+      // 不清空 buffer，保留完整歷史供回看
     },
   });
 
@@ -466,7 +538,52 @@ async function startClaudeInteractiveWatch(
         const formattedOutput = formatter.format(parsed);
         sessionManager.handleOutput(label, formattedOutput);
 
-        // 檢查 subagent 相關事件（僅處理主 session 的事件）
+        // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
+        if (label === '[MAIN]' && parsed.isTaskToolUse) {
+          setTimeout(async () => {
+            const newAgentIds = await scanForNewSubagents(
+              subagentsDir,
+              knownAgentIds
+            );
+
+            for (const agentId of newAgentIds) {
+              if (knownAgentIds.has(agentId)) continue;
+              knownAgentIds.add(agentId);
+
+              const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
+
+              // 新增到 SessionManager
+              sessionManager.addSession(agentId, `[${agentId}]`, subagentPath);
+              displayController.write(
+                chalk.yellow(`Early subagent detected: ${agentId}`)
+              );
+
+              // 重試邏輯：等待檔案建立
+              const tryAddSubagent = async (retries = 10): Promise<void> => {
+                try {
+                  const subagentFile = Bun.file(subagentPath);
+                  if (await subagentFile.exists()) {
+                    const newFile: WatchedFile = {
+                      path: subagentPath,
+                      label: `[${agentId}]`,
+                    };
+                    await multiWatcher.addFile(newFile);
+                  } else if (retries > 0) {
+                    setTimeout(() => tryAddSubagent(retries - 1), 100);
+                  }
+                } catch (error) {
+                  displayController.write(
+                    chalk.red(`Failed to add early subagent: ${error}`)
+                  );
+                }
+              };
+
+              tryAddSubagent();
+            }
+          }, 50); // 50ms 延遲
+        }
+
+        // 備援機制：檢查 subagent 相關事件（僅處理主 session 的事件）
         if (label === '[MAIN]') {
           const raw = parsed.raw as { toolUseResult?: { agentId?: string } };
           const agentId = raw?.toolUseResult?.agentId;

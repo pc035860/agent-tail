@@ -46,4 +46,6 @@ export interface ParsedLine {
   toolName?: string;
   /** 來源標籤（多檔案監控時用於區分來源，如 "[MAIN]" 或 "[a0627b6]"） */
   sourceLabel?: string;
+  /** 是否為 Task tool_use（用於早期 Subagent 偵測） */
+  isTaskToolUse?: boolean;
 }
