@@ -14,6 +14,8 @@ export interface CliOptions {
   verbose: boolean;
   /** Claude only: tail subagent log (true = latest, string = specific ID) */
   subagent?: string | true;
+  /** Claude only: interactive mode for switching between main session and subagents */
+  interactive: boolean;
 }
 
 /**
