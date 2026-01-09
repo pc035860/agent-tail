@@ -297,8 +297,11 @@ describe('ClaudeSessionFinder.findSubagent', () => {
     agentId: string,
     content = '{}'
   ): Promise<string> {
-    await mkdir(projectDir, { recursive: true });
-    const filePath = join(projectDir, `agent-${agentId}.jsonl`);
+    // 新結構: {projectDir}/{UUID}/subagents/agent-{agentId}.jsonl
+    const sessionId = 'test-session-uuid';
+    const subagentsDir = join(projectDir, sessionId, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+    const filePath = join(subagentsDir, `agent-${agentId}.jsonl`);
     await writeFile(filePath, content);
     return filePath;
   }
@@ -388,11 +391,15 @@ describe('ClaudeSessionFinder.findSubagent', () => {
   test('ignores files with invalid agentId format', async () => {
     const projectDir = join(tempDir, 'project1');
 
+    // 新結構: {projectDir}/{UUID}/subagents/
+    const sessionId = 'test-session-uuid';
+    const subagentsDir = join(projectDir, sessionId, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
     // 建立無效格式的檔案（不是 7 位十六進制）
-    await mkdir(projectDir, { recursive: true });
-    await writeFile(join(projectDir, 'agent-short.jsonl'), '{}');
-    await writeFile(join(projectDir, 'agent-toolongid123.jsonl'), '{}');
-    await writeFile(join(projectDir, 'agent-invalid!.jsonl'), '{}');
+    await writeFile(join(subagentsDir, 'agent-short.jsonl'), '{}');
+    await writeFile(join(subagentsDir, 'agent-toolongid123.jsonl'), '{}');
+    await writeFile(join(subagentsDir, 'agent-invalid!.jsonl'), '{}');
 
     // 建立有效的檔案
     const validPath = await createSubagentFile(projectDir, 'a0627b6');
