@@ -74,6 +74,58 @@ class ClaudeSessionFinder implements SessionFinder {
       agentType: 'claude',
     };
   }
+
+  /**
+   * 找到 subagent 檔案
+   * @param options.subagentId - 指定的 subagent ID，不提供則找最新的
+   */
+  async findSubagent(options: {
+    project?: string;
+    subagentId?: string;
+  }): Promise<SessionFile | null> {
+    const { project, subagentId } = options;
+
+    // 決定 glob pattern
+    const pattern = subagentId
+      ? `**/agent-${subagentId}.jsonl`
+      : '**/agent-*.jsonl';
+
+    const glob = new Glob(pattern);
+    const files: { path: string; mtime: Date }[] = [];
+
+    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+      const filename = file.split('/').pop() || '';
+
+      // 驗證 subagent 檔名格式: agent-{7位十六進制}.jsonl
+      const subagentPattern = /^agent-[0-9a-f]{7}\.jsonl$/i;
+      if (!subagentPattern.test(filename)) continue;
+
+      // project filter
+      if (project && !file.toLowerCase().includes(project.toLowerCase())) {
+        continue;
+      }
+
+      try {
+        const stats = await stat(file);
+        files.push({ path: file, mtime: stats.mtime });
+      } catch {
+        // 忽略無法讀取的檔案
+      }
+    }
+
+    if (files.length === 0) return null;
+
+    // 按修改時間排序，取最新的
+    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    const latest = files[0];
+    if (!latest) return null;
+
+    return {
+      path: latest.path,
+      mtime: latest.mtime,
+      agentType: 'claude',
+    };
+  }
 }
 
 /**

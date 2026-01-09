@@ -13,6 +13,15 @@ export interface SessionFinder {
    * 找到最新的 session 檔案
    */
   findLatest(options: { project?: string }): Promise<SessionFile | null>;
+
+  /**
+   * 找到 subagent 檔案（可選實作，目前只有 Claude 支援）
+   * @param options.subagentId - 指定的 subagent ID，不提供則找最新的
+   */
+  findSubagent?(options: {
+    project?: string;
+    subagentId?: string;
+  }): Promise<SessionFile | null>;
 }
 
 /**

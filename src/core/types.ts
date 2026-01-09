@@ -12,6 +12,8 @@ export interface CliOptions {
   project?: string;
   follow: boolean;
   verbose: boolean;
+  /** Claude only: tail subagent log (true = latest, string = specific ID) */
+  subagent?: string | true;
 }
 
 /**

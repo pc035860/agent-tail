@@ -14,7 +14,11 @@ program
   .option('-p, --project <pattern>', 'Filter by project name (fuzzy match)')
   .option('-f, --follow', 'Follow file changes (default: true)', true)
   .option('--no-follow', 'Do not follow, only output existing content')
-  .option('-v, --verbose', 'Show full content without truncation', false);
+  .option('-v, --verbose', 'Show full content without truncation', false)
+  .option(
+    '-s, --subagent [id]',
+    'Claude only: tail subagent log (latest if no ID)'
+  );
 
 /**
  * 解析 CLI 參數
@@ -37,11 +41,20 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // subagent 選項僅對 claude 有效
+  if (opts.subagent !== undefined && agentTypeArg !== 'claude') {
+    console.error(
+      'Error: --subagent option is only available for "claude" agent type.'
+    );
+    process.exit(1);
+  }
+
   return {
     agentType: agentTypeArg as AgentType,
     raw: opts.raw,
     project: opts.project,
     follow: opts.follow,
     verbose: opts.verbose,
+    subagent: opts.subagent,
   };
 }
