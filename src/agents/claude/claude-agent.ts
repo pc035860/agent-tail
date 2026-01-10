@@ -286,6 +286,7 @@ class ClaudeLineParser implements LineParser {
           verbose: this.verbose,
         }),
         toolName: part.name,
+        isTaskToolUse: part.name === 'Task',
       };
     }
 

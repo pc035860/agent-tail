@@ -18,6 +18,11 @@ program
   .option(
     '-s, --subagent [id]',
     'Claude only: tail subagent log (latest if no ID)'
+  )
+  .option(
+    '-i, --interactive',
+    'Claude only: interactive mode for switching between sessions (Tab to switch)',
+    false
   );
 
 /**
@@ -49,6 +54,30 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // interactive 選項僅對 claude 有效
+  if (opts.interactive && agentTypeArg !== 'claude') {
+    console.error(
+      'Error: --interactive option is only available for "claude" agent type.'
+    );
+    process.exit(1);
+  }
+
+  // interactive 和 subagent 互斥
+  if (opts.interactive && opts.subagent !== undefined) {
+    console.error(
+      'Error: --interactive and --subagent options cannot be used together.'
+    );
+    process.exit(1);
+  }
+
+  // interactive 需要 follow 模式
+  if (opts.interactive && !opts.follow) {
+    console.error(
+      'Error: --interactive requires --follow mode (cannot use with --no-follow).'
+    );
+    process.exit(1);
+  }
+
   return {
     agentType: agentTypeArg as AgentType,
     raw: opts.raw,
@@ -56,5 +85,6 @@ export function parseArgs(args: string[]): CliOptions {
     follow: opts.follow,
     verbose: opts.verbose,
     subagent: opts.subagent,
+    interactive: opts.interactive,
   };
 }
