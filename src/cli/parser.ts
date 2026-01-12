@@ -10,6 +10,10 @@ program
   )
   .version('0.1.0')
   .argument('<agent-type>', 'Agent type: codex, claude, or gemini')
+  .argument(
+    '[session-id]',
+    'Optional session ID to load (partial match supported)'
+  )
   .option('--raw', 'Output raw JSONL instead of formatted output', false)
   .option('-p, --project <pattern>', 'Filter by project name (fuzzy match)')
   .option('-f, --follow', 'Follow file changes (default: true)', true)
@@ -32,6 +36,7 @@ export function parseArgs(args: string[]): CliOptions {
   program.parse(args);
 
   const agentTypeArg = program.args[0];
+  const sessionIdArg = program.args[1];
   const opts = program.opts();
 
   // 驗證 agent 類型
@@ -86,5 +91,6 @@ export function parseArgs(args: string[]): CliOptions {
     verbose: opts.verbose,
     subagent: opts.subagent,
     interactive: opts.interactive,
+    sessionId: sessionIdArg,
   };
 }

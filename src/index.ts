@@ -15,7 +15,11 @@ import { GeminiAgent } from './agents/gemini/gemini-agent.ts';
 import type { Formatter } from './formatters/formatter.interface.ts';
 import { RawFormatter } from './formatters/raw-formatter.ts';
 import { PrettyFormatter } from './formatters/pretty-formatter.ts';
-import type { CliOptions, SessionFile } from './core/types.ts';
+import type {
+  CliOptions,
+  ClaudeSessionResult,
+  SessionFile,
+} from './core/types.ts';
 import {
   SubagentDetector,
   extractAgentIds,
@@ -46,18 +50,64 @@ async function main(): Promise<void> {
     : new PrettyFormatter();
 
   // 找到目標 session 檔案
-  const searchType =
-    options.agentType === 'claude' && options.subagent !== undefined
-      ? 'subagent'
-      : 'session';
-  console.log(
-    chalk.gray(`Searching for latest ${options.agentType} ${searchType}...`)
-  );
-
   let sessionFile: SessionFile | null = null;
+  let subagentFile: SessionFile | null = null; // Claude subagent 關聯
 
-  // Claude subagent 模式
-  if (options.agentType === 'claude' && options.subagent !== undefined) {
+  // 判斷搜尋模式
+  if (options.sessionId) {
+    // 使用 sessionId 搜尋特定 session
+    console.log(
+      chalk.gray(
+        `Searching for ${options.agentType} session "${options.sessionId}"...`
+      )
+    );
+
+    const finder = agent.finder;
+    if (!finder.findBySessionId) {
+      console.error(
+        chalk.red(
+          `Session ID lookup not supported for ${options.agentType} agent`
+        )
+      );
+      process.exit(1);
+    }
+
+    const result = await finder.findBySessionId(options.sessionId, {
+      project: options.project,
+    });
+
+    if (!result) {
+      const projectInfo = options.project
+        ? ` in project "${options.project}"`
+        : '';
+      console.error(
+        chalk.red(
+          `No session found matching "${options.sessionId}"${projectInfo}`
+        )
+      );
+      process.exit(1);
+    }
+
+    // 判斷是否為 ClaudeSessionResult（有 main 和 subagent）
+    if ('main' in result && 'subagent' in result) {
+      const claudeResult = result as ClaudeSessionResult;
+      sessionFile = claudeResult.main;
+      subagentFile = claudeResult.subagent || null;
+      console.log(chalk.green(`Found main session: ${sessionFile.path}`));
+      if (subagentFile) {
+        console.log(chalk.green(`Found subagent: ${subagentFile.path}`));
+      }
+    } else {
+      sessionFile = result as SessionFile;
+      console.log(chalk.green(`Found: ${sessionFile.path}`));
+    }
+    console.log(chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
+  } else if (options.agentType === 'claude' && options.subagent !== undefined) {
+    // Claude subagent 模式（使用 --subagent 選項）
+    console.log(
+      chalk.gray(`Searching for latest ${options.agentType} subagent...`)
+    );
+
     const finder = agent.finder;
     if (finder.findSubagent) {
       const subagentId =
@@ -79,33 +129,58 @@ async function main(): Promise<void> {
         process.exit(1);
       }
     }
+    console.log(chalk.green(`Found: ${sessionFile?.path}`));
+    console.log(chalk.gray(`Modified: ${sessionFile?.mtime.toLocaleString()}`));
   } else {
+    // 預設模式：找最新的 session
+    console.log(
+      chalk.gray(`Searching for latest ${options.agentType} session...`)
+    );
+
     sessionFile = await agent.finder.findLatest({
       project: options.project,
     });
+
+    if (!sessionFile) {
+      console.error(
+        chalk.red(
+          `No session file found for ${options.agentType}${options.project ? ` (project: ${options.project})` : ''}`
+        )
+      );
+      process.exit(1);
+    }
+
+    console.log(chalk.green(`Found: ${sessionFile.path}`));
+    console.log(chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
   }
 
   if (!sessionFile) {
-    console.error(
-      chalk.red(
-        `No session file found for ${options.agentType}${options.project ? ` (project: ${options.project})` : ''}`
-      )
-    );
+    console.error(chalk.red('No session file found'));
     process.exit(1);
   }
 
-  console.log(chalk.green(`Found: ${sessionFile.path}`));
-  console.log(chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
-
-  // Claude 主 session 模式：支援 subagent 多檔案監控
-  // Claude subagent 模式：單檔案監控
+  // Claude 模式判斷：
+  // 1. sessionId 指定 subagent → 多檔案監控（main + 指定的 subagent）
+  // 2. Claude 主 session 模式 → 多檔案監控
+  // 3. --subagent 選項 → 單檔案監控
+  // 4. 其他 agent → 單檔案監控
   if (options.agentType === 'claude' && options.subagent === undefined) {
     if (options.interactive) {
       // Interactive 模式：使用 SessionManager 管理輸出切換
-      await startClaudeInteractiveWatch(sessionFile, formatter, options);
+      await startClaudeInteractiveWatch(
+        sessionFile,
+        formatter,
+        options,
+        subagentFile
+      );
     } else {
       // 普通模式：所有來源輸出到 console
-      await startClaudeMultiWatch(sessionFile, formatter, options);
+      await startClaudeMultiWatch(
+        sessionFile,
+        formatter,
+        options,
+        subagentFile
+      );
     }
   } else {
     // 其他 agent 或 Claude subagent 模式：單檔案監控
@@ -115,11 +190,13 @@ async function main(): Promise<void> {
 
 /**
  * Claude 多檔案監控（主 session + subagents）
+ * @param initialSubagent - 從 sessionId 參數指定的 subagent（可選）
  */
 async function startClaudeMultiWatch(
   sessionFile: SessionFile,
   formatter: Formatter,
-  options: CliOptions
+  options: CliOptions,
+  initialSubagent: SessionFile | null = null
 ): Promise<void> {
   const projectDir = dirname(sessionFile.path);
   const sessionId = basename(sessionFile.path, '.jsonl');
@@ -130,11 +207,21 @@ async function startClaudeMultiWatch(
 
   // 掃描現有的 subagent
   const existingAgentIds = await extractAgentIds(sessionFile.path);
+
+  // 如果有從 sessionId 指定的 subagent，確保它被加入
+  if (initialSubagent) {
+    const initialAgentId = basename(initialSubagent.path, '.jsonl').replace(
+      /^agent-/,
+      ''
+    );
+    existingAgentIds.add(initialAgentId);
+  }
+
   for (const agentId of existingAgentIds) {
     const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
     // 檢查檔案是否存在
-    const subagentFile = Bun.file(subagentPath);
-    if (await subagentFile.exists()) {
+    const subagentFileCheck = Bun.file(subagentPath);
+    if (await subagentFileCheck.exists()) {
       files.push({ path: subagentPath, label: `[${agentId}]` });
     }
   }
@@ -223,7 +310,8 @@ async function startClaudeMultiWatch(
 async function startClaudeInteractiveWatch(
   sessionFile: SessionFile,
   formatter: Formatter,
-  options: CliOptions
+  options: CliOptions,
+  initialSubagent: SessionFile | null = null
 ): Promise<void> {
   // TTY 檢查：非 TTY 環境自動降級到普通多檔案監控模式
   if (!process.stdin.isTTY) {
@@ -234,7 +322,12 @@ async function startClaudeInteractiveWatch(
           'Keyboard controls (Tab to switch) will not be available.'
       )
     );
-    await startClaudeMultiWatch(sessionFile, formatter, options);
+    await startClaudeMultiWatch(
+      sessionFile,
+      formatter,
+      options,
+      initialSubagent
+    );
     return;
   }
 
@@ -290,10 +383,20 @@ async function startClaudeInteractiveWatch(
 
   // 掃描現有的 subagent
   const existingAgentIds = await extractAgentIds(sessionFile.path);
+
+  // 如果有從 sessionId 指定的 subagent，確保它被加入
+  if (initialSubagent) {
+    const initialAgentId = basename(initialSubagent.path, '.jsonl').replace(
+      /^agent-/,
+      ''
+    );
+    existingAgentIds.add(initialAgentId);
+  }
+
   for (const agentId of existingAgentIds) {
     const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    const subagentFile = Bun.file(subagentPath);
-    if (await subagentFile.exists()) {
+    const subagentFileCheck = Bun.file(subagentPath);
+    if (await subagentFileCheck.exists()) {
       sessionManager.addSession(agentId, `[${agentId}]`, subagentPath);
     }
   }

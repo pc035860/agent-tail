@@ -63,6 +63,99 @@ class CodexSessionFinder implements SessionFinder {
       agentType: 'codex',
     };
   }
+
+  /**
+   * 依 session ID 查找 session 檔案
+   * 檔名格式：rollout-{timestamp}-{sessionId}.jsonl
+   * 支援匹配：session ID（ULID）、時間戳
+   */
+  async findBySessionId(
+    sessionId: string,
+    options: { project?: string }
+  ): Promise<SessionFile | null> {
+    const glob = new Glob('**/*.jsonl');
+    const candidates: { path: string; mtime: Date; priority: number }[] = [];
+
+    // UUID 格式的正規表達式（用於提取 session ID）
+    const ulidPattern =
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+      const filename = file.split('/').pop() || '';
+      if (!filename.startsWith('rollout-')) continue;
+
+      // project filter
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        if (!file.toLowerCase().includes(pattern)) continue;
+      }
+
+      // 從檔名提取 session ID（ULID 部分）
+      const ulidMatch = filename.match(ulidPattern);
+      const extractedSessionId = ulidMatch?.[1] || '';
+
+      // 提取時間戳部分（rollout- 和 session ID 之間的部分）
+      // rollout-2025-11-03T20-42-15-019a49bd-...
+      const withoutPrefix = filename.replace(/^rollout-/, '');
+      const timestampPart = extractedSessionId
+        ? withoutPrefix.replace(`-${extractedSessionId}.jsonl`, '')
+        : '';
+
+      // 計算匹配優先級
+      let priority = 0;
+      const searchTerm = sessionId.toLowerCase();
+
+      // 1. 對 session ID 進行匹配
+      if (extractedSessionId) {
+        const normalizedId = extractedSessionId.toLowerCase();
+        if (normalizedId === searchTerm) {
+          priority = 6; // 精確匹配 session ID
+        } else if (normalizedId.startsWith(searchTerm)) {
+          priority = 5; // 前綴匹配 session ID
+        } else if (normalizedId.includes(searchTerm)) {
+          priority = 4; // 包含匹配 session ID
+        }
+      }
+
+      // 2. 對時間戳進行匹配（如果 session ID 沒有匹配到）
+      if (priority === 0 && timestampPart) {
+        const normalizedTimestamp = timestampPart.toLowerCase();
+        if (normalizedTimestamp === searchTerm) {
+          priority = 3; // 精確匹配時間戳
+        } else if (normalizedTimestamp.startsWith(searchTerm)) {
+          priority = 2; // 前綴匹配時間戳
+        } else if (normalizedTimestamp.includes(searchTerm)) {
+          priority = 1; // 包含匹配時間戳
+        }
+      }
+
+      if (priority === 0) continue;
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime, priority });
+      } catch {
+        // 忽略無法讀取的檔案
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // 排序：優先級降序 > mtime 降序
+    candidates.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return b.mtime.getTime() - a.mtime.getTime();
+    });
+
+    const best = candidates[0];
+    if (!best) return null;
+
+    return {
+      path: best.path,
+      mtime: best.mtime,
+      agentType: 'codex',
+    };
+  }
 }
 
 /**

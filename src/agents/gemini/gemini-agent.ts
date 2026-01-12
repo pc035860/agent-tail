@@ -59,6 +59,129 @@ class GeminiSessionFinder implements SessionFinder {
       agentType: 'gemini',
     };
   }
+
+  /**
+   * 依 session ID 查找 session 檔案
+   * 檔名格式：session-{timestamp}-{8位UUID}.json
+   * 支援匹配：8位 UUID 前綴、完整 UUID（需讀取 JSON）、時間戳
+   */
+  async findBySessionId(
+    sessionId: string,
+    options: { project?: string }
+  ): Promise<SessionFile | null> {
+    const glob = new Glob('*/chats/session-*.json');
+    const candidates: { path: string; mtime: Date; priority: number }[] = [];
+    // 用於完整 UUID 匹配的候選（需要讀取 JSON）
+    const uuidCandidates: { path: string; mtime: Date }[] = [];
+
+    // 檔名格式：session-{timestamp}-{8位UUID}.json
+    // 例如：session-2025-12-28T10-10-3f3fa388.json
+    const filenamePattern = /^session-(.+)-([0-9a-f]{8})\.json$/i;
+    // 完整 UUID 格式
+    const fullUuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    const searchTerm = sessionId.toLowerCase();
+    const isFullUuid = fullUuidPattern.test(sessionId);
+
+    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+      // project filter
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        if (!file.toLowerCase().includes(pattern)) continue;
+      }
+
+      const filename = file.split('/').pop() || '';
+      const match = filename.match(filenamePattern);
+
+      if (!match) continue;
+
+      const timestampPart = match[1] || '';
+      const shortUuid = (match[2] || '').toLowerCase();
+
+      // 計算匹配優先級
+      let priority = 0;
+
+      // 1. 對 8 位 UUID 前綴進行匹配
+      if (shortUuid === searchTerm) {
+        priority = 6; // 精確匹配
+      } else if (shortUuid.startsWith(searchTerm)) {
+        priority = 5; // 前綴匹配
+      } else if (shortUuid.includes(searchTerm)) {
+        priority = 4; // 包含匹配
+      }
+
+      // 2. 對時間戳進行匹配（如果 UUID 沒有匹配到）
+      if (priority === 0 && timestampPart) {
+        const normalizedTimestamp = timestampPart.toLowerCase();
+        if (normalizedTimestamp === searchTerm) {
+          priority = 3; // 精確匹配時間戳
+        } else if (normalizedTimestamp.startsWith(searchTerm)) {
+          priority = 2; // 前綴匹配時間戳
+        } else if (normalizedTimestamp.includes(searchTerm)) {
+          priority = 1; // 包含匹配時間戳
+        }
+      }
+
+      // 如果是完整 UUID 且沒有匹配到檔名，加入候選列表等待讀取 JSON
+      if (priority === 0 && isFullUuid) {
+        try {
+          const stats = await stat(file);
+          uuidCandidates.push({ path: file, mtime: stats.mtime });
+        } catch {
+          // 忽略
+        }
+        continue;
+      }
+
+      if (priority === 0) continue;
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime, priority });
+      } catch {
+        // 忽略無法讀取的檔案
+      }
+    }
+
+    // 如果有檔名匹配的候選，直接使用
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        return b.mtime.getTime() - a.mtime.getTime();
+      });
+
+      const best = candidates[0];
+      if (!best) return null;
+
+      return {
+        path: best.path,
+        mtime: best.mtime,
+        agentType: 'gemini',
+      };
+    }
+
+    // 如果是完整 UUID 且沒有檔名匹配，嘗試讀取 JSON 內容
+    if (isFullUuid && uuidCandidates.length > 0) {
+      for (const candidate of uuidCandidates) {
+        try {
+          const content = await Bun.file(candidate.path).text();
+          const data = JSON.parse(content);
+          if (data.sessionId && data.sessionId.toLowerCase() === searchTerm) {
+            return {
+              path: candidate.path,
+              mtime: candidate.mtime,
+              agentType: 'gemini',
+            };
+          }
+        } catch {
+          // 忽略解析錯誤
+        }
+      }
+    }
+
+    return null;
+  }
 }
 
 /**
