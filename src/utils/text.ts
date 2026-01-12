@@ -1,3 +1,5 @@
+import chalk from 'chalk';
+
 export interface TruncateOptions {
   /** 是否啟用 verbose 模式（不截斷） */
   verbose?: boolean;
@@ -9,7 +11,7 @@ export interface TruncateOptions {
 
 /**
  * 截斷文字，保留前後段落（字元計算）
- * 格式: "前100字...後100字"
+ * 格式: "前100字\n\n... (truncated) ...\n\n後100字"
  */
 export function truncate(text: string, options: TruncateOptions = {}): string {
   const { verbose = false, headLength = 100, tailLength = 100 } = options;
@@ -22,7 +24,10 @@ export function truncate(text: string, options: TruncateOptions = {}): string {
 
   const head = text.slice(0, headLength);
   const tail = text.slice(-tailLength);
-  return `${head}...${tail}`;
+  const omitted = text.length - headLength - tailLength;
+  const truncateMsg = chalk.yellow(`... (${omitted} chars omitted) ...`);
+
+  return `${head}\n\n${truncateMsg}\n\n${tail}`;
 }
 
 export interface TruncateByLinesOptions {
@@ -36,7 +41,7 @@ export interface TruncateByLinesOptions {
 
 /**
  * 截斷文字，保留前後行數（行數計算）
- * 格式: "前10行\n... (N lines omitted) ...\n後10行"
+ * 格式: "前10行\n\n... (N lines omitted) ...\n\n後10行"
  */
 export function truncateByLines(
   text: string,
@@ -54,8 +59,9 @@ export function truncateByLines(
   const head = lines.slice(0, headLines);
   const tail = lines.slice(-tailLines);
   const omitted = lines.length - headLines - tailLines;
+  const truncateMsg = chalk.yellow(`... (${omitted} lines omitted) ...`);
 
-  return [...head, `... (${omitted} lines omitted) ...`, ...tail].join('\n');
+  return [...head, '', truncateMsg, '', ...tail].join('\n');
 }
 
 /**

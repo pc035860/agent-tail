@@ -26,7 +26,14 @@ describe('truncate', () => {
     const text = 'a'.repeat(100);
     const result = truncate(text, { headLength: 10, tailLength: 10 });
 
-    expect(result).toBe('a'.repeat(10) + '...' + 'a'.repeat(10));
+    // 新格式包含換行和顏色: "aaaaaaaaaa\n\n... (80 chars omitted) ...\n\naaaaaaaaaa"
+    const lines = result.split('\n');
+    // 第一行是前段
+    expect(lines[0]).toBe('a'.repeat(10));
+    // 第三行（過了空行）包含省略訊息
+    expect(result).toContain('(80 chars omitted)');
+    // 最後一行是後段
+    expect(lines[lines.length - 1]).toBe('a'.repeat(10));
   });
 
   test('does not truncate in verbose mode', () => {
