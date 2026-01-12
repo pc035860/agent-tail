@@ -206,51 +206,57 @@ async function startClaudeMultiWatch(
   // 建立監控檔案列表（主 session）
   const files: WatchedFile[] = [{ path: sessionFile.path, label: '[MAIN]' }];
 
-  // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
-  const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
-  const existingAgentIds = new Set(dirAgentIds);
-
-  // 如果有從 sessionId 指定的 subagent，確保它被加入
-  if (initialSubagent) {
-    const initialAgentId = basename(initialSubagent.path, '.jsonl').replace(
-      /^agent-/,
-      ''
-    );
-    existingAgentIds.add(initialAgentId);
-  }
-
-  // 取得現有 subagents 並按檔案建立時間排序（舊到新）
-  const existingSubagentFiles: Array<{
-    agentId: string;
-    path: string;
-    birthtime: Date;
-  }> = [];
-
-  for (const agentId of existingAgentIds) {
-    const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    const subagentFile = Bun.file(subagentPath);
-    if (await subagentFile.exists()) {
-      const stats = await stat(subagentPath);
-      existingSubagentFiles.push({
-        agentId,
-        path: subagentPath,
-        birthtime: stats.birthtime,
-      });
+  // 只有在 withSubagents 為 true 時才掃描 subagent
+  const existingAgentIds = new Set<string>();
+  if (options.withSubagents) {
+    // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
+    const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
+    for (const id of dirAgentIds) {
+      existingAgentIds.add(id);
     }
-  }
 
-  // 按建立時間升序排序（最舊的先加入，輸出順序會是舊到新）
-  existingSubagentFiles.sort(
-    (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
-  );
+    // 如果有從 sessionId 指定的 subagent，確保它被加入
+    if (initialSubagent) {
+      const initialAgentId = basename(initialSubagent.path, '.jsonl').replace(
+        /^agent-/,
+        ''
+      );
+      existingAgentIds.add(initialAgentId);
+    }
 
-  // 依排序後的順序加入
-  for (const { agentId, path } of existingSubagentFiles) {
-    files.push({ path, label: `[${agentId}]` });
-  }
+    // 取得現有 subagents 並按檔案建立時間排序（舊到新）
+    const existingSubagentFiles: Array<{
+      agentId: string;
+      path: string;
+      birthtime: Date;
+    }> = [];
 
-  if (existingAgentIds.size > 0) {
-    console.log(chalk.gray(`Found ${existingAgentIds.size} subagent(s)`));
+    for (const agentId of existingAgentIds) {
+      const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
+      const subagentFile = Bun.file(subagentPath);
+      if (await subagentFile.exists()) {
+        const stats = await stat(subagentPath);
+        existingSubagentFiles.push({
+          agentId,
+          path: subagentPath,
+          birthtime: stats.birthtime,
+        });
+      }
+    }
+
+    // 按建立時間升序排序（最舊的先加入，輸出順序會是舊到新）
+    existingSubagentFiles.sort(
+      (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+    );
+
+    // 依排序後的順序加入
+    for (const { agentId, path } of existingSubagentFiles) {
+      files.push({ path, label: `[${agentId}]` });
+    }
+
+    if (existingAgentIds.size > 0) {
+      console.log(chalk.gray(`Found ${existingAgentIds.size} subagent(s)`));
+    }
   }
   console.log(chalk.gray('---'));
 
@@ -261,6 +267,12 @@ async function startClaudeMultiWatch(
     parsers.set(file.label, parserAgent.parser);
   }
 
+  // 非 follow 模式且有 subagent：收集所有行後按時間排序輸出
+  if (!options.follow && options.withSubagents && files.length > 1) {
+    await outputTimeSorted(files, parsers, formatter, options);
+    process.exit(0);
+  }
+
   const multiWatcher = new MultiFileWatcher();
 
   // 建立 SubagentDetector（整合 early detection 和 fallback detection）
@@ -269,7 +281,7 @@ async function startClaudeMultiWatch(
     output: new ConsoleOutputHandler(),
     watcher: { addFile: (f) => multiWatcher.addFile(f) },
     session: new NoOpSessionHandler(),
-    enabled: options.follow,
+    enabled: options.follow && options.withSubagents,
   });
 
   // 處理中斷信號
@@ -336,6 +348,57 @@ async function startClaudeMultiWatch(
 
   // 保持程式運行
   console.log(chalk.gray('Watching for changes... (Ctrl+C to stop)'));
+}
+
+/**
+ * 時間排序輸出（用於 --no-follow --with-subagents 模式）
+ * 收集所有檔案的行，按時間戳排序後輸出
+ */
+async function outputTimeSorted(
+  files: WatchedFile[],
+  parsers: Map<string, LineParser>,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // 收集所有已解析的行
+  const allParsedLines: Array<{
+    parsed: import('./core/types.ts').ParsedLine;
+    timestamp: Date;
+  }> = [];
+
+  for (const file of files) {
+    const parser = parsers.get(file.label);
+    if (!parser) continue;
+
+    // 讀取檔案內容
+    const bunFile = Bun.file(file.path);
+    if (!(await bunFile.exists())) continue;
+
+    const content = await bunFile.text();
+    const lines = content.split('\n').filter((line) => line.trim());
+
+    for (const line of lines) {
+      // 為每行建立新的 parser 實例避免狀態衝突
+      const parserAgent = new ClaudeAgent({ verbose: options.verbose });
+      let parsed = parserAgent.parser.parse(line);
+      while (parsed) {
+        parsed.sourceLabel = file.label;
+        allParsedLines.push({
+          parsed,
+          timestamp: new Date(parsed.timestamp),
+        });
+        parsed = parserAgent.parser.parse(line);
+      }
+    }
+  }
+
+  // 按時間戳排序（舊到新）
+  allParsedLines.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  // 依序輸出
+  for (const { parsed } of allParsedLines) {
+    console.log(formatter.format(parsed));
+  }
 }
 
 /**

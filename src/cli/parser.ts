@@ -27,6 +27,11 @@ program
     '-i, --interactive',
     'Claude only: interactive mode for switching between sessions (Tab to switch)',
     false
+  )
+  .option(
+    '--with-subagents',
+    'Claude only: include subagent content in output (default: false)',
+    false
   );
 
 /**
@@ -83,6 +88,14 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // withSubagents 選項僅對 claude 有效
+  if (opts.withSubagents && agentTypeArg !== 'claude') {
+    console.error(
+      'Error: --with-subagents option is only available for "claude" agent type.'
+    );
+    process.exit(1);
+  }
+
   return {
     agentType: agentTypeArg as AgentType,
     raw: opts.raw,
@@ -91,6 +104,7 @@ export function parseArgs(args: string[]): CliOptions {
     verbose: opts.verbose,
     subagent: opts.subagent,
     interactive: opts.interactive,
+    withSubagents: opts.withSubagents,
     sessionId: sessionIdArg,
   };
 }

@@ -16,6 +16,8 @@ export interface CliOptions {
   subagent?: string | true;
   /** Claude only: interactive mode for switching between main session and subagents */
   interactive: boolean;
+  /** Claude only: include subagent content in output (non-interactive mode) */
+  withSubagents: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
 }
