@@ -16,6 +16,8 @@ export interface CliOptions {
   subagent?: string | true;
   /** Claude only: interactive mode for switching between main session and subagents */
   interactive: boolean;
+  /** Optional session ID to load (partial match supported) */
+  sessionId?: string;
 }
 
 /**
@@ -32,6 +34,15 @@ export interface SessionFile {
   path: string;
   mtime: Date;
   agentType: AgentType;
+}
+
+/**
+ * Claude Session 查找結果（支援 subagent 關聯）
+ * 當指定 subagent ID 時，會同時返回主 session 和 subagent
+ */
+export interface ClaudeSessionResult {
+  main: SessionFile;
+  subagent?: SessionFile;
 }
 
 /**

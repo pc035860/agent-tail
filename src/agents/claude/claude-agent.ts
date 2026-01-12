@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type {
+  ClaudeSessionResult,
   ParsedLine,
   ParserOptions,
   SessionFile,
@@ -124,6 +125,227 @@ class ClaudeSessionFinder implements SessionFinder {
     return {
       path: latest.path,
       mtime: latest.mtime,
+      agentType: 'claude',
+    };
+  }
+
+  /**
+   * 依 session ID 查找 session 檔案
+   * 支援主 session（UUID）和 subagent（7位hex）
+   * 當指定 subagent ID 時，會同時返回主 session 和 subagent
+   */
+  async findBySessionId(
+    sessionId: string,
+    options: { project?: string }
+  ): Promise<SessionFile | ClaudeSessionResult | null> {
+    const idType = this.detectIdType(sessionId);
+
+    // 如果是主 session UUID 或未知類型，先嘗試找主 session
+    if (idType === 'main' || idType === 'unknown') {
+      const mainResult = await this.findMainBySessionId(sessionId, options);
+      if (mainResult) return mainResult;
+    }
+
+    // 如果是 subagent ID 或未知類型（且主 session 沒找到），嘗試找 subagent
+    if (idType === 'subagent' || idType === 'unknown') {
+      const subagentResult = await this.findSubagentBySessionId(
+        sessionId,
+        options
+      );
+      if (subagentResult) {
+        // 反推主 session
+        const mainPath = this.getMainSessionFromSubagent(subagentResult.path);
+        if (mainPath) {
+          try {
+            const mainStats = await stat(mainPath);
+            return {
+              main: {
+                path: mainPath,
+                mtime: mainStats.mtime,
+                agentType: 'claude',
+              },
+              subagent: subagentResult,
+            };
+          } catch {
+            // 主 session 不存在，只返回 subagent
+            return subagentResult;
+          }
+        }
+        return subagentResult;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * 判斷 ID 類型
+   */
+  private detectIdType(id: string): 'main' | 'subagent' | 'unknown' {
+    // 完整 UUID 格式
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    // Subagent 格式：agent-{7hex} 或純 {7hex}
+    const subagentPattern = /^(agent-)?[0-9a-f]{7}$/i;
+
+    if (uuidPattern.test(id)) return 'main';
+    if (subagentPattern.test(id)) return 'subagent';
+
+    // 如果是 UUID 前綴（8位以上但不完整），視為主 session
+    if (/^[0-9a-f]{8,35}$/i.test(id)) return 'main';
+
+    return 'unknown';
+  }
+
+  /**
+   * 從 subagent 路徑反推主 session 路徑
+   * 路徑結構: {projectDir}/{sessionUUID}/subagents/agent-xxx.jsonl
+   */
+  private getMainSessionFromSubagent(subagentPath: string): string | null {
+    const parts = subagentPath.split('/');
+    const subagentsIdx = parts.lastIndexOf('subagents');
+
+    if (subagentsIdx === -1 || subagentsIdx < 2) return null;
+
+    const sessionUUID = parts[subagentsIdx - 1];
+    const projectDir = parts.slice(0, subagentsIdx - 1).join('/');
+
+    // 主 session 在 projectDir 下，檔名為 sessionUUID.jsonl
+    return join(projectDir, `${sessionUUID}.jsonl`);
+  }
+
+  /**
+   * 依 session ID 查找主 session
+   */
+  private async findMainBySessionId(
+    sessionId: string,
+    options: { project?: string }
+  ): Promise<SessionFile | null> {
+    const glob = new Glob('**/*.jsonl');
+    const candidates: { path: string; mtime: Date; priority: number }[] = [];
+
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+    const searchTerm = sessionId.toLowerCase();
+
+    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+      const filename = file.split('/').pop() || '';
+
+      // 排除 subagent 檔案
+      if (filename.startsWith('agent-')) continue;
+
+      // 只匹配 UUID 格式的檔案名
+      if (!uuidPattern.test(filename)) continue;
+
+      // project filter
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        if (!file.toLowerCase().includes(pattern)) continue;
+      }
+
+      const baseName = filename.replace(/\.jsonl$/, '').toLowerCase();
+
+      // 計算匹配優先級
+      let priority = 0;
+      if (baseName === searchTerm) {
+        priority = 3; // 精確匹配
+      } else if (baseName.startsWith(searchTerm)) {
+        priority = 2; // 前綴匹配
+      } else if (baseName.includes(searchTerm)) {
+        priority = 1; // 包含匹配
+      }
+
+      if (priority === 0) continue;
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime, priority });
+      } catch {
+        // 忽略
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // 排序：優先級降序 > mtime 降序
+    candidates.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return b.mtime.getTime() - a.mtime.getTime();
+    });
+
+    const best = candidates[0];
+    if (!best) return null;
+
+    return {
+      path: best.path,
+      mtime: best.mtime,
+      agentType: 'claude',
+    };
+  }
+
+  /**
+   * 依 session ID 查找 subagent
+   */
+  private async findSubagentBySessionId(
+    sessionId: string,
+    options: { project?: string }
+  ): Promise<SessionFile | null> {
+    // 正規化：移除 agent- 前綴
+    const normalizedId = sessionId.replace(/^agent-/i, '').toLowerCase();
+
+    const glob = new Glob('**/*/subagents/agent-*.jsonl');
+    const candidates: { path: string; mtime: Date; priority: number }[] = [];
+
+    const subagentPattern = /^agent-([0-9a-f]{7})\.jsonl$/i;
+
+    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+      const filename = file.split('/').pop() || '';
+      const match = filename.match(subagentPattern);
+
+      if (!match) continue;
+
+      const subagentId = (match[1] || '').toLowerCase();
+
+      // project filter
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        if (!file.toLowerCase().includes(pattern)) continue;
+      }
+
+      // 計算匹配優先級
+      let priority = 0;
+      if (subagentId === normalizedId) {
+        priority = 3; // 精確匹配
+      } else if (subagentId.startsWith(normalizedId)) {
+        priority = 2; // 前綴匹配
+      } else if (subagentId.includes(normalizedId)) {
+        priority = 1; // 包含匹配
+      }
+
+      if (priority === 0) continue;
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime, priority });
+      } catch {
+        // 忽略
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // 排序：優先級降序 > mtime 降序
+    candidates.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return b.mtime.getTime() - a.mtime.getTime();
+    });
+
+    const best = candidates[0];
+    if (!best) return null;
+
+    return {
+      path: best.path,
+      mtime: best.mtime,
       agentType: 'claude',
     };
   }

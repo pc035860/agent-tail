@@ -1,4 +1,9 @@
-import type { AgentType, ParsedLine, SessionFile } from '../core/types.ts';
+import type {
+  AgentType,
+  ClaudeSessionResult,
+  ParsedLine,
+  SessionFile,
+} from '../core/types.ts';
 
 /**
  * Session 檔案發現器介面
@@ -22,6 +27,19 @@ export interface SessionFinder {
     project?: string;
     subagentId?: string;
   }): Promise<SessionFile | null>;
+
+  /**
+   * 依 session ID 查找 session 檔案（可選實作）
+   * 支援 partial match：精確 > 前綴 > 包含
+   * 多重匹配時選擇 mtime 最新的
+   * @param sessionId - 使用者提供的 session ID（可為簡化格式或部分 ID）
+   * @param options.project - 專案過濾
+   * @returns SessionFile（一般情況）或 ClaudeSessionResult（Claude subagent 情況）
+   */
+  findBySessionId?(
+    sessionId: string,
+    options: { project?: string }
+  ): Promise<SessionFile | ClaudeSessionResult | null>;
 }
 
 /**
