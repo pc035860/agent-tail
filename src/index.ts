@@ -281,10 +281,21 @@ async function startClaudeMultiWatch(
         }
 
         // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
+        // 注意：只處理 Task subagent，過濾掉 forked slash command（有 commandName 或 status === 'forked'）
         if (label === '[MAIN]') {
-          const raw = parsed.raw as { toolUseResult?: { agentId?: string } };
+          const raw = parsed.raw as {
+            toolUseResult?: {
+              agentId?: string;
+              commandName?: string;
+              status?: string;
+            };
+          };
           const agentId = raw?.toolUseResult?.agentId;
-          if (agentId) {
+          const commandName = raw?.toolUseResult?.commandName;
+          const status = raw?.toolUseResult?.status;
+
+          // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
+          if (agentId && !commandName && status !== 'forked') {
             detector.handleFallbackDetection(agentId);
           }
         }
@@ -543,10 +554,21 @@ async function startClaudeInteractiveWatch(
         }
 
         // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
+        // 注意：只處理 Task subagent，過濾掉 forked slash command（有 commandName 或 status === 'forked'）
         if (label === '[MAIN]') {
-          const raw = parsed.raw as { toolUseResult?: { agentId?: string } };
+          const raw = parsed.raw as {
+            toolUseResult?: {
+              agentId?: string;
+              commandName?: string;
+              status?: string;
+            };
+          };
           const agentId = raw?.toolUseResult?.agentId;
-          if (agentId) {
+          const commandName = raw?.toolUseResult?.commandName;
+          const status = raw?.toolUseResult?.status;
+
+          // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
+          if (agentId && !commandName && status !== 'forked') {
             detector.handleFallbackDetection(agentId);
           }
         }
