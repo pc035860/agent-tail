@@ -23,7 +23,7 @@ import type {
 } from './core/types.ts';
 import {
   SubagentDetector,
-  extractAgentIds,
+  scanForNewSubagents,
 } from './claude/subagent-detector.ts';
 import {
   ConsoleOutputHandler,
@@ -206,8 +206,9 @@ async function startClaudeMultiWatch(
   // 建立監控檔案列表（主 session）
   const files: WatchedFile[] = [{ path: sessionFile.path, label: '[MAIN]' }];
 
-  // 掃描現有的 subagent
-  const existingAgentIds = await extractAgentIds(sessionFile.path);
+  // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
+  const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
+  const existingAgentIds = new Set(dirAgentIds);
 
   // 如果有從 sessionId 指定的 subagent，確保它被加入
   if (initialSubagent) {
@@ -382,8 +383,9 @@ async function startClaudeInteractiveWatch(
   // 新增主 session
   sessionManager.addSession('main', '[MAIN]', sessionFile.path);
 
-  // 掃描現有的 subagent
-  const existingAgentIds = await extractAgentIds(sessionFile.path);
+  // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
+  const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
+  const existingAgentIds = new Set(dirAgentIds);
 
   // 如果有從 sessionId 指定的 subagent，確保它被加入
   if (initialSubagent) {
