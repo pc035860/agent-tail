@@ -219,13 +219,34 @@ async function startClaudeMultiWatch(
     existingAgentIds.add(initialAgentId);
   }
 
+  // 取得現有 subagents 並按檔案建立時間排序（舊到新）
+  const existingSubagentFiles: Array<{
+    agentId: string;
+    path: string;
+    birthtime: Date;
+  }> = [];
+
   for (const agentId of existingAgentIds) {
     const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    // 檢查檔案是否存在
-    const subagentFileCheck = Bun.file(subagentPath);
-    if (await subagentFileCheck.exists()) {
-      files.push({ path: subagentPath, label: `[${agentId}]` });
+    const subagentFile = Bun.file(subagentPath);
+    if (await subagentFile.exists()) {
+      const stats = await stat(subagentPath);
+      existingSubagentFiles.push({
+        agentId,
+        path: subagentPath,
+        birthtime: stats.birthtime,
+      });
     }
+  }
+
+  // 按建立時間升序排序（最舊的先加入，輸出順序會是舊到新）
+  existingSubagentFiles.sort(
+    (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+  );
+
+  // 依排序後的順序加入
+  for (const { agentId, path } of existingSubagentFiles) {
+    files.push({ path, label: `[${agentId}]` });
   }
 
   if (existingAgentIds.size > 0) {
