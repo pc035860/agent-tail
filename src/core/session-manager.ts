@@ -9,6 +9,7 @@ export interface WatcherSession {
   path: string; // 檔案路徑
   buffer: string[]; // 輸出緩衝
   isDone: boolean; // 是否已結束
+  createdAt: number; // 建立時間戳記（毫秒）
 }
 
 /**
@@ -47,6 +48,8 @@ export class SessionManager {
 
   /**
    * 新增 session
+   * - main session 永遠在 index 0
+   * - 其他 session 插入到 index 1（新的在左邊）
    */
   addSession(id: string, label: string, path: string): WatcherSession {
     // 檢查是否已存在
@@ -61,9 +64,20 @@ export class SessionManager {
       path,
       buffer: [],
       isDone: false,
+      createdAt: Date.now(),
     };
 
-    this.sessions.push(session);
+    // 排序邏輯：
+    // - main session 永遠在 index 0
+    // - 其他 session 插入到 index 1（新的在左邊）
+    if (id === 'main') {
+      this.sessions.unshift(session); // main 放在最前面
+    } else {
+      // 找到 main session 的位置，插入其後
+      const insertIndex = this.sessions[0]?.id === 'main' ? 1 : 0;
+      this.sessions.splice(insertIndex, 0, session);
+    }
+
     this.options.onSessionAdded?.(session);
 
     return session;

@@ -393,12 +393,31 @@ async function startClaudeInteractiveWatch(
     existingAgentIds.add(initialAgentId);
   }
 
+  // 取得現有 subagents 並按檔案修改時間排序（新到舊）
+  const existingSubagentFiles: Array<{
+    agentId: string;
+    path: string;
+    mtime: Date;
+  }> = [];
+
   for (const agentId of existingAgentIds) {
     const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    const subagentFileCheck = Bun.file(subagentPath);
-    if (await subagentFileCheck.exists()) {
-      sessionManager.addSession(agentId, `[${agentId}]`, subagentPath);
+    const subagentFile = Bun.file(subagentPath);
+    if (await subagentFile.exists()) {
+      existingSubagentFiles.push({
+        agentId,
+        path: subagentPath,
+        mtime: new Date(subagentFile.lastModified),
+      });
     }
+  }
+
+  // 按修改時間降序排序（最新的先加入，會排在最左邊）
+  existingSubagentFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+  // 依排序後的順序加入
+  for (const { agentId, path } of existingSubagentFiles) {
+    sessionManager.addSession(agentId, `[${agentId}]`, path);
   }
 
   // 顯示初始訊息
