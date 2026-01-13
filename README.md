@@ -33,6 +33,16 @@ cd agent-tail
 
 # Install dependencies
 bun install
+
+# (Optional) Link globally to use 'agent-tail' command anywhere
+bun link
+```
+
+After linking, you can use `agent-tail` directly instead of `bun start`:
+
+```bash
+agent-tail claude
+agent-tail codex -p myproject
 ```
 
 ### Usage
@@ -46,6 +56,9 @@ bun start codex
 
 # Watch Gemini CLI logs
 bun start gemini
+
+# Load a specific session by ID (partial match)
+bun start claude abc123
 ```
 
 That's it! You'll see a live stream of the AI's activity.
@@ -106,6 +119,43 @@ Don't follow new changes, just show what's already logged:
 bun start claude --no-follow
 ```
 
+## Claude Code Features
+
+Claude Code has additional features for monitoring subagents (background tasks spawned by the main session).
+
+### Watch Subagents
+
+```bash
+# Watch the latest subagent
+bun start claude -s
+
+# Watch a specific subagent by ID
+bun start claude -s abc123
+```
+
+### Interactive Mode
+
+Switch between main session and subagents in real-time:
+
+```bash
+# Start interactive mode
+bun start claude -i
+
+# Press Tab to cycle through sessions
+# Status line shows current session and available sessions
+```
+
+> **Note:** Interactive mode requires `--follow` (default) and cannot be used with `--subagent`.
+
+### Include Subagent Output
+
+Show both main session and subagent outputs together (sorted by time):
+
+```bash
+# Include all subagent content in output
+bun start claude --with-subagents
+```
+
 ## CLI Options
 
 | Option | Short | Description |
@@ -114,6 +164,15 @@ bun start claude --no-follow
 | `--project <name>` | `-p` | Filter sessions by project name (fuzzy match) |
 | `--verbose` | `-v` | Show full content without truncation |
 | `--no-follow` | | Don't watch for new changes, just show existing content |
+| `--subagent [id]` | `-s` | Claude only: tail subagent log (latest if no ID) |
+| `--interactive` | `-i` | Claude only: interactive mode with Tab to switch sessions |
+| `--with-subagents` | | Claude only: include subagent content in output |
+
+**Positional Arguments:**
+| Argument | Description |
+|----------|-------------|
+| `<agent-type>` | Required: `codex`, `claude`, or `gemini` |
+| `[session-id]` | Optional: load specific session by ID (partial match supported) |
 
 ## How It Works
 
