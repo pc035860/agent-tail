@@ -1,43 +1,53 @@
 import { Command } from 'commander';
 import type { AgentType, CliOptions } from '../core/types.ts';
 
-const program = new Command();
+function createProgram(): Command {
+  const program = new Command();
 
-program
-  .name('agent-tail')
-  .description(
-    'Tail agent session logs (Codex, Claude Code & Gemini CLI) in real-time'
-  )
-  .version('0.1.0')
-  .argument('<agent-type>', 'Agent type: codex, claude, or gemini')
-  .argument(
-    '[session-id]',
-    'Optional session ID to load (partial match supported)'
-  )
-  .option('--raw', 'Output raw JSONL instead of formatted output', false)
-  .option('-p, --project <pattern>', 'Filter by project name (fuzzy match)')
-  .option('-f, --follow', 'Follow file changes (default: true)', true)
-  .option('--no-follow', 'Do not follow, only output existing content')
-  .option('-v, --verbose', 'Show full content without truncation', false)
-  .option(
-    '-s, --subagent [id]',
-    'Claude only: tail subagent log (latest if no ID)'
-  )
-  .option(
-    '-i, --interactive',
-    'Claude only: interactive mode for switching between sessions (Tab to switch)',
-    false
-  )
-  .option(
-    '--with-subagents',
-    'Claude only: include subagent content in output (default: false)',
-    false
-  );
+  program
+    .name('agent-tail')
+    .description(
+      'Tail agent session logs (Codex, Claude Code & Gemini CLI) in real-time'
+    )
+    .version('0.1.0')
+    .argument('<agent-type>', 'Agent type: codex, claude, or gemini')
+    .argument(
+      '[session-id]',
+      'Optional session ID to load (partial match supported)'
+    )
+    .option('--raw', 'Output raw JSONL instead of formatted output', false)
+    .option('-p, --project <pattern>', 'Filter by project name (fuzzy match)')
+    .option('-f, --follow', 'Follow file changes (default: true)', true)
+    .option('--no-follow', 'Do not follow, only output existing content')
+    .option('-v, --verbose', 'Show full content without truncation', false)
+    .option(
+      '-s, --subagent [id]',
+      'Claude only: tail subagent log (latest if no ID)'
+    )
+    .option(
+      '-i, --interactive',
+      'Claude only: interactive mode for switching between sessions (Tab to switch)',
+      false
+    )
+    .option(
+      '--with-subagents',
+      'Claude only: include subagent content in output (default: false)',
+      false
+    )
+    .option(
+      '--super',
+      'Claude only: super follow latest session in project (interactive mode)',
+      false
+    );
+
+  return program;
+}
 
 /**
  * 解析 CLI 參數
  */
 export function parseArgs(args: string[]): CliOptions {
+  const program = createProgram();
   program.parse(args);
 
   const agentTypeArg = program.args[0];
@@ -96,6 +106,20 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // super 選項僅對 claude 有效
+  if (opts.super && agentTypeArg !== 'claude') {
+    console.error(
+      'Error: --super option is only available for "claude" agent type.'
+    );
+    process.exit(1);
+  }
+
+  // super 需要 interactive
+  if (opts.super && !opts.interactive) {
+    console.error('Error: --super requires --interactive.');
+    process.exit(1);
+  }
+
   return {
     agentType: agentTypeArg as AgentType,
     raw: opts.raw,
@@ -105,6 +129,7 @@ export function parseArgs(args: string[]): CliOptions {
     subagent: opts.subagent,
     interactive: opts.interactive,
     withSubagents: opts.withSubagents,
+    super: opts.super,
     sessionId: sessionIdArg,
   };
 }

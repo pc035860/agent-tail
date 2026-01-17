@@ -152,4 +152,50 @@ describe('parseArgs', () => {
     // unreliable after other tests have run. Default value behavior is implicitly
     // tested through the explicit option tests above.
   });
+
+  describe('super option', () => {
+    test('--super with --interactive sets super to true', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--interactive',
+        '--super',
+      ]);
+      expect(options.interactive).toBe(true);
+      expect(options.super).toBe(true);
+    });
+
+    test('--super without --interactive exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--super'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--super with non-claude agent exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'codex', '--interactive', '--super'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
 });

@@ -25,6 +25,7 @@ import {
   SubagentDetector,
   scanForNewSubagents,
 } from './claude/subagent-detector.ts';
+import { findLatestMainSessionInProject } from './claude/super-follow.ts';
 import {
   ConsoleOutputHandler,
   DisplayControllerOutputHandler,
@@ -428,9 +429,7 @@ async function startClaudeInteractiveWatch(
     return;
   }
 
-  const projectDir = dirname(sessionFile.path);
-  const sessionId = basename(sessionFile.path, '.jsonl');
-  const subagentsDir = join(projectDir, sessionId, 'subagents');
+  const lockedProjectDir = dirname(sessionFile.path);
 
   // 建立 DisplayController
   const displayController = new DisplayController({
@@ -438,123 +437,194 @@ async function startClaudeInteractiveWatch(
     historyLines: 50,
   });
 
-  // 建立 SessionManager
-  const sessionManager = new SessionManager({
-    bufferSize: 1000,
-    onOutput: (content: string, _session: WatcherSession) => {
-      // 使用 DisplayController 輸出（確保不覆蓋狀態列）
-      displayController.write(content);
-    },
-    onSessionAdded: (session: WatcherSession) => {
-      displayController.write(
-        chalk.yellow(`New session added: ${session.label}`)
-      );
-      // 更新狀態列
-      displayController.updateStatusLine(
-        sessionManager.getAllSessions(),
-        sessionManager.getActiveIndex()
-      );
-    },
-    onSessionSwitched: (
-      session: WatcherSession,
-      allSessions: WatcherSession[]
-    ) => {
-      // 取得切換前的緩衝內容
-      const historyContent = session.buffer.slice();
+  let sessionManager: SessionManager;
+  let parsers = new Map<string, LineParser>();
+  let multiWatcher: MultiFileWatcher | null = null;
+  let detector: SubagentDetector | null = null;
+  let currentSessionFile = sessionFile;
 
-      // 更新狀態列
-      displayController.updateStatusLine(
-        allSessions,
-        sessionManager.getActiveIndex()
-      );
+  const createSessionManager = (): SessionManager => {
+    const manager = new SessionManager({
+      bufferSize: 1000,
+      onOutput: (content: string, _session: WatcherSession) => {
+        // 使用 DisplayController 輸出（確保不覆蓋狀態列）
+        displayController.write(content);
+      },
+      onSessionAdded: (session: WatcherSession) => {
+        displayController.write(
+          chalk.yellow(`New session added: ${session.label}`)
+        );
+        // 更新狀態列
+        displayController.updateStatusLine(
+          manager.getAllSessions(),
+          manager.getActiveIndex()
+        );
+      },
+      onSessionSwitched: (
+        session: WatcherSession,
+        allSessions: WatcherSession[]
+      ) => {
+        // 取得切換前的緩衝內容
+        const historyContent = session.buffer.slice();
 
-      // 顯示切換訊息和歷史內容
-      displayController.showSwitchMessage(session, historyContent);
+        // 更新狀態列
+        displayController.updateStatusLine(
+          allSessions,
+          manager.getActiveIndex()
+        );
 
-      // 不清空 buffer，保留完整歷史供回看
-    },
-  });
+        // 顯示切換訊息和歷史內容
+        displayController.showSwitchMessage(session, historyContent);
 
-  // 新增主 session
-  sessionManager.addSession('main', '[MAIN]', sessionFile.path);
+        // 不清空 buffer，保留完整歷史供回看
+      },
+    });
 
-  // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
-  const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
-  const existingAgentIds = new Set(dirAgentIds);
+    return manager;
+  };
 
-  // 如果有從 sessionId 指定的 subagent，確保它被加入
-  if (initialSubagent) {
-    const initialAgentId = basename(initialSubagent.path, '.jsonl').replace(
-      /^agent-/,
-      ''
-    );
-    existingAgentIds.add(initialAgentId);
-  }
+  const buildInteractiveState = async (
+    targetSessionFile: SessionFile,
+    initialSubagentFile: SessionFile | null,
+    showIntro: boolean
+  ): Promise<void> => {
+    const projectDir = dirname(targetSessionFile.path);
+    const sessionId = basename(targetSessionFile.path, '.jsonl');
+    const subagentsDir = join(projectDir, sessionId, 'subagents');
 
-  // 取得現有 subagents 並按檔案建立時間排序（舊到新）
-  const existingSubagentFiles: Array<{
-    agentId: string;
-    path: string;
-    birthtime: Date;
-  }> = [];
+    sessionManager = createSessionManager();
+    sessionManager.addSession('main', '[MAIN]', targetSessionFile.path);
 
-  for (const agentId of existingAgentIds) {
-    const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    const subagentFile = Bun.file(subagentPath);
-    if (await subagentFile.exists()) {
-      const stats = await stat(subagentPath);
-      existingSubagentFiles.push({
-        agentId,
-        path: subagentPath,
-        birthtime: stats.birthtime,
-      });
+    // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
+    const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
+    const existingAgentIds = new Set(dirAgentIds);
+
+    // 如果有從 sessionId 指定的 subagent，確保它被加入
+    if (initialSubagentFile) {
+      const initialAgentId = basename(
+        initialSubagentFile.path,
+        '.jsonl'
+      ).replace(/^agent-/, '');
+      existingAgentIds.add(initialAgentId);
     }
-  }
 
-  // 按建立時間升序排序（最舊的先加入，會被推到右邊；最新的最後加入，留在 MAIN 旁邊）
-  existingSubagentFiles.sort(
-    (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
-  );
+    // 取得現有 subagents 並按檔案建立時間排序（舊到新）
+    const existingSubagentFiles: Array<{
+      agentId: string;
+      path: string;
+      birthtime: Date;
+    }> = [];
 
-  // 依排序後的順序加入
-  for (const { agentId, path } of existingSubagentFiles) {
-    sessionManager.addSession(agentId, `[${agentId}]`, path);
-  }
+    for (const agentId of existingAgentIds) {
+      const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
+      const subagentFile = Bun.file(subagentPath);
+      if (await subagentFile.exists()) {
+        const stats = await stat(subagentPath);
+        existingSubagentFiles.push({
+          agentId,
+          path: subagentPath,
+          birthtime: stats.birthtime,
+        });
+      }
+    }
 
-  // 顯示初始訊息
-  if (existingAgentIds.size > 0) {
-    console.log(chalk.gray(`Found ${existingAgentIds.size} subagent(s)`));
-  }
-  console.log(chalk.gray('Interactive mode: Press Tab to switch, q to quit'));
-  console.log(chalk.gray('---'));
+    // 按建立時間升序排序（最舊的先加入，會被推到右邊；最新的最後加入，留在 MAIN 旁邊）
+    existingSubagentFiles.sort(
+      (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+    );
 
-  // 初始化 DisplayController
-  displayController.init();
+    // 依排序後的順序加入
+    for (const { agentId, path } of existingSubagentFiles) {
+      sessionManager.addSession(agentId, `[${agentId}]`, path);
+    }
 
-  // 顯示初始狀態列
-  displayController.updateStatusLine(
-    sessionManager.getAllSessions(),
-    sessionManager.getActiveIndex()
-  );
+    if (showIntro) {
+      if (existingAgentIds.size > 0) {
+        console.log(chalk.gray(`Found ${existingAgentIds.size} subagent(s)`));
+      }
+      console.log(
+        chalk.gray('Interactive mode: Press Tab to switch, q to quit')
+      );
+      console.log(chalk.gray('---'));
+    }
 
-  // 為每個來源建立獨立的 parser
-  const parsers = new Map<string, LineParser>();
-  for (const session of sessionManager.getAllSessions()) {
-    const parserAgent = new ClaudeAgent({ verbose: options.verbose });
-    parsers.set(session.label, parserAgent.parser);
-  }
+    // 為每個來源建立獨立的 parser
+    parsers = new Map<string, LineParser>();
+    for (const session of sessionManager.getAllSessions()) {
+      const parserAgent = new ClaudeAgent({ verbose: options.verbose });
+      parsers.set(session.label, parserAgent.parser);
+    }
 
-  // 建立 MultiFileWatcher
-  const multiWatcher = new MultiFileWatcher();
+    const watcher = new MultiFileWatcher();
+    multiWatcher = watcher;
 
-  // 建立 SubagentDetector（整合 early detection 和 fallback detection）
-  const detector = new SubagentDetector(existingAgentIds, {
-    subagentsDir,
-    output: new DisplayControllerOutputHandler(displayController),
-    watcher: { addFile: (f) => multiWatcher.addFile(f) },
-    session: new InteractiveSessionHandler(sessionManager, displayController),
-    enabled: true, // Interactive 模式一定是 follow
-  });
+    detector = new SubagentDetector(existingAgentIds, {
+      subagentsDir,
+      output: new DisplayControllerOutputHandler(displayController),
+      watcher: { addFile: (f) => watcher.addFile(f) },
+      session: new InteractiveSessionHandler(sessionManager, displayController),
+      enabled: true, // Interactive 模式一定是 follow
+    });
+  };
+
+  const startWatcher = async (): Promise<void> => {
+    if (!multiWatcher || !detector) return;
+
+    const files = sessionManager.getWatchedFiles();
+
+    await multiWatcher.start(files, {
+      follow: options.follow,
+      onLine: (line, label) => {
+        let parser = parsers.get(label);
+        if (!parser) {
+          // 新來源，建立新 parser
+          const newAgent = new ClaudeAgent({ verbose: options.verbose });
+          parser = newAgent.parser;
+          parsers.set(label, parser);
+        }
+
+        let parsed = parser.parse(line);
+        while (parsed) {
+          // 設定來源標籤
+          parsed.sourceLabel = label;
+
+          // 使用 SessionManager 處理輸出（會根據 active 狀態決定輸出或緩衝）
+          const formattedOutput = formatter.format(parsed);
+          sessionManager.handleOutput(label, formattedOutput);
+
+          // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
+          if (label === '[MAIN]' && parsed.isTaskToolUse) {
+            detector.handleEarlyDetection();
+          }
+
+          // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
+          // 注意：只處理 Task subagent，過濾掉 forked slash command（有 commandName 或 status === 'forked'）
+          if (label === '[MAIN]') {
+            const raw = parsed.raw as {
+              toolUseResult?: {
+                agentId?: string;
+                commandName?: string;
+                status?: string;
+              };
+            };
+            const agentId = raw?.toolUseResult?.agentId;
+            const commandName = raw?.toolUseResult?.commandName;
+            const status = raw?.toolUseResult?.status;
+
+            // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
+            if (agentId && !commandName && status !== 'forked') {
+              detector.handleFallbackDetection(agentId);
+            }
+          }
+
+          parsed = parser.parse(line);
+        }
+      },
+      onError: (error) => {
+        displayController.write(chalk.red(`Error: ${error.message}`));
+      },
+    });
+  };
 
   // 設定鍵盤監聽
   if (process.stdin.isTTY) {
@@ -592,77 +662,127 @@ async function startClaudeInteractiveWatch(
     });
   }
 
+  // 初始化狀態並啟動監控
+  await buildInteractiveState(currentSessionFile, initialSubagent, true);
+
+  // 初始化 DisplayController
+  displayController.init();
+
+  // 顯示初始狀態列
+  displayController.updateStatusLine(
+    sessionManager.getAllSessions(),
+    sessionManager.getActiveIndex()
+  );
+
+  await startWatcher();
+
+  const SUPER_FOLLOW_POLL_MS = 500;
+  const SUPER_FOLLOW_DELAY_MS = 5000;
+  let superFollowStopped = false;
+  let pendingSwitchPath: string | null = null;
+  let pendingSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearPendingSwitch = (): void => {
+    if (pendingSwitchTimer) {
+      clearTimeout(pendingSwitchTimer);
+      pendingSwitchTimer = null;
+    }
+    pendingSwitchPath = null;
+  };
+
+  const switchToSession = async (
+    nextSessionFile: SessionFile
+  ): Promise<void> => {
+    if (multiWatcher) {
+      multiWatcher.stop();
+    }
+
+    currentSessionFile = nextSessionFile;
+    await buildInteractiveState(nextSessionFile, null, false);
+
+    displayController.updateStatusLine(
+      sessionManager.getAllSessions(),
+      sessionManager.getActiveIndex()
+    );
+
+    await startWatcher();
+
+    const nextSessionId = basename(nextSessionFile.path, '.jsonl');
+    displayController.write(
+      chalk.gray(`Switched to latest session: ${nextSessionId}`)
+    );
+  };
+
+  const scheduleSwitch = (nextPath: string): void => {
+    if (pendingSwitchPath === nextPath) return;
+    pendingSwitchPath = nextPath;
+    if (pendingSwitchTimer) clearTimeout(pendingSwitchTimer);
+
+    pendingSwitchTimer = setTimeout(async () => {
+      if (superFollowStopped || !pendingSwitchPath) return;
+      try {
+        const latest = await findLatestMainSessionInProject(lockedProjectDir);
+        if (latest && latest.path === pendingSwitchPath) {
+          if (latest.path !== currentSessionFile.path) {
+            await switchToSession(latest);
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        clearPendingSwitch();
+      }
+    }, SUPER_FOLLOW_DELAY_MS);
+  };
+
+  const startSuperFollow = (): void => {
+    if (!options.super) return;
+
+    const poll = async (): Promise<void> => {
+      if (superFollowStopped) return;
+      try {
+        const latest = await findLatestMainSessionInProject(lockedProjectDir);
+        if (latest && latest.path !== currentSessionFile.path) {
+          scheduleSwitch(latest.path);
+        } else if (!latest) {
+          clearPendingSwitch();
+        }
+      } catch {
+        // ignore
+      } finally {
+        pollTimer = setTimeout(poll, SUPER_FOLLOW_POLL_MS);
+      }
+    };
+
+    poll();
+  };
+
+  startSuperFollow();
+
   // 清理函式
   const cleanup = (): void => {
+    superFollowStopped = true;
+    clearPendingSwitch();
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
     // 先清理 DisplayController（恢復終端設定）
     displayController.destroy();
     console.log(chalk.gray('\nStopping...'));
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
-    multiWatcher.stop();
+    if (multiWatcher) {
+      multiWatcher.stop();
+    }
   };
 
   // 處理中斷信號
   process.on('SIGINT', () => {
     cleanup();
     process.exit(0);
-  });
-
-  // 取得要監控的檔案
-  const files = sessionManager.getWatchedFiles();
-
-  await multiWatcher.start(files, {
-    follow: options.follow,
-    onLine: (line, label) => {
-      let parser = parsers.get(label);
-      if (!parser) {
-        // 新來源，建立新 parser
-        const newAgent = new ClaudeAgent({ verbose: options.verbose });
-        parser = newAgent.parser;
-        parsers.set(label, parser);
-      }
-
-      let parsed = parser.parse(line);
-      while (parsed) {
-        // 設定來源標籤
-        parsed.sourceLabel = label;
-
-        // 使用 SessionManager 處理輸出（會根據 active 狀態決定輸出或緩衝）
-        const formattedOutput = formatter.format(parsed);
-        sessionManager.handleOutput(label, formattedOutput);
-
-        // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-        if (label === '[MAIN]' && parsed.isTaskToolUse) {
-          detector.handleEarlyDetection();
-        }
-
-        // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
-        // 注意：只處理 Task subagent，過濾掉 forked slash command（有 commandName 或 status === 'forked'）
-        if (label === '[MAIN]') {
-          const raw = parsed.raw as {
-            toolUseResult?: {
-              agentId?: string;
-              commandName?: string;
-              status?: string;
-            };
-          };
-          const agentId = raw?.toolUseResult?.agentId;
-          const commandName = raw?.toolUseResult?.commandName;
-          const status = raw?.toolUseResult?.status;
-
-          // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
-          if (agentId && !commandName && status !== 'forked') {
-            detector.handleFallbackDetection(agentId);
-          }
-        }
-
-        parsed = parser.parse(line);
-      }
-    },
-    onError: (error) => {
-      displayController.write(chalk.red(`Error: ${error.message}`));
-    },
   });
 
   // 保持程式運行（interactive 模式必須是 follow）
