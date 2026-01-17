@@ -1,4 +1,5 @@
 import { Glob } from 'bun';
+import { watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
 import type { WatchedFile } from '../core/multi-file-watcher.ts';
 
@@ -65,6 +66,8 @@ export interface SubagentDetectorConfig {
   session?: SessionHandler;
   /** 是否啟用（對應 options.follow） */
   enabled: boolean;
+  /** 是否啟用目錄監控（預設 true） */
+  watchDir?: boolean;
 }
 
 // ============================================================
@@ -220,10 +223,38 @@ export async function tryAddSubagentFile(
 export class SubagentDetector {
   private knownAgentIds: Set<string>;
   private config: SubagentDetectorConfig;
+  private dirWatcher: FSWatcher | null = null;
+  private parentWatcher: FSWatcher | null = null;
+  private scanTimer: ReturnType<typeof setTimeout> | null = null;
+  private isWatching = false;
 
   constructor(initialAgentIds: Set<string>, config: SubagentDetectorConfig) {
     this.knownAgentIds = new Set(initialAgentIds);
     this.config = config;
+  }
+
+  /**
+   * 啟動 subagents 目錄監控（自動偵測新檔案）
+   */
+  startDirectoryWatch(): void {
+    if (!this.config.enabled) return;
+    if (this.isWatching) return;
+    if (this.config.watchDir === false) return;
+
+    this.isWatching = true;
+    this.tryWatchSubagentsDir();
+  }
+
+  /**
+   * 停止所有監控
+   */
+  stop(): void {
+    this.isWatching = false;
+    this.clearScanTimer();
+    this.dirWatcher?.close();
+    this.dirWatcher = null;
+    this.parentWatcher?.close();
+    this.parentWatcher = null;
   }
 
   /**
@@ -242,30 +273,10 @@ export class SubagentDetector {
         );
 
         for (const agentId of newAgentIds) {
-          if (this.knownAgentIds.has(agentId)) continue;
-          this.knownAgentIds.add(agentId);
-
-          const subagentPath = join(
-            this.config.subagentsDir,
-            `agent-${agentId}.jsonl`
-          );
-
-          // Session 處理（Interactive 模式）
-          this.config.session?.addSession?.(
+          this.registerNewAgent(
             agentId,
-            `[${agentId}]`,
-            subagentPath
-          );
-
-          this.config.output.warn(`Early subagent detected: ${agentId}`);
-
-          // 非阻塞式新增檔案監控
-          tryAddSubagentFile(
-            subagentPath,
-            agentId,
-            this.config.watcher,
-            this.config.output,
-            EARLY_DETECTION_RETRY
+            EARLY_DETECTION_RETRY,
+            `Early subagent detected: ${agentId}`
           );
         }
       } catch (error) {
@@ -285,34 +296,11 @@ export class SubagentDetector {
       return;
     }
 
-    const isNewAgent = !this.knownAgentIds.has(agentId);
-
-    if (isNewAgent) {
-      this.knownAgentIds.add(agentId);
-
-      const subagentPath = join(
-        this.config.subagentsDir,
-        `agent-${agentId}.jsonl`
-      );
-
-      // Session 處理（Interactive 模式）
-      this.config.session?.addSession?.(agentId, `[${agentId}]`, subagentPath);
-
-      if (this.config.enabled) {
-        this.config.output.warn(`New subagent detected: ${agentId}`);
-
-        // 非阻塞式新增檔案監控
-        setTimeout(() => {
-          tryAddSubagentFile(
-            subagentPath,
-            agentId,
-            this.config.watcher,
-            this.config.output,
-            FALLBACK_DETECTION_RETRY
-          );
-        }, FALLBACK_DETECTION_RETRY.initialDelay);
-      }
-    }
+    this.registerNewAgent(
+      agentId,
+      FALLBACK_DETECTION_RETRY,
+      `New subagent detected: ${agentId}`
+    );
 
     // toolUseResult 表示 subagent 已完成
     if (this.config.session?.markSessionDone) {
@@ -334,5 +322,108 @@ export class SubagentDetector {
    */
   isKnownAgent(agentId: string): boolean {
     return this.knownAgentIds.has(agentId);
+  }
+
+  private clearScanTimer(): void {
+    if (this.scanTimer) {
+      clearTimeout(this.scanTimer);
+      this.scanTimer = null;
+    }
+  }
+
+  private scheduleScan(): void {
+    if (!this.isWatching) return;
+    this.clearScanTimer();
+    this.scanTimer = setTimeout(async () => {
+      if (!this.isWatching) return;
+      try {
+        const newAgentIds = await scanForNewSubagents(
+          this.config.subagentsDir,
+          this.knownAgentIds
+        );
+        for (const agentId of newAgentIds) {
+          this.registerNewAgent(
+            agentId,
+            EARLY_DETECTION_RETRY,
+            `New subagent detected: ${agentId}`
+          );
+        }
+      } catch (error) {
+        this.config.output.error(`Directory scan failed: ${error}`);
+      }
+    }, 100);
+  }
+
+  private tryWatchSubagentsDir(): void {
+    if (!this.isWatching) return;
+
+    try {
+      this.parentWatcher?.close();
+      this.parentWatcher = null;
+
+      this.dirWatcher = watch(this.config.subagentsDir, () => {
+        this.scheduleScan();
+      });
+      this.dirWatcher.on('error', () => {
+        this.dirWatcher?.close();
+        this.dirWatcher = null;
+      });
+      // 目錄建立後先掃描一次，避免錯過已存在的新檔案
+      this.scheduleScan();
+    } catch {
+      // subagents 目錄可能尚未建立，改監控父層目錄
+      this.watchParentForSubagentsDir();
+    }
+  }
+
+  private watchParentForSubagentsDir(): void {
+    if (!this.isWatching) return;
+    if (this.parentWatcher) return;
+
+    const parentDir = join(this.config.subagentsDir, '..');
+    try {
+      this.parentWatcher = watch(parentDir, () => {
+        // 嘗試切回 subagents 目錄監控
+        this.tryWatchSubagentsDir();
+      });
+      this.parentWatcher.on('error', () => {
+        this.parentWatcher?.close();
+        this.parentWatcher = null;
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  private registerNewAgent(
+    agentId: string,
+    retryConfig: RetryConfig,
+    message: string
+  ): void {
+    if (this.knownAgentIds.has(agentId)) return;
+    this.knownAgentIds.add(agentId);
+
+    const subagentPath = join(
+      this.config.subagentsDir,
+      `agent-${agentId}.jsonl`
+    );
+
+    // Session 處理（Interactive 模式）
+    this.config.session?.addSession?.(agentId, `[${agentId}]`, subagentPath);
+
+    if (this.config.enabled) {
+      this.config.output.warn(message);
+
+      // 非阻塞式新增檔案監控
+      setTimeout(() => {
+        tryAddSubagentFile(
+          subagentPath,
+          agentId,
+          this.config.watcher,
+          this.config.output,
+          retryConfig
+        );
+      }, retryConfig.initialDelay);
+    }
   }
 }

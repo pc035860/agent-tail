@@ -284,10 +284,12 @@ async function startClaudeMultiWatch(
     session: new NoOpSessionHandler(),
     enabled: options.follow && options.withSubagents,
   });
+  detector.startDirectoryWatch();
 
   // 處理中斷信號
   process.on('SIGINT', () => {
     console.log(chalk.gray('\nStopping...'));
+    detector.stop();
     multiWatcher.stop();
     process.exit(0);
   });
@@ -437,7 +439,7 @@ async function startClaudeInteractiveWatch(
     historyLines: 50,
   });
 
-  let sessionManager: SessionManager;
+  let sessionManager!: SessionManager;
   let parsers = new Map<string, LineParser>();
   let multiWatcher: MultiFileWatcher | null = null;
   let detector: SubagentDetector | null = null;
@@ -565,10 +567,12 @@ async function startClaudeInteractiveWatch(
       session: new InteractiveSessionHandler(sessionManager, displayController),
       enabled: true, // Interactive 模式一定是 follow
     });
+    detector.startDirectoryWatch();
   };
 
   const startWatcher = async (): Promise<void> => {
     if (!multiWatcher || !detector) return;
+    const activeDetector = detector;
 
     const files = sessionManager.getWatchedFiles();
 
@@ -594,7 +598,7 @@ async function startClaudeInteractiveWatch(
 
           // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
           if (label === '[MAIN]' && parsed.isTaskToolUse) {
-            detector.handleEarlyDetection();
+            activeDetector.handleEarlyDetection();
           }
 
           // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
@@ -613,7 +617,7 @@ async function startClaudeInteractiveWatch(
 
             // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
             if (agentId && !commandName && status !== 'forked') {
-              detector.handleFallbackDetection(agentId);
+              activeDetector.handleFallbackDetection(agentId);
             }
           }
 
@@ -694,6 +698,7 @@ async function startClaudeInteractiveWatch(
   const switchToSession = async (
     nextSessionFile: SessionFile
   ): Promise<void> => {
+    detector?.stop();
     if (multiWatcher) {
       multiWatcher.stop();
     }
@@ -770,6 +775,7 @@ async function startClaudeInteractiveWatch(
     }
     // 先清理 DisplayController（恢復終端設定）
     displayController.destroy();
+    detector?.stop();
     console.log(chalk.gray('\nStopping...'));
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
