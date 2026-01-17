@@ -78,6 +78,7 @@ src/
   - Claude: `~/.claude/projects/{encoded-path}/{UUID}.jsonl` with subagents in `subagents/agent-*.jsonl`
   - Gemini: `~/.gemini/tmp/<project_hash>/chats/session-*.json`
 - FileWatcher supports two modes: JSONL (line-by-line) and JSON (whole-file, for Gemini)
+- FileWatcher polling detects changes via mtime or file size to avoid missed updates when mtime doesn't advance (e.g., after session switch)
 - MultiFileWatcher manages multiple FileWatcher instances for subagent monitoring
 - SessionManager tracks session states and buffers for interactive mode switching
 - SubagentDetector handles early detection (Task tool_use) and fallback detection (toolUseResult)
@@ -96,4 +97,3 @@ src/
 - **ESLint**: v9 flat config (`eslint.config.js`) with TypeScript support
 - **Prettier**: Code formatting (`prettier.config.js`)
 - **Husky + lint-staged**: Pre-commit hooks auto-run lint and format on staged `.ts` files
-
