@@ -36,6 +36,7 @@ agent-tail claude -s               # tail latest subagent log
 agent-tail claude -s abc123        # tail specific subagent by ID
 agent-tail claude -i               # interactive mode (Tab to switch sessions)
 agent-tail claude --with-subagents # include subagent content in output
+agent-tail claude -i --super       # super follow mode (auto-switch to latest session)
 ```
 
 ## Architecture
@@ -55,7 +56,8 @@ src/
 │   ├── claude/claude-agent.ts
 │   └── gemini/gemini-agent.ts
 ├── claude/                   # Claude-specific modules
-│   ├── subagent-detector.ts  # Detect and monitor subagent sessions
+│   ├── subagent-detector.ts  # Detect and monitor subagent sessions (with directory watch)
+│   ├── super-follow.ts       # Find latest session in project for super follow mode
 │   ├── output-handlers.ts    # Output handler implementations (console, display controller)
 │   └── session-handlers.ts   # Session event handling
 ├── interactive/
