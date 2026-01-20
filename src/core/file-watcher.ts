@@ -25,6 +25,9 @@ export class FileWatcher {
   private isRestarting = false;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isPolling = false;
+  // 競態條件防護：isProcessing 和 pending 標誌
+  private isProcessing = false;
+  private pendingRead = false;
 
   /**
    * 開始監控檔案
@@ -34,7 +37,7 @@ export class FileWatcher {
     this.filePath = filePath;
     this.options = options;
 
-    // 初始讀取現有內容
+    // 初始讀取現有內容（直接呼叫，不需排程）
     await this.readAndProcess(filePath, options.onLine);
     await this.updateMtime(filePath);
 
@@ -43,6 +46,38 @@ export class FileWatcher {
       this.isWatching = true;
       this.startWatcher();
       this.startPolling();
+    }
+  }
+
+  /**
+   * 排程讀取操作（防止競態條件）
+   * 如果正在處理，設為 pending 並返回
+   * 處理完成後如果 pending 為 true，再執行一次
+   */
+  private async scheduleRead(): Promise<void> {
+    if (!this.filePath || !this.options) return;
+
+    if (this.isProcessing) {
+      this.pendingRead = true;
+      return;
+    }
+
+    this.isProcessing = true;
+    this.pendingRead = false;
+
+    try {
+      await this.readAndProcess(this.filePath, this.options.onLine);
+      await this.updateMtime(this.filePath);
+
+      // 處理完成後，如果有 pending 請求，再執行一次
+      if (this.pendingRead) {
+        this.pendingRead = false;
+        await this.scheduleRead();
+      }
+    } catch (error) {
+      this.options.onError?.(error as Error);
+    } finally {
+      this.isProcessing = false;
     }
   }
 
@@ -115,12 +150,8 @@ export class FileWatcher {
       }
 
       if (eventType === 'change') {
-        try {
-          await this.readAndProcess(this.filePath, this.options.onLine);
-          await this.updateMtime(this.filePath);
-        } catch (error) {
-          this.options.onError?.(error as Error);
-        }
+        // 使用 scheduleRead 避免與 polling 競態
+        await this.scheduleRead();
       }
     });
 
@@ -140,12 +171,8 @@ export class FileWatcher {
     this.processedLines = 0;
     this.lastContentHash = '';
 
-    try {
-      await this.readAndProcess(this.filePath, this.options.onLine);
-      await this.updateMtime(this.filePath);
-    } catch (error) {
-      this.options.onError?.(error as Error);
-    }
+    // 使用 scheduleRead 避免與 polling 競態
+    await this.scheduleRead();
 
     if (this.isWatching) {
       this.startWatcher();
@@ -162,12 +189,13 @@ export class FileWatcher {
       if (!this.isWatching || !this.filePath || !this.options) return;
       try {
         const stats = await stat(this.filePath);
-        const nextMtime = stats.mtimeMs;
-        const nextSize = stats.size;
-        if (nextMtime !== this.lastMtimeMs || nextSize !== this.lastSize) {
-          await this.readAndProcess(this.filePath, this.options.onLine);
-          this.lastMtimeMs = nextMtime;
-          this.lastSize = nextSize;
+        // 檢查 mtime 或 size 是否有變化
+        if (
+          stats.mtimeMs !== this.lastMtimeMs ||
+          stats.size !== this.lastSize
+        ) {
+          // 使用 scheduleRead 避免與 fs.watch 競態
+          await this.scheduleRead();
         }
       } catch {
         // ignore

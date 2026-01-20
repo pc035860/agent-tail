@@ -72,10 +72,19 @@ export class SessionManager {
     // - 其他 session 插入到 index 1（新的在左邊）
     if (id === 'main') {
       this.sessions.unshift(session); // main 放在最前面
+      // 插入到 0，所有元素往後移，activeIndex 要 +1
+      // 但如果是第一次新增 session，保持 activeIndex = 0
+      if (this.sessions.length > 1) {
+        this.activeIndex++;
+      }
     } else {
       // 找到 main session 的位置，插入其後
       const insertIndex = this.sessions[0]?.id === 'main' ? 1 : 0;
       this.sessions.splice(insertIndex, 0, session);
+      // 如果插入位置 <= activeIndex，activeIndex 要 +1 以保持使用者看到相同的 session
+      if (insertIndex <= this.activeIndex) {
+        this.activeIndex++;
+      }
     }
 
     this.options.onSessionAdded?.(session);

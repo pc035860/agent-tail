@@ -166,20 +166,10 @@ describe('parseArgs', () => {
       expect(options.super).toBe(true);
     });
 
-    test('--super without --interactive exits with error', () => {
-      process.exit = ((code?: number) => {
-        exitCode = code;
-        throw new Error('process.exit called');
-      }) as typeof process.exit;
-
-      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
-
-      expect(() =>
-        parseArgs(['node', 'agent-tail', 'claude', '--super'])
-      ).toThrow('process.exit called');
-      expect(exitCode).toBe(1);
-
-      consoleSpy.mockRestore();
+    test('--super without --interactive is allowed', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--super']);
+      expect(options.super).toBe(true);
+      expect(options.interactive).toBe(false);
     });
 
     test('--super with non-claude agent exits with error', () => {

@@ -49,6 +49,23 @@ export class DisplayController {
   private currentStatusLine = '';
   private terminalRows: number;
   private terminalCols: number;
+  // 保存 handler 引用以便在 destroy() 時移除
+  private onResize = () => {
+    this.terminalRows = process.stdout.rows || 24;
+    this.terminalCols = process.stdout.columns || 80;
+    if (
+      this.isInitialized &&
+      this.persistentStatusLine &&
+      process.stdout.isTTY
+    ) {
+      // 重設 scroll region 以適應新的終端大小
+      process.stdout.write(ANSI.setScrollRegion(1, this.terminalRows - 1));
+      // 移動游標到內容區
+      process.stdout.write(`\x1b[${this.terminalRows - 1};1H`);
+      // 刷新狀態列
+      this.refreshStatusLine();
+    }
+  };
 
   constructor(options: DisplayControllerOptions = {}) {
     this.persistentStatusLine = options.persistentStatusLine ?? true;
@@ -57,22 +74,7 @@ export class DisplayController {
     this.terminalCols = process.stdout.columns || 80;
 
     // 監聽終端大小變化
-    process.stdout.on('resize', () => {
-      this.terminalRows = process.stdout.rows || 24;
-      this.terminalCols = process.stdout.columns || 80;
-      if (
-        this.isInitialized &&
-        this.persistentStatusLine &&
-        process.stdout.isTTY
-      ) {
-        // 重設 scroll region 以適應新的終端大小
-        process.stdout.write(ANSI.setScrollRegion(1, this.terminalRows - 1));
-        // 移動游標到內容區
-        process.stdout.write(`\x1b[${this.terminalRows - 1};1H`);
-        // 刷新狀態列
-        this.refreshStatusLine();
-      }
-    });
+    process.stdout.on('resize', this.onResize);
   }
 
   /**
@@ -98,6 +100,9 @@ export class DisplayController {
    */
   destroy(): void {
     if (!this.isInitialized) return;
+
+    // 移除 resize 監聽器
+    process.stdout.off('resize', this.onResize);
 
     if (this.persistentStatusLine && process.stdout.isTTY) {
       // 清除狀態列

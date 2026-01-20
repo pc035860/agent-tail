@@ -262,7 +262,7 @@ async function startClaudeMultiWatch(
   console.log(chalk.gray('---'));
 
   // 為每個來源建立獨立的 parser
-  const parsers = new Map<string, LineParser>();
+  let parsers = new Map<string, LineParser>();
   for (const file of files) {
     const parserAgent = new ClaudeAgent({ verbose: options.verbose });
     parsers.set(file.label, parserAgent.parser);
@@ -274,10 +274,10 @@ async function startClaudeMultiWatch(
     process.exit(0);
   }
 
-  const multiWatcher = new MultiFileWatcher();
+  let multiWatcher = new MultiFileWatcher();
 
   // 建立 SubagentDetector（整合 early detection 和 fallback detection）
-  const detector = new SubagentDetector(existingAgentIds, {
+  let detector = new SubagentDetector(existingAgentIds, {
     subagentsDir,
     output: new ConsoleOutputHandler(),
     watcher: { addFile: (f) => multiWatcher.addFile(f) },
@@ -286,10 +286,212 @@ async function startClaudeMultiWatch(
   });
   detector.startDirectoryWatch();
 
-  // 處理中斷信號
+  // ========== Non-Interactive Super-Follow ==========
+  const SUPER_FOLLOW_POLL_MS = 500;
+  const SUPER_FOLLOW_DELAY_MS = 5000;
+  let superFollowStopped = false;
+  let pendingSwitchPath: string | null = null;
+  let pendingSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentSessionPath = sessionFile.path;
+
+  const clearPendingSwitch = (): void => {
+    if (pendingSwitchTimer) {
+      clearTimeout(pendingSwitchTimer);
+      pendingSwitchTimer = null;
+    }
+    pendingSwitchPath = null;
+  };
+
+  const switchToSession = async (
+    nextSessionFile: SessionFile
+  ): Promise<void> => {
+    // 停止現有監控
+    detector?.stop();
+    multiWatcher.stop();
+
+    // 更新當前 session 路徑
+    currentSessionPath = nextSessionFile.path;
+
+    // 重新初始化監控
+    const newProjectDir = dirname(nextSessionFile.path);
+    const newSessionId = basename(nextSessionFile.path, '.jsonl');
+    const newSubagentsDir = join(newProjectDir, newSessionId, 'subagents');
+
+    const newFiles: WatchedFile[] = [
+      { path: nextSessionFile.path, label: '[MAIN]' },
+    ];
+    const newExistingAgentIds = new Set<string>();
+
+    // 掃描現有的 subagents
+    if (options.withSubagents) {
+      const dirAgentIds = await scanForNewSubagents(newSubagentsDir, new Set());
+      for (const id of dirAgentIds) {
+        newExistingAgentIds.add(id);
+      }
+
+      const existingSubagentFiles: Array<{
+        agentId: string;
+        path: string;
+        birthtime: Date;
+      }> = [];
+
+      for (const agentId of newExistingAgentIds) {
+        const subagentPath = join(newSubagentsDir, `agent-${agentId}.jsonl`);
+        const subagentFile = Bun.file(subagentPath);
+        if (await subagentFile.exists()) {
+          const stats = await stat(subagentPath);
+          existingSubagentFiles.push({
+            agentId,
+            path: subagentPath,
+            birthtime: stats.birthtime,
+          });
+        }
+      }
+
+      existingSubagentFiles.sort(
+        (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+      );
+
+      for (const { agentId, path } of existingSubagentFiles) {
+        newFiles.push({ path, label: `[${agentId}]` });
+      }
+
+      if (newExistingAgentIds.size > 0) {
+        console.log(
+          chalk.gray(`Found ${newExistingAgentIds.size} subagent(s)`)
+        );
+      }
+    }
+
+    // 輸出切換訊息
+    console.log(chalk.gray(`--- Switched to session ${newSessionId} ---`));
+    console.log(chalk.gray('---'));
+
+    // 重新建立 parsers
+    const newParsers = new Map<string, LineParser>();
+    for (const file of newFiles) {
+      const parserAgent = new ClaudeAgent({ verbose: options.verbose });
+      newParsers.set(file.label, parserAgent.parser);
+    }
+    parsers = newParsers;
+
+    // 重新建立 multiWatcher（先建立，但還不啟動）
+    const newMultiWatcher = new MultiFileWatcher();
+
+    // 重新建立 detector（捕獲新的 multiWatcher）
+    const newDetector = new SubagentDetector(newExistingAgentIds, {
+      subagentsDir: newSubagentsDir,
+      output: new ConsoleOutputHandler(),
+      watcher: { addFile: (f) => newMultiWatcher.addFile(f) },
+      session: new NoOpSessionHandler(),
+      enabled: options.follow && options.withSubagents,
+    });
+    newDetector.startDirectoryWatch();
+
+    // 更新外層變數
+    multiWatcher = newMultiWatcher;
+    detector = newDetector;
+
+    // 重新啟動監控
+    await multiWatcher.start(newFiles, {
+      follow: options.follow,
+      onLine: (line, label) => {
+        let parser = parsers.get(label);
+        if (!parser) {
+          const newAgent = new ClaudeAgent({ verbose: options.verbose });
+          parser = newAgent.parser;
+          parsers.set(label, parser);
+        }
+
+        let parsed = parser.parse(line);
+        while (parsed) {
+          parsed.sourceLabel = label;
+          console.log(formatter.format(parsed));
+
+          if (label === '[MAIN]' && parsed.isTaskToolUse) {
+            detector.handleEarlyDetection();
+          }
+
+          if (label === '[MAIN]') {
+            const raw = parsed.raw as {
+              toolUseResult?: {
+                agentId?: string;
+                commandName?: string;
+                status?: string;
+              };
+            };
+            const agentId = raw?.toolUseResult?.agentId;
+            const commandName = raw?.toolUseResult?.commandName;
+            const status = raw?.toolUseResult?.status;
+
+            if (agentId && !commandName && status !== 'forked') {
+              detector.handleFallbackDetection(agentId);
+            }
+          }
+
+          parsed = parser.parse(line);
+        }
+      },
+      onError: (error) => {
+        console.error(chalk.red(`Error: ${error.message}`));
+      },
+    });
+  };
+
+  const scheduleSwitch = (nextPath: string): void => {
+    if (pendingSwitchPath === nextPath) return;
+    pendingSwitchPath = nextPath;
+    if (pendingSwitchTimer) clearTimeout(pendingSwitchTimer);
+
+    pendingSwitchTimer = setTimeout(async () => {
+      if (superFollowStopped || !pendingSwitchPath) return;
+      try {
+        const latest = await findLatestMainSessionInProject(projectDir);
+        if (
+          latest &&
+          latest.path === pendingSwitchPath &&
+          latest.path !== currentSessionPath
+        ) {
+          await switchToSession(latest);
+        }
+      } catch {
+        // ignore
+      } finally {
+        clearPendingSwitch();
+      }
+    }, SUPER_FOLLOW_DELAY_MS);
+  };
+
+  const startSuperFollow = (): void => {
+    if (!options.super) return;
+
+    const poll = async (): Promise<void> => {
+      if (superFollowStopped) return;
+      try {
+        const latest = await findLatestMainSessionInProject(projectDir);
+        if (latest && latest.path !== currentSessionPath) {
+          scheduleSwitch(latest.path);
+        } else if (!latest) {
+          clearPendingSwitch();
+        }
+      } catch {
+        // ignore
+      } finally {
+        pollTimer = setTimeout(poll, SUPER_FOLLOW_POLL_MS);
+      }
+    };
+
+    poll();
+  };
+
+  // 處理中斷信號（需要移除後重新加入以支援 super-follow 清理）
   process.on('SIGINT', () => {
+    superFollowStopped = true;
+    clearPendingSwitch();
+    if (pollTimer) clearTimeout(pollTimer);
     console.log(chalk.gray('\nStopping...'));
-    detector.stop();
+    detector?.stop();
     multiWatcher.stop();
     process.exit(0);
   });
@@ -348,6 +550,9 @@ async function startClaudeMultiWatch(
   if (!options.follow) {
     process.exit(0);
   }
+
+  // 啟動 super-follow
+  startSuperFollow();
 
   // 保持程式運行
   console.log(chalk.gray('Watching for changes... (Ctrl+C to stop)'));

@@ -227,6 +227,8 @@ export class SubagentDetector {
   private parentWatcher: FSWatcher | null = null;
   private scanTimer: ReturnType<typeof setTimeout> | null = null;
   private isWatching = false;
+  // 追蹤所有 pending 的 setTimeout 句柄，用於 stop() 時清除
+  private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
 
   constructor(initialAgentIds: Set<string>, config: SubagentDetectorConfig) {
     this.knownAgentIds = new Set(initialAgentIds);
@@ -251,6 +253,11 @@ export class SubagentDetector {
   stop(): void {
     this.isWatching = false;
     this.clearScanTimer();
+    // 清除所有 pending 的 setTimeout
+    for (const timer of this.pendingTimers) {
+      clearTimeout(timer);
+    }
+    this.pendingTimers.clear();
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -265,7 +272,10 @@ export class SubagentDetector {
     if (!this.config.enabled) return;
 
     // 延遲掃描（讓檔案有機會建立）
-    setTimeout(async () => {
+    const timer = setTimeout(async () => {
+      this.pendingTimers.delete(timer);
+      if (!this.isWatching) return;
+
       try {
         const newAgentIds = await scanForNewSubagents(
           this.config.subagentsDir,
@@ -283,6 +293,7 @@ export class SubagentDetector {
         this.config.output.error(`Early detection scan failed: ${error}`);
       }
     }, EARLY_DETECTION_RETRY.initialDelay);
+    this.pendingTimers.add(timer);
   }
 
   /**
@@ -415,7 +426,10 @@ export class SubagentDetector {
       this.config.output.warn(message);
 
       // 非阻塞式新增檔案監控
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        this.pendingTimers.delete(timer);
+        if (!this.isWatching) return;
+
         tryAddSubagentFile(
           subagentPath,
           agentId,
@@ -424,6 +438,7 @@ export class SubagentDetector {
           retryConfig
         );
       }, retryConfig.initialDelay);
+      this.pendingTimers.add(timer);
     }
   }
 }

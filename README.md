@@ -161,16 +161,15 @@ bun start claude --with-subagents
 Automatically switch to the latest main session when new sessions start in the same project:
 
 ```bash
-# Start super follow mode (requires interactive mode)
-bun start claude -i --super
+# Start super follow mode
+bun start claude --super
 
 # The session will automatically switch when:
 # - A new main session starts in the same project
 # - Switch occurs after a 5-second delay to avoid instant switching
-# - You can still use Tab to manually switch between sessions
 ```
 
-> **Note:** Super follow mode requires `-i` (interactive mode).
+> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching.
 
 ## CLI Options
 
@@ -183,7 +182,7 @@ bun start claude -i --super
 | `--subagent [id]` | `-s` | Claude only: tail subagent log (latest if no ID) |
 | `--interactive` | `-i` | Claude only: interactive mode with Tab to switch sessions |
 | `--with-subagents` | | Claude only: include subagent content in output |
-| `--super` | | Claude only: auto-switch to latest session (requires `-i`) |
+| `--super` | | Claude only: auto-switch to latest session in project |
 
 **Positional Arguments:**
 | Argument | Description |

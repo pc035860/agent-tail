@@ -36,7 +36,7 @@ function createProgram(): Command {
     )
     .option(
       '--super',
-      'Claude only: super follow latest session in project (interactive mode)',
+      'Claude only: super follow latest session in project',
       false
     );
 
@@ -111,12 +111,6 @@ export function parseArgs(args: string[]): CliOptions {
     console.error(
       'Error: --super option is only available for "claude" agent type.'
     );
-    process.exit(1);
-  }
-
-  // super 需要 interactive
-  if (opts.super && !opts.interactive) {
-    console.error('Error: --super requires --interactive.');
     process.exit(1);
   }
 
