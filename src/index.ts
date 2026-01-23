@@ -25,7 +25,7 @@ import {
   SubagentDetector,
   scanForNewSubagents,
 } from './claude/subagent-detector.ts';
-import { findLatestMainSessionInProject } from './claude/super-follow.ts';
+import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
 import {
   ConsoleOutputHandler,
   DisplayControllerOutputHandler,
@@ -464,7 +464,7 @@ async function startClaudeMultiWatch(
   };
 
   const startSuperFollow = (): void => {
-    if (!options.super) return;
+    if (!options.autoSwitch) return;
 
     const poll = async (): Promise<void> => {
       if (superFollowStopped) return;
@@ -947,7 +947,7 @@ async function startClaudeInteractiveWatch(
   };
 
   const startSuperFollow = (): void => {
-    if (!options.super) return;
+    if (!options.autoSwitch) return;
 
     const poll = async (): Promise<void> => {
       if (superFollowStopped) return;

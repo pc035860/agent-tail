@@ -156,20 +156,37 @@ Show both main session and subagent outputs together (sorted by time):
 bun start claude --with-subagents
 ```
 
-### Super Follow Mode
+### Auto-Switch Mode
 
 Automatically switch to the latest main session when new sessions start in the same project:
 
 ```bash
-# Start super follow mode
-bun start claude --super
+# Start auto-switch mode
+bun start claude --auto-switch
 
 # The session will automatically switch when:
 # - A new main session starts in the same project
 # - Switch occurs after a 5-second delay to avoid instant switching
 ```
 
-> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching.
+> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined.
+
+### Preset Override
+
+The `--all` preset can be customized with negation flags:
+
+```bash
+# Enable all features except verbose (truncated output)
+bun start claude --all --no-verbose
+
+# Enable all features except auto-switch
+bun start claude -a --no-auto-switch
+
+# Enable all features except subagents
+bun start claude --all --no-with-subagents
+```
+
+Negation flags override the preset, giving you fine-grained control while keeping the shortcut convenient.
 
 ## CLI Options
 
@@ -178,11 +195,16 @@ bun start claude --super
 | `--raw` | | Output raw JSONL instead of formatted output |
 | `--project <name>` | `-p` | Filter sessions by project name (fuzzy match) |
 | `--verbose` | `-v` | Show full content without truncation |
+| `--no-verbose` | | Show truncated content (default) |
 | `--no-follow` | | Don't watch for new changes, just show existing content |
 | `--subagent [id]` | `-s` | Claude only: tail subagent log (latest if no ID) |
 | `--interactive` | `-i` | Claude only: interactive mode with Tab to switch sessions |
+| `--no-interactive` | | Disable interactive mode (default) |
 | `--with-subagents` | | Claude only: include subagent content in output |
-| `--super` | | Claude only: auto-switch to latest session in project |
+| `--no-with-subagents` | | Exclude subagent content (default) |
+| `--auto-switch` | | Claude only: auto-switch to latest main session in project |
+| `--no-auto-switch` | | Disable auto-switch (default) |
+| `--all` | `-a` | Claude only: show all content (verbose + subagents + auto-switch) |
 
 **Positional Arguments:**
 | Argument | Description |

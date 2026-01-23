@@ -19,24 +19,30 @@ function createProgram(): Command {
     .option('-p, --project <pattern>', 'Filter by project name (fuzzy match)')
     .option('-f, --follow', 'Follow file changes (default: true)', true)
     .option('--no-follow', 'Do not follow, only output existing content')
-    .option('-v, --verbose', 'Show full content without truncation', false)
+    .option('-v, --verbose', 'Show full content without truncation')
+    .option('--no-verbose', 'Show truncated content (default)')
     .option(
       '-s, --subagent [id]',
       'Claude only: tail subagent log (latest if no ID)'
     )
     .option(
       '-i, --interactive',
-      'Claude only: interactive mode for switching between sessions (Tab to switch)',
-      false
+      'Claude only: interactive mode for switching between sessions (Tab to switch)'
     )
+    .option('--no-interactive', 'Disable interactive mode (default)')
     .option(
       '--with-subagents',
-      'Claude only: include subagent content in output (default: false)',
-      false
+      'Claude only: include subagent content in output'
     )
+    .option('--no-with-subagents', 'Exclude subagent content (default)')
     .option(
-      '--super',
-      'Claude only: super follow latest session in project',
+      '--auto-switch',
+      'Claude only: auto-switch to latest main session in project'
+    )
+    .option('--no-auto-switch', 'Disable auto-switch (default)')
+    .option(
+      '-a, --all',
+      'Claude only: show all content (verbose + with-subagents + auto-switch)',
       false
     );
 
@@ -74,8 +80,29 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // --all preset 選項僅對 claude 有效（需要在展開前驗證）
+  if (opts.all && agentTypeArg !== 'claude') {
+    console.error(
+      'Error: --all option is only available for "claude" agent type.'
+    );
+    process.exit(1);
+  }
+
+  // 展開 --all preset（只在選項未明確設定時才覆蓋）
+  if (opts.all) {
+    if (opts.verbose === undefined) opts.verbose = true;
+    if (opts.withSubagents === undefined) opts.withSubagents = true;
+    if (opts.autoSwitch === undefined) opts.autoSwitch = true;
+  }
+
+  // 將 undefined 轉換為 false（對於非 preset 選項）
+  const finalVerbose = opts.verbose ?? false;
+  const finalInteractive = opts.interactive ?? false;
+  const finalWithSubagents = opts.withSubagents ?? false;
+  const finalAutoSwitch = opts.autoSwitch ?? false;
+
   // interactive 選項僅對 claude 有效
-  if (opts.interactive && agentTypeArg !== 'claude') {
+  if (finalInteractive && agentTypeArg !== 'claude') {
     console.error(
       'Error: --interactive option is only available for "claude" agent type.'
     );
@@ -83,7 +110,7 @@ export function parseArgs(args: string[]): CliOptions {
   }
 
   // interactive 和 subagent 互斥
-  if (opts.interactive && opts.subagent !== undefined) {
+  if (finalInteractive && opts.subagent !== undefined) {
     console.error(
       'Error: --interactive and --subagent options cannot be used together.'
     );
@@ -91,7 +118,7 @@ export function parseArgs(args: string[]): CliOptions {
   }
 
   // interactive 需要 follow 模式
-  if (opts.interactive && !opts.follow) {
+  if (finalInteractive && !opts.follow) {
     console.error(
       'Error: --interactive requires --follow mode (cannot use with --no-follow).'
     );
@@ -99,17 +126,17 @@ export function parseArgs(args: string[]): CliOptions {
   }
 
   // withSubagents 選項僅對 claude 有效
-  if (opts.withSubagents && agentTypeArg !== 'claude') {
+  if (finalWithSubagents && agentTypeArg !== 'claude') {
     console.error(
       'Error: --with-subagents option is only available for "claude" agent type.'
     );
     process.exit(1);
   }
 
-  // super 選項僅對 claude 有效
-  if (opts.super && agentTypeArg !== 'claude') {
+  // autoSwitch 選項僅對 claude 有效
+  if (finalAutoSwitch && agentTypeArg !== 'claude') {
     console.error(
-      'Error: --super option is only available for "claude" agent type.'
+      'Error: --auto-switch option is only available for "claude" agent type.'
     );
     process.exit(1);
   }
@@ -119,11 +146,11 @@ export function parseArgs(args: string[]): CliOptions {
     raw: opts.raw,
     project: opts.project,
     follow: opts.follow,
-    verbose: opts.verbose,
+    verbose: finalVerbose,
     subagent: opts.subagent,
-    interactive: opts.interactive,
-    withSubagents: opts.withSubagents,
-    super: opts.super,
+    interactive: finalInteractive,
+    withSubagents: finalWithSubagents,
+    autoSwitch: finalAutoSwitch,
     sessionId: sessionIdArg,
   };
 }

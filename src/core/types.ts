@@ -18,8 +18,8 @@ export interface CliOptions {
   interactive: boolean;
   /** Claude only: include subagent content in output (non-interactive mode) */
   withSubagents: boolean;
-  /** Claude only: super follow mode for interactive (auto switch to latest main session) */
-  super: boolean;
+  /** Claude only: auto-switch to latest main session in project */
+  autoSwitch: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
 }

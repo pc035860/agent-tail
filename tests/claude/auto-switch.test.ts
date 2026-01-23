@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { mkdtemp, writeFile, utimes, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { findLatestMainSessionInProject } from '../../src/claude/super-follow';
+import { findLatestMainSessionInProject } from '../../src/claude/auto-switch';
 
 describe('findLatestMainSessionInProject', () => {
   test('returns latest UUID.jsonl in project dir', async () => {

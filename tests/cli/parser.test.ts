@@ -153,26 +153,31 @@ describe('parseArgs', () => {
     // tested through the explicit option tests above.
   });
 
-  describe('super option', () => {
-    test('--super with --interactive sets super to true', () => {
+  describe('auto-switch option', () => {
+    test('--auto-switch with --interactive sets autoSwitch to true', () => {
       const options = parseArgs([
         'node',
         'agent-tail',
         'claude',
         '--interactive',
-        '--super',
+        '--auto-switch',
       ]);
       expect(options.interactive).toBe(true);
-      expect(options.super).toBe(true);
+      expect(options.autoSwitch).toBe(true);
     });
 
-    test('--super without --interactive is allowed', () => {
-      const options = parseArgs(['node', 'agent-tail', 'claude', '--super']);
-      expect(options.super).toBe(true);
+    test('--auto-switch without --interactive is allowed', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--auto-switch',
+      ]);
+      expect(options.autoSwitch).toBe(true);
       expect(options.interactive).toBe(false);
     });
 
-    test('--super with non-claude agent exits with error', () => {
+    test('--auto-switch with non-claude agent exits with error', () => {
       process.exit = ((code?: number) => {
         exitCode = code;
         throw new Error('process.exit called');
@@ -181,8 +186,46 @@ describe('parseArgs', () => {
       const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
       expect(() =>
-        parseArgs(['node', 'agent-tail', 'codex', '--interactive', '--super'])
+        parseArgs([
+          'node',
+          'agent-tail',
+          'codex',
+          '--interactive',
+          '--auto-switch',
+        ])
       ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('all preset option', () => {
+    test('--all expands to verbose, with-subagents, and auto-switch', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--all']);
+      expect(options.verbose).toBe(true);
+      expect(options.withSubagents).toBe(true);
+      expect(options.autoSwitch).toBe(true);
+    });
+
+    test('-a is alias for --all', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '-a']);
+      expect(options.verbose).toBe(true);
+      expect(options.withSubagents).toBe(true);
+      expect(options.autoSwitch).toBe(true);
+    });
+
+    test('--all with non-claude agent exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() => parseArgs(['node', 'agent-tail', 'codex', '--all'])).toThrow(
+        'process.exit called'
+      );
       expect(exitCode).toBe(1);
 
       consoleSpy.mockRestore();
