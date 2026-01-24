@@ -31,9 +31,14 @@ agent-tail codex -p myproject      # filter by project (fuzzy match)
 agent-tail gemini --no-follow      # don't follow, only show existing content
 agent-tail claude -v               # verbose mode (no truncation)
 
+# Output control options
+agent-tail claude -q               # quiet mode (suppress non-error messages)
+agent-tail claude -s 1000          # set polling interval to 1000ms (default: 500)
+agent-tail claude -n 20            # show last 20 lines initially (default: all)
+
 # Claude-specific options
-agent-tail claude -s               # tail latest subagent log
-agent-tail claude -s abc123        # tail specific subagent by ID
+agent-tail claude --subagent       # tail latest subagent log
+agent-tail claude --subagent abc123 # tail specific subagent by ID
 agent-tail claude -i               # interactive mode (Tab to switch sessions)
 agent-tail claude --with-subagents # include subagent content in output
 agent-tail claude --auto-switch    # auto-switch to latest main session in project

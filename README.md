@@ -127,10 +127,10 @@ Claude Code has additional features for monitoring subagents (background tasks s
 
 ```bash
 # Watch the latest subagent
-bun start claude -s
+bun start claude --subagent
 
 # Watch a specific subagent by ID
-bun start claude -s abc123
+bun start claude --subagent abc123
 ```
 
 ### Interactive Mode
@@ -197,7 +197,11 @@ Negation flags override the preset, giving you fine-grained control while keepin
 | `--verbose` | `-v` | Show full content without truncation |
 | `--no-verbose` | | Show truncated content (default) |
 | `--no-follow` | | Don't watch for new changes, just show existing content |
-| `--subagent [id]` | `-s` | Claude only: tail subagent log (latest if no ID) |
+| `--quiet` | `-q` | Suppress non-error output messages |
+| `--no-quiet` | | Show informational messages (default) |
+| `--sleep-interval <ms>` | `-s` | Set file polling interval (100-60000ms, default: 500) |
+| `--lines <number>` | `-n` | Number of initial lines to show per file (default: all) |
+| `--subagent [id]` | | Claude only: tail subagent log (latest if no ID) |
 | `--interactive` | `-i` | Claude only: interactive mode with Tab to switch sessions |
 | `--no-interactive` | | Disable interactive mode (default) |
 | `--with-subagents` | | Claude only: include subagent content in output |
