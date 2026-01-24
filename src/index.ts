@@ -35,6 +35,15 @@ import {
   NoOpSessionHandler,
 } from './claude/session-handlers.ts';
 
+/**
+ * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
+ */
+function log(quiet: boolean, ...args: unknown[]): void {
+  if (!quiet) {
+    console.log(...args);
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv);
 
@@ -58,7 +67,8 @@ async function main(): Promise<void> {
   // 判斷搜尋模式
   if (options.sessionId) {
     // 使用 sessionId 搜尋特定 session
-    console.log(
+    log(
+      options.quiet,
       chalk.gray(
         `Searching for ${options.agentType} session "${options.sessionId}"...`
       )
@@ -95,18 +105,25 @@ async function main(): Promise<void> {
       const claudeResult = result as ClaudeSessionResult;
       sessionFile = claudeResult.main;
       subagentFile = claudeResult.subagent || null;
-      console.log(chalk.green(`Found main session: ${sessionFile.path}`));
+      log(
+        options.quiet,
+        chalk.green(`Found main session: ${sessionFile.path}`)
+      );
       if (subagentFile) {
-        console.log(chalk.green(`Found subagent: ${subagentFile.path}`));
+        log(options.quiet, chalk.green(`Found subagent: ${subagentFile.path}`));
       }
     } else {
       sessionFile = result as SessionFile;
-      console.log(chalk.green(`Found: ${sessionFile.path}`));
+      log(options.quiet, chalk.green(`Found: ${sessionFile.path}`));
     }
-    console.log(chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
+    log(
+      options.quiet,
+      chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`)
+    );
   } else if (options.agentType === 'claude' && options.subagent !== undefined) {
     // Claude subagent 模式（使用 --subagent 選項）
-    console.log(
+    log(
+      options.quiet,
       chalk.gray(`Searching for latest ${options.agentType} subagent...`)
     );
 
@@ -131,11 +148,15 @@ async function main(): Promise<void> {
         process.exit(1);
       }
     }
-    console.log(chalk.green(`Found: ${sessionFile?.path}`));
-    console.log(chalk.gray(`Modified: ${sessionFile?.mtime.toLocaleString()}`));
+    log(options.quiet, chalk.green(`Found: ${sessionFile?.path}`));
+    log(
+      options.quiet,
+      chalk.gray(`Modified: ${sessionFile?.mtime.toLocaleString()}`)
+    );
   } else {
     // 預設模式：找最新的 session
-    console.log(
+    log(
+      options.quiet,
       chalk.gray(`Searching for latest ${options.agentType} session...`)
     );
 
@@ -152,8 +173,11 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    console.log(chalk.green(`Found: ${sessionFile.path}`));
-    console.log(chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
+    log(options.quiet, chalk.green(`Found: ${sessionFile.path}`));
+    log(
+      options.quiet,
+      chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`)
+    );
   }
 
   if (!sessionFile) {
@@ -256,10 +280,13 @@ async function startClaudeMultiWatch(
     }
 
     if (existingAgentIds.size > 0) {
-      console.log(chalk.gray(`Found ${existingAgentIds.size} subagent(s)`));
+      log(
+        options.quiet,
+        chalk.gray(`Found ${existingAgentIds.size} subagent(s)`)
+      );
     }
   }
-  console.log(chalk.gray('---'));
+  log(options.quiet, chalk.gray('---'));
 
   // 為每個來源建立獨立的 parser
   let parsers = new Map<string, LineParser>();
@@ -358,15 +385,19 @@ async function startClaudeMultiWatch(
       }
 
       if (newExistingAgentIds.size > 0) {
-        console.log(
+        log(
+          options.quiet,
           chalk.gray(`Found ${newExistingAgentIds.size} subagent(s)`)
         );
       }
     }
 
     // 輸出切換訊息
-    console.log(chalk.gray(`--- Switched to session ${newSessionId} ---`));
-    console.log(chalk.gray('---'));
+    log(
+      options.quiet,
+      chalk.gray(`--- Switched to session ${newSessionId} ---`)
+    );
+    log(options.quiet, chalk.gray('---'));
 
     // 重新建立 parsers
     const newParsers = new Map<string, LineParser>();
@@ -396,6 +427,8 @@ async function startClaudeMultiWatch(
     // 重新啟動監控
     await multiWatcher.start(newFiles, {
       follow: options.follow,
+      pollInterval: options.sleepInterval,
+      initialLines: options.lines,
       onLine: (line, label) => {
         let parser = parsers.get(label);
         if (!parser) {
@@ -498,6 +531,8 @@ async function startClaudeMultiWatch(
 
   await multiWatcher.start(files, {
     follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
     onLine: (line, label) => {
       let parser = parsers.get(label);
       if (!parser) {
@@ -555,7 +590,7 @@ async function startClaudeMultiWatch(
   startSuperFollow();
 
   // 保持程式運行
-  console.log(chalk.gray('Watching for changes... (Ctrl+C to stop)'));
+  log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
 }
 
 /**
@@ -747,12 +782,16 @@ async function startClaudeInteractiveWatch(
 
     if (showIntro) {
       if (existingAgentIds.size > 0) {
-        console.log(chalk.gray(`Found ${existingAgentIds.size} subagent(s)`));
+        log(
+          options.quiet,
+          chalk.gray(`Found ${existingAgentIds.size} subagent(s)`)
+        );
       }
-      console.log(
+      log(
+        options.quiet,
         chalk.gray('Interactive mode: Press Tab to switch, q to quit')
       );
-      console.log(chalk.gray('---'));
+      log(options.quiet, chalk.gray('---'));
     }
 
     // 為每個來源建立獨立的 parser
@@ -783,6 +822,8 @@ async function startClaudeInteractiveWatch(
 
     await multiWatcher.start(files, {
       follow: options.follow,
+      pollInterval: options.sleepInterval,
+      initialLines: options.lines,
       onLine: (line, label) => {
         let parser = parsers.get(label);
         if (!parser) {
@@ -981,7 +1022,7 @@ async function startClaudeInteractiveWatch(
     // 先清理 DisplayController（恢復終端設定）
     displayController.destroy();
     detector?.stop();
-    console.log(chalk.gray('\nStopping...'));
+    log(options.quiet, chalk.gray('\nStopping...'));
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
@@ -1011,13 +1052,13 @@ async function startSingleWatch(
   formatter: Formatter,
   options: CliOptions
 ): Promise<void> {
-  console.log(chalk.gray('---'));
+  log(options.quiet, chalk.gray('---'));
 
   const watcher = new FileWatcher();
 
   // 處理中斷信號
   process.on('SIGINT', () => {
-    console.log(chalk.gray('\nStopping...'));
+    log(options.quiet, chalk.gray('\nStopping...'));
     watcher.stop();
     process.exit(0);
   });
@@ -1025,6 +1066,8 @@ async function startSingleWatch(
   // 開始監控
   await watcher.start(sessionFile.path, {
     follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
     // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
     jsonMode: options.agentType === 'gemini',
     onLine: (line) => {
@@ -1055,7 +1098,7 @@ async function startSingleWatch(
   }
 
   // 保持程式運行
-  console.log(chalk.gray('Watching for changes... (Ctrl+C to stop)'));
+  log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
 }
 
 main().catch((error) => {

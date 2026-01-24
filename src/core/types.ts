@@ -12,6 +12,12 @@ export interface CliOptions {
   project?: string;
   follow: boolean;
   verbose: boolean;
+  /** Suppress non-error output messages */
+  quiet: boolean;
+  /** File polling interval in milliseconds (default: 500) */
+  sleepInterval: number;
+  /** Number of initial lines to show per file (default: all) */
+  lines?: number;
   /** Claude only: tail subagent log (true = latest, string = specific ID) */
   subagent?: string | true;
   /** Claude only: interactive mode for switching between main session and subagents */

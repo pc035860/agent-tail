@@ -21,9 +21,21 @@ function createProgram(): Command {
     .option('--no-follow', 'Do not follow, only output existing content')
     .option('-v, --verbose', 'Show full content without truncation')
     .option('--no-verbose', 'Show truncated content (default)')
+    .option('-q, --quiet', 'Suppress non-error output messages')
+    .option('--no-quiet', 'Show informational messages (default)')
     .option(
-      '-s, --subagent [id]',
+      '--subagent [id]',
       'Claude only: tail subagent log (latest if no ID)'
+    )
+    .option(
+      '-s, --sleep-interval <ms>',
+      'Set file polling interval in milliseconds (default: 500)',
+      parseInt
+    )
+    .option(
+      '-n, --lines <number>',
+      'Number of initial lines to show per file (default: all)',
+      parseInt
     )
     .option(
       '-i, --interactive',
@@ -141,12 +153,32 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // sleepInterval 驗證
+  if (
+    opts.sleepInterval !== undefined &&
+    (opts.sleepInterval < 100 || opts.sleepInterval > 60000)
+  ) {
+    console.error(
+      'Error: --sleep-interval must be between 100 and 60000 milliseconds.'
+    );
+    process.exit(1);
+  }
+
+  // lines 驗證
+  if (opts.lines !== undefined && Number.isNaN(opts.lines)) {
+    console.error('Error: --lines must be a valid number.');
+    process.exit(1);
+  }
+
   return {
     agentType: agentTypeArg as AgentType,
     raw: opts.raw,
     project: opts.project,
     follow: opts.follow,
     verbose: finalVerbose,
+    quiet: opts.quiet ?? false,
+    sleepInterval: opts.sleepInterval ?? 500,
+    lines: opts.lines,
     subagent: opts.subagent,
     interactive: finalInteractive,
     withSubagents: finalWithSubagents,

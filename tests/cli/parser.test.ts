@@ -34,11 +34,6 @@ describe('parseArgs', () => {
       expect(options.subagent).toBe(true);
     });
 
-    test('-s without value sets true', () => {
-      const options = parseArgs(['node', 'agent-tail', 'claude', '-s']);
-      expect(options.subagent).toBe(true);
-    });
-
     test('--subagent with value sets string', () => {
       const options = parseArgs([
         'node',
@@ -50,23 +45,12 @@ describe('parseArgs', () => {
       expect(options.subagent).toBe('abc1234');
     });
 
-    test('-s with value sets string', () => {
-      const options = parseArgs([
-        'node',
-        'agent-tail',
-        'claude',
-        '-s',
-        'abc1234',
-      ]);
-      expect(options.subagent).toBe('abc1234');
-    });
-
     test('--subagent combined with --project', () => {
       const options = parseArgs([
         'node',
         'agent-tail',
         'claude',
-        '-s',
+        '--subagent',
         '-p',
         'myproject',
       ]);
@@ -79,7 +63,7 @@ describe('parseArgs', () => {
         'node',
         'agent-tail',
         'claude',
-        '-s',
+        '--subagent',
         'abc1234',
         '-p',
         'myproject',
@@ -114,17 +98,74 @@ describe('parseArgs', () => {
 
       const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
-      expect(() => parseArgs(['node', 'agent-tail', 'gemini', '-s'])).toThrow(
-        'process.exit called'
-      );
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'gemini', '--subagent'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('sleep-interval option', () => {
+    test('--sleep-interval sets custom interval', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--sleep-interval',
+        '1000',
+      ]);
+      expect(options.sleepInterval).toBe(1000);
+    });
+
+    test('-s sets sleep interval', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '-s', '2000']);
+      expect(options.sleepInterval).toBe(2000);
+    });
+
+    test('defaults to 500ms', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude']);
+      expect(options.sleepInterval).toBe(500);
+    });
+
+    test('rejects interval below 100ms', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--sleep-interval', '50'])
+      ).toThrow('process.exit called');
       expect(exitCode).toBe(1);
 
       consoleSpy.mockRestore();
     });
 
-    // Note: Commander.js uses global state, so 'subagent is undefined' test
-    // is affected by previous tests that set --subagent.
-    // The functionality is tested by verifying --subagent sets values correctly.
+    test('rejects interval above 60000ms', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '-s', '70000'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--subagent without -s still works', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--subagent']);
+      expect(options.subagent).toBe(true);
+      expect(options.sleepInterval).toBe(500);
+    });
   });
 
   describe('other options', () => {
@@ -229,6 +270,51 @@ describe('parseArgs', () => {
       expect(exitCode).toBe(1);
 
       consoleSpy.mockRestore();
+    });
+  });
+
+  describe('lines option', () => {
+    test('--lines sets custom line count', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--lines',
+        '10',
+      ]);
+      expect(options.lines).toBe(10);
+    });
+
+    test('-n sets line count', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '-n', '20']);
+      expect(options.lines).toBe(20);
+    });
+
+    test('defaults to undefined', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude']);
+      expect(options.lines).toBeUndefined();
+    });
+  });
+
+  describe('quiet option', () => {
+    test('--quiet sets quiet to true', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--quiet']);
+      expect(options.quiet).toBe(true);
+    });
+
+    test('-q sets quiet to true', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '-q']);
+      expect(options.quiet).toBe(true);
+    });
+
+    test('--no-quiet sets quiet to false', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--no-quiet']);
+      expect(options.quiet).toBe(false);
+    });
+
+    test('quiet defaults to false', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude']);
+      expect(options.quiet).toBe(false);
     });
   });
 });

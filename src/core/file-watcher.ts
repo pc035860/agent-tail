@@ -7,6 +7,10 @@ export interface WatchOptions {
   onError?: (error: Error) => void;
   /** JSON 模式：不分割行，把整個檔案當作一個整體傳給 onLine */
   jsonMode?: boolean;
+  /** Polling interval in milliseconds (default: 500) */
+  pollInterval?: number;
+  /** Number of initial lines to show (default: all) */
+  initialLines?: number;
 }
 
 /**
@@ -25,6 +29,8 @@ export class FileWatcher {
   private isRestarting = false;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isPolling = false;
+  private pollInterval = 500;
+  private isFirstRead = true;
   // 競態條件防護：isProcessing 和 pending 標誌
   private isProcessing = false;
   private pendingRead = false;
@@ -36,6 +42,8 @@ export class FileWatcher {
     this.jsonMode = options.jsonMode || false;
     this.filePath = filePath;
     this.options = options;
+    this.pollInterval = options.pollInterval || 500;
+    this.isFirstRead = true;
 
     // 初始讀取現有內容（直接呼叫，不需排程）
     await this.readAndProcess(filePath, options.onLine);
@@ -114,13 +122,30 @@ export class FileWatcher {
         this.lastContentHash = contentHash;
       }
 
-      // 只處理新增的行
-      const newLines = lines.slice(this.processedLines);
-      for (const line of newLines) {
+      // 處理 initialLines 選項
+      let linesToProcess: string[];
+      if (this.isFirstRead && this.options?.initialLines !== undefined) {
+        const n = this.options.initialLines;
+
+        if (n < 0) {
+          linesToProcess = lines; // 負數：全部
+        } else if (n === 0) {
+          linesToProcess = []; // 零：無
+        } else if (n >= lines.length) {
+          linesToProcess = lines; // 超出：全部
+        } else {
+          linesToProcess = lines.slice(-n); // 正常：最後 N 行
+        }
+      } else {
+        linesToProcess = lines.slice(this.processedLines);
+      }
+
+      for (const line of linesToProcess) {
         onLine(line);
       }
 
       this.processedLines = lines.length;
+      this.isFirstRead = false;
       if (lines.length > 0) {
         this.lastContentHash = Bun.hash(content).toString();
       }
@@ -170,6 +195,7 @@ export class FileWatcher {
     // 檔案可能被原子替換，需重置狀態避免漏讀
     this.processedLines = 0;
     this.lastContentHash = '';
+    this.isFirstRead = false; // 重啟不算首次讀取
 
     // 使用 scheduleRead 避免與 polling 競態
     await this.scheduleRead();
@@ -200,7 +226,7 @@ export class FileWatcher {
       } catch {
         // ignore
       }
-    }, 500);
+    }, this.pollInterval);
   }
 
   private stopPolling(): void {
