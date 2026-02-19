@@ -4,6 +4,12 @@
   "type": "module",
   "license": "MIT",
   "description": "Tail agent session logs (Codex & Claude Code) in real-time",
+  "keywords": ["ai", "agent", "log", "tail", "claude", "codex", "gemini", "cli"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pc035860/agent-tail.git"
+  },
+  "homepage": "https://github.com/pc035860/agent-tail#readme",
   "bin": {
     "agent-tail": "./bin/agent-tail"
   },
@@ -15,7 +21,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "prepare": "husky"
+    "prepare": "husky",
+    "prepublishOnly": "bun run typecheck && bun run lint && bun test"
   },
   "lint-staged": {
     "*.ts": [
@@ -26,6 +33,9 @@
   "dependencies": {
     "commander": "^12.0.0",
     "chalk": "^5.3.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

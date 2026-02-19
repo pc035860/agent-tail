@@ -1,6 +1,5 @@
 import chalk from 'chalk';
 import { basename, dirname, join } from 'node:path';
-import { stat } from 'node:fs/promises';
 import { parseArgs } from './cli/parser.ts';
 import { FileWatcher } from './core/file-watcher.ts';
 import {
@@ -25,7 +24,6 @@ import {
   SubagentDetector,
   scanForNewSubagents,
 } from './claude/subagent-detector.ts';
-import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
 import {
   ConsoleOutputHandler,
   DisplayControllerOutputHandler,
@@ -34,6 +32,11 @@ import {
   InteractiveSessionHandler,
   NoOpSessionHandler,
 } from './claude/session-handlers.ts';
+import {
+  buildSubagentFiles,
+  createOnLineHandler,
+  createSuperFollowController,
+} from './claude/watch-builder.ts';
 
 /**
  * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
@@ -249,32 +252,10 @@ async function startClaudeMultiWatch(
       existingAgentIds.add(initialAgentId);
     }
 
-    // 取得現有 subagents 並按檔案建立時間排序（舊到新）
-    const existingSubagentFiles: Array<{
-      agentId: string;
-      path: string;
-      birthtime: Date;
-    }> = [];
-
-    for (const agentId of existingAgentIds) {
-      const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-      const subagentFile = Bun.file(subagentPath);
-      if (await subagentFile.exists()) {
-        const stats = await stat(subagentPath);
-        existingSubagentFiles.push({
-          agentId,
-          path: subagentPath,
-          birthtime: stats.birthtime,
-        });
-      }
-    }
-
-    // 按建立時間升序排序（最舊的先加入，輸出順序會是舊到新）
-    existingSubagentFiles.sort(
-      (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+    const existingSubagentFiles = await buildSubagentFiles(
+      subagentsDir,
+      existingAgentIds
     );
-
-    // 依排序後的順序加入
     for (const { agentId, path } of existingSubagentFiles) {
       files.push({ path, label: `[${agentId}]` });
     }
@@ -314,21 +295,7 @@ async function startClaudeMultiWatch(
   detector.startDirectoryWatch();
 
   // ========== Non-Interactive Super-Follow ==========
-  const SUPER_FOLLOW_POLL_MS = 500;
-  const SUPER_FOLLOW_DELAY_MS = 5000;
-  let superFollowStopped = false;
-  let pendingSwitchPath: string | null = null;
-  let pendingSwitchTimer: ReturnType<typeof setTimeout> | null = null;
-  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let currentSessionPath = sessionFile.path;
-
-  const clearPendingSwitch = (): void => {
-    if (pendingSwitchTimer) {
-      clearTimeout(pendingSwitchTimer);
-      pendingSwitchTimer = null;
-    }
-    pendingSwitchPath = null;
-  };
 
   const switchToSession = async (
     nextSessionFile: SessionFile
@@ -357,29 +324,10 @@ async function startClaudeMultiWatch(
         newExistingAgentIds.add(id);
       }
 
-      const existingSubagentFiles: Array<{
-        agentId: string;
-        path: string;
-        birthtime: Date;
-      }> = [];
-
-      for (const agentId of newExistingAgentIds) {
-        const subagentPath = join(newSubagentsDir, `agent-${agentId}.jsonl`);
-        const subagentFile = Bun.file(subagentPath);
-        if (await subagentFile.exists()) {
-          const stats = await stat(subagentPath);
-          existingSubagentFiles.push({
-            agentId,
-            path: subagentPath,
-            birthtime: stats.birthtime,
-          });
-        }
-      }
-
-      existingSubagentFiles.sort(
-        (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+      const existingSubagentFiles = await buildSubagentFiles(
+        newSubagentsDir,
+        newExistingAgentIds
       );
-
       for (const { agentId, path } of existingSubagentFiles) {
         newFiles.push({ path, label: `[${agentId}]` });
       }
@@ -429,100 +377,29 @@ async function startClaudeMultiWatch(
       follow: options.follow,
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
-      onLine: (line, label) => {
-        let parser = parsers.get(label);
-        if (!parser) {
-          const newAgent = new ClaudeAgent({ verbose: options.verbose });
-          parser = newAgent.parser;
-          parsers.set(label, parser);
-        }
-
-        let parsed = parser.parse(line);
-        while (parsed) {
-          parsed.sourceLabel = label;
-          console.log(formatter.format(parsed));
-
-          if (label === '[MAIN]' && parsed.isTaskToolUse) {
-            detector.handleEarlyDetection();
-          }
-
-          if (label === '[MAIN]') {
-            const raw = parsed.raw as {
-              toolUseResult?: {
-                agentId?: string;
-                commandName?: string;
-                status?: string;
-              };
-            };
-            const agentId = raw?.toolUseResult?.agentId;
-            const commandName = raw?.toolUseResult?.commandName;
-            const status = raw?.toolUseResult?.status;
-
-            if (agentId && !commandName && status !== 'forked') {
-              detector.handleFallbackDetection(agentId);
-            }
-          }
-
-          parsed = parser.parse(line);
-        }
-      },
+      onLine: createOnLineHandler({
+        parsers,
+        formatter,
+        detector,
+        onOutput: (formatted) => console.log(formatted),
+        verbose: options.verbose,
+      }),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
       },
     });
   };
 
-  const scheduleSwitch = (nextPath: string): void => {
-    if (pendingSwitchPath === nextPath) return;
-    pendingSwitchPath = nextPath;
-    if (pendingSwitchTimer) clearTimeout(pendingSwitchTimer);
+  const superFollow = createSuperFollowController({
+    projectDir,
+    getCurrentPath: () => currentSessionPath,
+    onSwitch: switchToSession,
+    autoSwitch: options.autoSwitch,
+  });
 
-    pendingSwitchTimer = setTimeout(async () => {
-      if (superFollowStopped || !pendingSwitchPath) return;
-      try {
-        const latest = await findLatestMainSessionInProject(projectDir);
-        if (
-          latest &&
-          latest.path === pendingSwitchPath &&
-          latest.path !== currentSessionPath
-        ) {
-          await switchToSession(latest);
-        }
-      } catch {
-        // ignore
-      } finally {
-        clearPendingSwitch();
-      }
-    }, SUPER_FOLLOW_DELAY_MS);
-  };
-
-  const startSuperFollow = (): void => {
-    if (!options.autoSwitch) return;
-
-    const poll = async (): Promise<void> => {
-      if (superFollowStopped) return;
-      try {
-        const latest = await findLatestMainSessionInProject(projectDir);
-        if (latest && latest.path !== currentSessionPath) {
-          scheduleSwitch(latest.path);
-        } else if (!latest) {
-          clearPendingSwitch();
-        }
-      } catch {
-        // ignore
-      } finally {
-        pollTimer = setTimeout(poll, SUPER_FOLLOW_POLL_MS);
-      }
-    };
-
-    poll();
-  };
-
-  // 處理中斷信號（需要移除後重新加入以支援 super-follow 清理）
+  // 處理中斷信號
   process.on('SIGINT', () => {
-    superFollowStopped = true;
-    clearPendingSwitch();
-    if (pollTimer) clearTimeout(pollTimer);
+    superFollow.stop();
     console.log(chalk.gray('\nStopping...'));
     detector?.stop();
     multiWatcher.stop();
@@ -533,49 +410,13 @@ async function startClaudeMultiWatch(
     follow: options.follow,
     pollInterval: options.sleepInterval,
     initialLines: options.lines,
-    onLine: (line, label) => {
-      let parser = parsers.get(label);
-      if (!parser) {
-        // 新來源，建立新 parser
-        const newAgent = new ClaudeAgent({ verbose: options.verbose });
-        parser = newAgent.parser;
-        parsers.set(label, parser);
-      }
-
-      let parsed = parser.parse(line);
-      while (parsed) {
-        // 設定來源標籤
-        parsed.sourceLabel = label;
-        console.log(formatter.format(parsed));
-
-        // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-        if (label === '[MAIN]' && parsed.isTaskToolUse) {
-          detector.handleEarlyDetection();
-        }
-
-        // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
-        // 注意：只處理 Task subagent，過濾掉 forked slash command（有 commandName 或 status === 'forked'）
-        if (label === '[MAIN]') {
-          const raw = parsed.raw as {
-            toolUseResult?: {
-              agentId?: string;
-              commandName?: string;
-              status?: string;
-            };
-          };
-          const agentId = raw?.toolUseResult?.agentId;
-          const commandName = raw?.toolUseResult?.commandName;
-          const status = raw?.toolUseResult?.status;
-
-          // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
-          if (agentId && !commandName && status !== 'forked') {
-            detector.handleFallbackDetection(agentId);
-          }
-        }
-
-        parsed = parser.parse(line);
-      }
-    },
+    onLine: createOnLineHandler({
+      parsers,
+      formatter,
+      detector,
+      onOutput: (formatted) => console.log(formatted),
+      verbose: options.verbose,
+    }),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
     },
@@ -587,7 +428,7 @@ async function startClaudeMultiWatch(
   }
 
   // 啟動 super-follow
-  startSuperFollow();
+  superFollow.start();
 
   // 保持程式運行
   log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
@@ -750,32 +591,10 @@ async function startClaudeInteractiveWatch(
       existingAgentIds.add(initialAgentId);
     }
 
-    // 取得現有 subagents 並按檔案建立時間排序（舊到新）
-    const existingSubagentFiles: Array<{
-      agentId: string;
-      path: string;
-      birthtime: Date;
-    }> = [];
-
-    for (const agentId of existingAgentIds) {
-      const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-      const subagentFile = Bun.file(subagentPath);
-      if (await subagentFile.exists()) {
-        const stats = await stat(subagentPath);
-        existingSubagentFiles.push({
-          agentId,
-          path: subagentPath,
-          birthtime: stats.birthtime,
-        });
-      }
-    }
-
-    // 按建立時間升序排序（最舊的先加入，會被推到右邊；最新的最後加入，留在 MAIN 旁邊）
-    existingSubagentFiles.sort(
-      (a, b) => a.birthtime.getTime() - b.birthtime.getTime()
+    const existingSubagentFiles = await buildSubagentFiles(
+      subagentsDir,
+      existingAgentIds
     );
-
-    // 依排序後的順序加入
     for (const { agentId, path } of existingSubagentFiles) {
       sessionManager.addSession(agentId, `[${agentId}]`, path);
     }
@@ -824,52 +643,14 @@ async function startClaudeInteractiveWatch(
       follow: options.follow,
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
-      onLine: (line, label) => {
-        let parser = parsers.get(label);
-        if (!parser) {
-          // 新來源，建立新 parser
-          const newAgent = new ClaudeAgent({ verbose: options.verbose });
-          parser = newAgent.parser;
-          parsers.set(label, parser);
-        }
-
-        let parsed = parser.parse(line);
-        while (parsed) {
-          // 設定來源標籤
-          parsed.sourceLabel = label;
-
-          // 使用 SessionManager 處理輸出（會根據 active 狀態決定輸出或緩衝）
-          const formattedOutput = formatter.format(parsed);
-          sessionManager.handleOutput(label, formattedOutput);
-
-          // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-          if (label === '[MAIN]' && parsed.isTaskToolUse) {
-            activeDetector.handleEarlyDetection();
-          }
-
-          // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
-          // 注意：只處理 Task subagent，過濾掉 forked slash command（有 commandName 或 status === 'forked'）
-          if (label === '[MAIN]') {
-            const raw = parsed.raw as {
-              toolUseResult?: {
-                agentId?: string;
-                commandName?: string;
-                status?: string;
-              };
-            };
-            const agentId = raw?.toolUseResult?.agentId;
-            const commandName = raw?.toolUseResult?.commandName;
-            const status = raw?.toolUseResult?.status;
-
-            // 只處理沒有 commandName 且不是 forked 的（真正的 Task subagent）
-            if (agentId && !commandName && status !== 'forked') {
-              activeDetector.handleFallbackDetection(agentId);
-            }
-          }
-
-          parsed = parser.parse(line);
-        }
-      },
+      onLine: createOnLineHandler({
+        parsers,
+        formatter,
+        detector: activeDetector,
+        onOutput: (formatted, label) =>
+          sessionManager.handleOutput(label, formatted),
+        verbose: options.verbose,
+      }),
       onError: (error) => {
         displayController.write(chalk.red(`Error: ${error.message}`));
       },
@@ -926,21 +707,6 @@ async function startClaudeInteractiveWatch(
 
   await startWatcher();
 
-  const SUPER_FOLLOW_POLL_MS = 500;
-  const SUPER_FOLLOW_DELAY_MS = 5000;
-  let superFollowStopped = false;
-  let pendingSwitchPath: string | null = null;
-  let pendingSwitchTimer: ReturnType<typeof setTimeout> | null = null;
-  let pollTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const clearPendingSwitch = (): void => {
-    if (pendingSwitchTimer) {
-      clearTimeout(pendingSwitchTimer);
-      pendingSwitchTimer = null;
-    }
-    pendingSwitchPath = null;
-  };
-
   const switchToSession = async (
     nextSessionFile: SessionFile
   ): Promise<void> => {
@@ -965,60 +731,18 @@ async function startClaudeInteractiveWatch(
     );
   };
 
-  const scheduleSwitch = (nextPath: string): void => {
-    if (pendingSwitchPath === nextPath) return;
-    pendingSwitchPath = nextPath;
-    if (pendingSwitchTimer) clearTimeout(pendingSwitchTimer);
+  const superFollow = createSuperFollowController({
+    projectDir: lockedProjectDir,
+    getCurrentPath: () => currentSessionFile.path,
+    onSwitch: switchToSession,
+    autoSwitch: options.autoSwitch,
+  });
 
-    pendingSwitchTimer = setTimeout(async () => {
-      if (superFollowStopped || !pendingSwitchPath) return;
-      try {
-        const latest = await findLatestMainSessionInProject(lockedProjectDir);
-        if (latest && latest.path === pendingSwitchPath) {
-          if (latest.path !== currentSessionFile.path) {
-            await switchToSession(latest);
-          }
-        }
-      } catch {
-        // ignore
-      } finally {
-        clearPendingSwitch();
-      }
-    }, SUPER_FOLLOW_DELAY_MS);
-  };
-
-  const startSuperFollow = (): void => {
-    if (!options.autoSwitch) return;
-
-    const poll = async (): Promise<void> => {
-      if (superFollowStopped) return;
-      try {
-        const latest = await findLatestMainSessionInProject(lockedProjectDir);
-        if (latest && latest.path !== currentSessionFile.path) {
-          scheduleSwitch(latest.path);
-        } else if (!latest) {
-          clearPendingSwitch();
-        }
-      } catch {
-        // ignore
-      } finally {
-        pollTimer = setTimeout(poll, SUPER_FOLLOW_POLL_MS);
-      }
-    };
-
-    poll();
-  };
-
-  startSuperFollow();
+  superFollow.start();
 
   // 清理函式
   const cleanup = (): void => {
-    superFollowStopped = true;
-    clearPendingSwitch();
-    if (pollTimer) {
-      clearTimeout(pollTimer);
-      pollTimer = null;
-    }
+    superFollow.stop();
     // 先清理 DisplayController（恢復終端設定）
     displayController.destroy();
     detector?.stop();

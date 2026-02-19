@@ -1,0 +1,12 @@
+tests/
+specs/
+.husky/
+*.test.ts
+tsconfig.json
+eslint.config.js
+prettier.config.js
+.prettierrc
+.eslintrc*
+bun.lock
+.prettierignore
+CLAUDE.md

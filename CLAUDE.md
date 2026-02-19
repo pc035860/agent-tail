@@ -30,6 +30,9 @@ agent-tail claude --raw            # output raw JSONL
 agent-tail codex -p myproject      # filter by project (fuzzy match)
 agent-tail gemini --no-follow      # don't follow, only show existing content
 agent-tail claude -v               # verbose mode (no truncation)
+agent-tail <agent-type> -q         # quiet mode (suppress non-error messages)
+agent-tail <agent-type> -n 50      # show only last 50 lines initially
+agent-tail <agent-type> -s 200     # set polling interval to 200ms
 
 # Output control options
 agent-tail claude -q               # quiet mode (suppress non-error messages)
@@ -67,7 +70,8 @@ src/
 │   ├── subagent-detector.ts  # Detect and monitor subagent sessions (with directory watch)
 │   ├── auto-switch.ts        # Find latest session in project for auto-switch mode
 │   ├── output-handlers.ts    # Output handler implementations (console, display controller)
-│   └── session-handlers.ts   # Session event handling
+│   ├── session-handlers.ts   # Session event handling
+│   └── watch-builder.ts      # Shared watch utilities (buildSubagentFiles, createOnLineHandler, createSuperFollowController)
 ├── interactive/
 │   └── display-controller.ts # Terminal UI for interactive mode (status line, history)
 ├── formatters/
@@ -90,6 +94,7 @@ src/
 - MultiFileWatcher manages multiple FileWatcher instances for subagent monitoring
 - SessionManager tracks session states and buffers for interactive mode switching
 - SubagentDetector handles early detection (Task tool_use) and fallback detection (toolUseResult)
+- WatchBuilder (`watch-builder.ts`) provides shared utilities (`buildSubagentFiles`, `createOnLineHandler`, `createSuperFollowController`) used by both multi-watch and interactive-watch modes
 - Formatters transform ParsedLine to output string (raw JSON or pretty colored)
 
 **Adding a New Agent:**
