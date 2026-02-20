@@ -5,7 +5,6 @@ import type { LineParser } from '../agents/agent.interface.ts';
 import type { Formatter } from '../formatters/formatter.interface.ts';
 import type { SessionFile } from '../core/types.ts';
 import type { SubagentDetector } from './subagent-detector.ts';
-import { findLatestMainSessionInProject } from './auto-switch.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
@@ -104,6 +103,8 @@ export interface SuperFollowControllerConfig {
   getCurrentPath: () => string;
   onSwitch: (nextFile: SessionFile) => Promise<void>;
   autoSwitch: boolean;
+  /** 注入的 session 搜尋函數（用於尋找專案中最新的 session） */
+  findLatestInProject: (projectDir: string) => Promise<SessionFile | null>;
 }
 
 /**
@@ -136,7 +137,7 @@ export function createSuperFollowController(
     pendingSwitchTimer = setTimeout(async () => {
       if (stopped || !pendingSwitchPath) return;
       try {
-        const latest = await findLatestMainSessionInProject(config.projectDir);
+        const latest = await config.findLatestInProject(config.projectDir);
         if (
           latest &&
           latest.path === pendingSwitchPath &&
@@ -158,7 +159,7 @@ export function createSuperFollowController(
     const poll = async (): Promise<void> => {
       if (stopped) return;
       try {
-        const latest = await findLatestMainSessionInProject(config.projectDir);
+        const latest = await config.findLatestInProject(config.projectDir);
         if (latest && latest.path !== config.getCurrentPath()) {
           scheduleSwitch(latest.path);
         } else if (!latest) {

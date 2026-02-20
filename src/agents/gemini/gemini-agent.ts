@@ -1,11 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type {
   ParsedLine,
   ParserOptions,
+  ProjectInfo,
   SessionFile,
 } from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
@@ -181,6 +182,75 @@ class GeminiSessionFinder implements SessionFinder {
     }
 
     return null;
+  }
+
+  /**
+   * 從 session 檔案取得專案資訊（用於 auto-switch）
+   * 1. 檢查父目錄的 .project_root 檔案
+   * 2. 若無 .project_root，使用目錄名稱作為識別
+   */
+  async getProjectInfo(sessionPath: string): Promise<ProjectInfo | null> {
+    // sessionPath: ~/.gemini/tmp/pos2/chats/session-xxx.json
+    // chatsDir: ~/.gemini/tmp/pos2/chats
+    // projectDir: ~/.gemini/tmp/pos2
+    const chatsDir = dirname(sessionPath);
+    const projectDir = dirname(chatsDir);
+
+    // 嘗試讀取 .project_root
+    const projectRootPath = join(projectDir, '.project_root');
+    const projectRootFile = Bun.file(projectRootPath);
+
+    if (await projectRootFile.exists()) {
+      try {
+        const cwd = (await projectRootFile.text()).trim();
+        return { projectDir, displayName: cwd };
+      } catch {
+        // 忽略讀取錯誤
+      }
+    }
+
+    // 無 .project_root，使用目錄名稱
+    const dirName = basename(projectDir);
+    return { projectDir, displayName: dirName };
+  }
+
+  /**
+   * 在指定專案目錄中找最新的 session（用於 auto-switch）
+   * @param projectDir - Gemini 專案目錄（如 ~/.gemini/tmp/pos2）
+   */
+  async findLatestInProject(projectDir: string): Promise<SessionFile | null> {
+    const chatsDir = join(projectDir, 'chats');
+    const glob = new Glob('session-*.json');
+    const files: { path: string; mtime: Date }[] = [];
+
+    try {
+      for await (const file of glob.scan({
+        cwd: chatsDir,
+        absolute: true,
+      })) {
+        try {
+          const stats = await stat(file);
+          files.push({ path: file, mtime: stats.mtime });
+        } catch {
+          // 忽略無法讀取的檔案
+        }
+      }
+    } catch {
+      // chats 目錄不存在
+      return null;
+    }
+
+    if (files.length === 0) return null;
+
+    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    const latest = files[0];
+    if (!latest) return null;
+
+    return {
+      path: latest.path,
+      mtime: latest.mtime,
+      agentType: 'gemini',
+    };
   }
 }
 

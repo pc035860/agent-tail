@@ -2,6 +2,7 @@ import type {
   AgentType,
   ClaudeSessionResult,
   ParsedLine,
+  ProjectInfo,
   SessionFile,
 } from '../core/types.ts';
 
@@ -40,6 +41,19 @@ export interface SessionFinder {
     sessionId: string,
     options: { project?: string }
   ): Promise<SessionFile | ClaudeSessionResult | null>;
+
+  /**
+   * 從 session 檔案取得專案資訊（用於 auto-switch）
+   * @param sessionPath - session 檔案路徑
+   * @returns 專案資訊，若無法識別則回傳 null
+   */
+  getProjectInfo?(sessionPath: string): Promise<ProjectInfo | null>;
+
+  /**
+   * 在指定專案範圍內找最新的 session（用於 auto-switch）
+   * @param projectDir - 專案目錄識別
+   */
+  findLatestInProject?(projectDir: string): Promise<SessionFile | null>;
 }
 
 /**

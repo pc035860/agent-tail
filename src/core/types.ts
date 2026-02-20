@@ -47,6 +47,16 @@ export interface SessionFile {
 }
 
 /**
+ * 專案資訊（用於 auto-switch）
+ */
+export interface ProjectInfo {
+  /** 專案目錄路徑（用於 session 搜尋範圍） */
+  projectDir: string;
+  /** 顯示名稱（用於日誌輸出） */
+  displayName?: string;
+}
+
+/**
  * Claude Session 查找結果（支援 subagent 關聯）
  * 當指定 subagent ID 時，會同時返回主 session 和 subagent
  */

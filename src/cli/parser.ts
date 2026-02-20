@@ -49,7 +49,7 @@ function createProgram(): Command {
     .option('--no-with-subagents', 'Exclude subagent content (default)')
     .option(
       '--auto-switch',
-      'Claude only: auto-switch to latest main session in project'
+      'Auto-switch to latest session in project (Claude/Gemini/Codex)'
     )
     .option('--no-auto-switch', 'Disable auto-switch (default)')
     .option(
@@ -141,14 +141,6 @@ export function parseArgs(args: string[]): CliOptions {
   if (finalWithSubagents && agentTypeArg !== 'claude') {
     console.error(
       'Error: --with-subagents option is only available for "claude" agent type.'
-    );
-    process.exit(1);
-  }
-
-  // autoSwitch 選項僅對 claude 有效
-  if (finalAutoSwitch && agentTypeArg !== 'claude') {
-    console.error(
-      'Error: --auto-switch option is only available for "claude" agent type.'
     );
     process.exit(1);
   }

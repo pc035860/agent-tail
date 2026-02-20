@@ -381,6 +381,7 @@ describe('createSuperFollowController', () => {
         pollCount++;
       },
       autoSwitch: false,
+      findLatestInProject: async () => null,
     });
 
     controller.start();
@@ -402,6 +403,7 @@ describe('createSuperFollowController', () => {
         switchCalled = true;
       },
       autoSwitch: true,
+      findLatestInProject: async () => null,
     });
 
     controller.start();

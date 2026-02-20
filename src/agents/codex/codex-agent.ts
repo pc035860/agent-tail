@@ -6,31 +6,54 @@ import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type {
   ParsedLine,
   ParserOptions,
+  ProjectInfo,
   SessionFile,
 } from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
+import { CodexSessionCache } from './session-cache.ts';
 
 /**
  * Codex Session Finder
  * 目錄結構: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
  */
 class CodexSessionFinder implements SessionFinder {
-  private baseDir: string;
+  private _baseDir: string;
+  private _cache: CodexSessionCache;
 
   constructor() {
-    this.baseDir = join(homedir(), '.codex', 'sessions');
+    this._baseDir = join(homedir(), '.codex', 'sessions');
+    this._cache = new CodexSessionCache(this._baseDir);
   }
 
   getBaseDir(): string {
-    return this.baseDir;
+    return this._baseDir;
+  }
+
+  /**
+   * 設定 baseDir（用於測試）
+   * 同時會重置 cache 使用新的目錄
+   */
+  setBaseDir(dir: string): void {
+    this._baseDir = dir;
+    this._cache = new CodexSessionCache(dir);
+  }
+
+  /**
+   * 取得 cache 實例（用於 findLatestInProject）
+   */
+  private get cache(): CodexSessionCache {
+    return this._cache;
   }
 
   async findLatest(options: { project?: string }): Promise<SessionFile | null> {
     const glob = new Glob('**/*.jsonl');
     const files: { path: string; mtime: Date }[] = [];
 
-    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
       // 只匹配 rollout-*.jsonl
       const filename = file.split('/').pop() || '';
       if (!filename.startsWith('rollout-')) continue;
@@ -80,7 +103,10 @@ class CodexSessionFinder implements SessionFinder {
     const ulidPattern =
       /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
       const filename = file.split('/').pop() || '';
       if (!filename.startsWith('rollout-')) continue;
 
@@ -155,6 +181,37 @@ class CodexSessionFinder implements SessionFinder {
       mtime: best.mtime,
       agentType: 'codex',
     };
+  }
+
+  /**
+   * 從 session 檔案取得專案資訊（用於 auto-switch）
+   * 解析 session_meta 取得 cwd
+   */
+  async getProjectInfo(sessionPath: string): Promise<ProjectInfo | null> {
+    try {
+      const content = await Bun.file(sessionPath).text();
+      const firstLine = content.split('\n')[0];
+      if (!firstLine) return null;
+
+      const meta = JSON.parse(firstLine);
+      if (meta.type === 'session_meta' && meta.payload?.cwd) {
+        return {
+          projectDir: meta.payload.cwd,
+          displayName: meta.payload.cwd,
+        };
+      }
+    } catch {
+      // 忽略解析錯誤
+    }
+    return null;
+  }
+
+  /**
+   * 在指定專案範圍內找最新的 session（用於 auto-switch）
+   * @param cwd - 專案目錄路徑
+   */
+  async findLatestInProject(cwd: string): Promise<SessionFile | null> {
+    return this.cache.getLatestByCwd(cwd);
   }
 }
 

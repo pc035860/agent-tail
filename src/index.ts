@@ -37,6 +37,7 @@ import {
   createOnLineHandler,
   createSuperFollowController,
 } from './claude/watch-builder.ts';
+import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
 
 /**
  * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
@@ -395,6 +396,7 @@ async function startClaudeMultiWatch(
     getCurrentPath: () => currentSessionPath,
     onSwitch: switchToSession,
     autoSwitch: options.autoSwitch,
+    findLatestInProject: findLatestMainSessionInProject,
   });
 
   // 處理中斷信號
@@ -736,6 +738,7 @@ async function startClaudeInteractiveWatch(
     getCurrentPath: () => currentSessionFile.path,
     onSwitch: switchToSession,
     autoSwitch: options.autoSwitch,
+    findLatestInProject: findLatestMainSessionInProject,
   });
 
   superFollow.start();
@@ -778,11 +781,87 @@ async function startSingleWatch(
 ): Promise<void> {
   log(options.quiet, chalk.gray('---'));
 
-  const watcher = new FileWatcher();
+  // 取得專案資訊（用於 auto-switch）
+  const projectInfo =
+    options.autoSwitch && agent.finder.getProjectInfo
+      ? await agent.finder.getProjectInfo(sessionFile.path)
+      : null;
+
+  let currentPath = sessionFile.path;
+  let watcher = new FileWatcher();
+
+  // 為 Gemini 準備可重建的 parser（避免狀態殘留）
+  // Codex parser 是無狀態的，不需要重建
+  let currentParser = agent.parser;
+
+  // 建立 onLine handler 函數（共用邏輯）
+  const createOnLineHandler =
+    (parser: LineParser) =>
+    (line: string): void => {
+      if (options.agentType === 'gemini') {
+        // Gemini 模式：parser 有狀態追蹤，每次只回傳一個部分
+        // 需要反覆呼叫直到沒有更多內容
+        let parsed = parser.parse(line);
+        while (parsed) {
+          console.log(formatter.format(parsed));
+          parsed = parser.parse(line);
+        }
+      } else {
+        // Codex JSONL 模式：每行一個事件，單次處理
+        const parsed = parser.parse(line);
+        if (parsed) {
+          console.log(formatter.format(parsed));
+        }
+      }
+    };
+
+  // 切換到新 session 的函數
+  const switchToSession = async (nextFile: SessionFile): Promise<void> => {
+    watcher.stop();
+    currentPath = nextFile.path;
+
+    log(
+      options.quiet,
+      chalk.gray(`--- Switched to ${basename(nextFile.path)} ---`)
+    );
+
+    // Gemini 需要重建 parser 以清除狀態（processedMessageIds 等）
+    if (options.agentType === 'gemini') {
+      const newAgent = new GeminiAgent({ verbose: options.verbose });
+      currentParser = newAgent.parser;
+    }
+
+    watcher = new FileWatcher();
+    await watcher.start(nextFile.path, {
+      follow: true,
+      pollInterval: options.sleepInterval,
+      initialLines: options.lines,
+      jsonMode: options.agentType === 'gemini',
+      onLine: createOnLineHandler(currentParser),
+      onError: (error) => {
+        console.error(chalk.red(`Error: ${error.message}`));
+      },
+    });
+  };
+
+  // 建立 super-follow 控制器（如果支援）
+  const superFollow =
+    options.autoSwitch && projectInfo && agent.finder.findLatestInProject
+      ? createSuperFollowController({
+          projectDir: projectInfo.projectDir,
+          getCurrentPath: () => currentPath,
+          onSwitch: switchToSession,
+          autoSwitch: true,
+          findLatestInProject: agent.finder.findLatestInProject.bind(
+            agent.finder
+          ),
+        })
+      : null;
 
   // 處理中斷信號
   process.on('SIGINT', () => {
     log(options.quiet, chalk.gray('\nStopping...'));
+    superFollow?.stop();
     watcher.stop();
     process.exit(0);
   });
@@ -794,23 +873,7 @@ async function startSingleWatch(
     initialLines: options.lines,
     // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
     jsonMode: options.agentType === 'gemini',
-    onLine: (line) => {
-      if (options.agentType === 'gemini') {
-        // Gemini 模式：parser 有狀態追蹤，每次只回傳一個部分
-        // 需要反覆呼叫直到沒有更多內容
-        let parsed = agent.parser.parse(line);
-        while (parsed) {
-          console.log(formatter.format(parsed));
-          parsed = agent.parser.parse(line);
-        }
-      } else {
-        // Codex JSONL 模式：每行一個事件，單次處理
-        const parsed = agent.parser.parse(line);
-        if (parsed) {
-          console.log(formatter.format(parsed));
-        }
-      }
-    },
+    onLine: createOnLineHandler(currentParser),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
     },
@@ -820,6 +883,9 @@ async function startSingleWatch(
   if (!options.follow) {
     process.exit(0);
   }
+
+  // 啟動 super-follow（如果啟用）
+  superFollow?.start();
 
   // 保持程式運行
   log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
