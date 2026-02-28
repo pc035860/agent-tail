@@ -46,6 +46,8 @@ export interface OnLineHandlerConfig {
   detector: SubagentDetector;
   onOutput: (formatted: string, label: string) => void;
   verbose: boolean;
+  /** 過濾函數：回傳 true 表示應該輸出，false 表示跳過（Phase 2.3） */
+  shouldOutput?: (label: string) => boolean;
 }
 
 /**
@@ -65,6 +67,13 @@ export function createOnLineHandler(
     let parsed = parser.parse(line);
     while (parsed) {
       parsed.sourceLabel = label;
+
+      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
+      if (config.shouldOutput && !config.shouldOutput(label)) {
+        parsed = parser.parse(line);
+        continue;
+      }
+
       config.onOutput(config.formatter.format(parsed), label);
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描

@@ -434,6 +434,14 @@ async function startClaudeMultiWatch(
         detector,
         onOutput: (formatted) => console.log(formatted),
         verbose: options.verbose,
+        // Phase 2.3: 過濾已有 pane 的 subagent 輸出
+        shouldOutput: paneManager
+          ? (label) => {
+              if (label === '[MAIN]') return true;
+              const agentId = label.slice(1, -1);
+              return !paneManager!.hasPaneForAgent(agentId);
+            }
+          : undefined,
       }),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
@@ -470,6 +478,14 @@ async function startClaudeMultiWatch(
       detector,
       onOutput: (formatted) => console.log(formatted),
       verbose: options.verbose,
+      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
+      shouldOutput: paneManager
+        ? (label) => {
+            if (label === '[MAIN]') return true; // 主 session 永遠輸出
+            const agentId = label.slice(1, -1); // 移除 '[' 和 ']'
+            return !paneManager!.hasPaneForAgent(agentId); // 沒有 pane 才輸出
+          }
+        : undefined,
     }),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));

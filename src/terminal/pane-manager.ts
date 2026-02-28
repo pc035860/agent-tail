@@ -99,4 +99,11 @@ export class PaneManager {
   get activePaneCount(): number {
     return this.panes.size;
   }
+
+  /**
+   * 檢查指定 agentId 是否有對應的 pane
+   */
+  hasPaneForAgent(agentId: string): boolean {
+    return this.panes.has(agentId);
+  }
 }
