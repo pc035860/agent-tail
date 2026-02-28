@@ -41,6 +41,7 @@ agent-tail claude -i               # interactive mode (Tab to switch sessions)
 agent-tail claude --with-subagents # include subagent content in output
 agent-tail claude -a               # show all content (verbose + subagents + auto-switch)
 agent-tail claude --all            # same as -a
+agent-tail claude --pane           # auto-open tmux pane for each new subagent
 
 # Super Follow (auto-switch to latest session in project)
 agent-tail claude --auto-switch    # Claude: project-based
@@ -74,6 +75,13 @@ src/
 │   └── watch-builder.ts      # Shared utilities (buildSubagentFiles, createSuperFollowController)
 ├── interactive/
 │   └── display-controller.ts # Terminal UI for interactive mode (status line, history)
+├── terminal/                 # Terminal pane management (tmux, future iTerm2)
+│   ├── terminal-controller.interface.ts  # TerminalController interface
+│   ├── tmux-controller.ts    # Tmux implementation (split-window, kill-pane)
+│   ├── null-controller.ts    # No-op fallback when no terminal detected
+│   ├── controller-factory.ts # Auto-detect terminal environment
+│   └── pane-manager.ts       # Pane lifecycle manager (open/close/closeAll, max 6 panes)
+│                             # Phase 4 will add iTerm2 support
 ├── formatters/
 │   ├── formatter.interface.ts
 │   ├── raw-formatter.ts
@@ -96,6 +104,7 @@ src/
 - **Super Follow** (`createSuperFollowController`): Auto-switch to latest session, configurable per-agent via `findLatestInProject` callback
 - **Codex Session Cache**: Cwd-indexed cache with 2s incremental refresh (scans today's directory only)
 - Formatters transform ParsedLine to output string (raw JSON or pretty colored)
+- **Pane auto-open** (`--pane`): Uses `SubagentDetector.onNewSubagent` hook → `PaneManager` → `TerminalController` to open tmux panes for each new subagent. Requires tmux environment.
 
 **Adding Super Follow to a New Agent:**
 1. Implement `getProjectInfo(sessionPath)` - Return `{ projectDir, displayName }` for the session
@@ -106,6 +115,9 @@ src/
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
 - **`Bun.file(dir).exists()` returns false for directories**. Use `stat(dir)` instead.
 - **Codex cache only scans "today"** for incremental refresh. Cross-midnight sessions handled on next startup.
+- **Subagent ID length varies**: Claude Code subagent filenames use 7-40 hex chars (`agent-[0-9a-f]{7,40}.jsonl`), not fixed 7. Regex must accommodate this.
+- **`--pane` mutual exclusions**: Cannot combine with `--interactive` or `--subagent`. Requires `--follow` mode. Auto-enables `--with-subagents`.
+- **PaneManager command builder** uses `process.argv[0]` and `process.argv[1]` to reconstruct the CLI command, supporting bun run, npx, and global install scenarios.
 
 ## Code Quality
 

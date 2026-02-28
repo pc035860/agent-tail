@@ -264,9 +264,8 @@ agent-tail claude --pane                # 啟動 pane 自動管理（Phase 2 自
 - `SubagentDetectorConfig` 加 `onNewSubagentPane` hook
 - `SIGINT` 清理
 
-### Phase 2：iTerm2
+### Phase 2：tmux 佈局與生命週期
 
-- `Iterm2Controller`：偵測 `it2` CLI → Python API，fallback → osascript
 - pane 自動佈局：每次開新 pane 後執行 `tmux select-layout main-vertical`（主左、subagent 堆右均分）
 - subagent 結束後自動關閉 pane
 - `--pane` 模式下主窗格不重複輸出已開 pane 的 subagent 內容
@@ -277,6 +276,11 @@ agent-tail claude --pane                # 啟動 pane 自動管理（Phase 2 自
 - tmux Control Mode (-CC) 雙向通訊
 - pane 狀態指示（借鑑 tmux-agent-indicator）
 - 與 `--auto-switch` 搭配：主 session 切換後 subagent pane 也跟著更新
+
+### Phase 4：iTerm2 支援
+
+- `Iterm2Controller`：偵測 `it2` CLI → Python API，fallback → osascript
+- 環境偵測整合至 `controller-factory.ts`
 
 ---
 
