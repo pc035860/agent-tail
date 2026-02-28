@@ -319,6 +319,19 @@ async function startClaudeMultiWatch(
       }
     : undefined;
 
+  // 建立 onSubagentDone 回呼（pane 自動關閉）
+  const onSubagentDone = paneManager
+    ? (agentId: string) => {
+        log(options.quiet, chalk.gray(`[pane] Closing pane for ${agentId}...`));
+        paneManager!.closePaneByAgentId(agentId).catch((err) => {
+          log(
+            options.quiet,
+            chalk.yellow(`[pane] Failed to close pane: ${err}`)
+          );
+        });
+      }
+    : undefined;
+
   // 建立 SubagentDetector（整合 early detection 和 fallback detection）
   let detector = new SubagentDetector(existingAgentIds, {
     subagentsDir,
@@ -327,6 +340,7 @@ async function startClaudeMultiWatch(
     session: new NoOpSessionHandler(),
     enabled: options.follow && options.withSubagents,
     onNewSubagent,
+    onSubagentDone,
   });
   detector.startDirectoryWatch();
 

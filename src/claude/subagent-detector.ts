@@ -70,6 +70,8 @@ export interface SubagentDetectorConfig {
   watchDir?: boolean;
   /** 新 subagent 偵測時的回呼（用於 pane 自動開啟等） */
   onNewSubagent?: (agentId: string, subagentPath: string) => void;
+  /** Subagent 完成時的回呼（用於 pane 自動關閉等） */
+  onSubagentDone?: (agentId: string) => void;
 }
 
 // ============================================================
@@ -309,10 +311,15 @@ export class SubagentDetector {
       return;
     }
 
+    // 檢查是否已經監控中（用於判斷是否需要輸出訊息）
+    const isAlreadyMonitored = this.knownAgentIds.has(agentId);
+
     this.registerNewAgent(
       agentId,
       FALLBACK_DETECTION_RETRY,
-      `New subagent detected: ${agentId}`
+      isAlreadyMonitored
+        ? `Subagent completed: ${agentId}`
+        : `New subagent detected (completed): ${agentId}`
     );
 
     // toolUseResult 表示 subagent 已完成
@@ -321,6 +328,9 @@ export class SubagentDetector {
       this.config.output.debug(`Subagent completed: ${agentId}`);
     }
     this.config.session?.updateUI?.();
+
+    // ✨ 新增：觸發 onSubagentDone 回呼（pane 自動關閉等用途）
+    this.config.onSubagentDone?.(agentId);
   }
 
   /**

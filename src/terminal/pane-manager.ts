@@ -78,6 +78,22 @@ export class PaneManager {
   }
 
   /**
+   * 根據 agentId 關閉對應的 pane
+   * Best-effort 操作，失敗不影響核心功能
+   */
+  async closePaneByAgentId(agentId: string): Promise<void> {
+    const pane = this.panes.get(agentId);
+    if (!pane) return;
+
+    try {
+      await this.controller.closePane(pane.id);
+      this.panes.delete(agentId);
+    } catch {
+      // 靜默忽略關閉失敗（pane 可能已經關閉）
+    }
+  }
+
+  /**
    * 目前開啟的 pane 數量
    */
   get activePaneCount(): number {
