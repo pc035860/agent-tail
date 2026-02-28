@@ -202,10 +202,7 @@ this.config.onNewSubagentPane?.(agentId, subagentPath);
 ### CLI
 
 ```bash
-agent-tail claude --pane                # 啟動 pane 自動管理
-agent-tail claude --pane --layout h     # 水平分割（預設）
-agent-tail claude --pane --layout v     # 垂直分割
-agent-tail claude --pane --max-panes 4  # 最多 4 個 pane
+agent-tail claude --pane                # 啟動 pane 自動管理（Phase 2 自動 main-vertical 佈局）
 ```
 
 `--pane` 與 `-i`（interactive mode）互斥。
@@ -270,8 +267,9 @@ agent-tail claude --pane --max-panes 4  # 最多 4 個 pane
 ### Phase 2：iTerm2
 
 - `Iterm2Controller`：偵測 `it2` CLI → Python API，fallback → osascript
-- pane 佈局策略、max pane 限制
+- pane 自動佈局：每次開新 pane 後執行 `tmux select-layout main-vertical`（主左、subagent 堆右均分）
 - subagent 結束後自動關閉 pane
+- `--pane` 模式下主窗格不重複輸出已開 pane 的 subagent 內容
 
 ### Phase 3：進階功能
 

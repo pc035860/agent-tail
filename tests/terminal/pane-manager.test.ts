@@ -9,7 +9,7 @@ import type {
 // Mock Helpers
 // ============================================================
 
-const defaultCommandBuilder = (agentId: string) =>
+const defaultCommandBuilder = (agentId: string, _path: string) =>
   `agent-tail claude --subagent ${agentId}`;
 
 function createMockController(): TerminalController & {
@@ -49,7 +49,7 @@ describe('PaneManager', () => {
       const controller = createMockController();
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
 
       expect(controller.createdPanes).toHaveLength(1);
       expect(controller.createdPanes[0]!.agentId).toBe('abc1234');
@@ -61,8 +61,8 @@ describe('PaneManager', () => {
       const controller = createMockController();
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234');
-      await manager.openPane('abc1234');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
 
       expect(controller.createdPanes).toHaveLength(1);
       expect(manager.activePaneCount).toBe(1);
@@ -72,8 +72,8 @@ describe('PaneManager', () => {
       const controller = createMockController();
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234');
-      await manager.openPane('def5678');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
+      await manager.openPane('def5678', '/path/to/agent-def5678.jsonl');
 
       expect(controller.createdPanes).toHaveLength(2);
       expect(manager.activePaneCount).toBe(2);
@@ -84,7 +84,7 @@ describe('PaneManager', () => {
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
       for (let i = 0; i < 8; i++) {
-        await manager.openPane(`agent${i}`);
+        await manager.openPane(`agent${i}`, `/path/to/agent-agent${i}.jsonl`);
       }
 
       expect(controller.createdPanes).toHaveLength(6);
@@ -107,7 +107,7 @@ describe('PaneManager', () => {
 
       // Fire 8 concurrent openPane calls
       const promises = Array.from({ length: 8 }, (_, i) =>
-        manager.openPane(`agent${i}`)
+        manager.openPane(`agent${i}`, `/path/to/agent-agent${i}.jsonl`)
       );
       await Promise.all(promises);
 
@@ -120,7 +120,7 @@ describe('PaneManager', () => {
       controller.shouldFail = true;
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
 
       expect(controller.createdPanes).toHaveLength(1);
       expect(manager.activePaneCount).toBe(0); // not tracked since creation failed
@@ -132,8 +132,8 @@ describe('PaneManager', () => {
       const controller = createMockController();
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234');
-      await manager.openPane('def5678');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
+      await manager.openPane('def5678', '/path/to/agent-def5678.jsonl');
       expect(manager.activePaneCount).toBe(2);
 
       await manager.closeAll();
@@ -153,8 +153,8 @@ describe('PaneManager', () => {
       };
 
       const manager = new PaneManager(controller, defaultCommandBuilder);
-      await manager.openPane('abc1234');
-      await manager.openPane('def5678');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
+      await manager.openPane('def5678', '/path/to/agent-def5678.jsonl');
 
       // Should not throw even if one close fails
       await expect(manager.closeAll()).resolves.toBeUndefined();
@@ -165,7 +165,7 @@ describe('PaneManager', () => {
       const controller = createMockController();
       const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234');
+      await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl');
       await manager.closeAll();
       await manager.closeAll();
 

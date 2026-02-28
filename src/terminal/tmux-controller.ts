@@ -18,26 +18,13 @@ export class TmuxController implements TerminalController {
 
   async createPane(command: string, agentId: string): Promise<PaneInfo | null> {
     try {
-      const args = [
-        'tmux',
-        'split-window',
-        '-h',
-        '-d',
-        '-P',
-        '-F',
-        '#{pane_id}',
-        command,
-      ];
-      console.error(`[tmux-debug] spawn: ${args.join(' ')}`);
-      const proc = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe' });
+      const proc = Bun.spawn(
+        ['tmux', 'split-window', '-h', '-d', '-P', '-F', '#{pane_id}', command],
+        { stdout: 'pipe', stderr: 'pipe' }
+      );
 
       const output = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
-
-      console.error(
-        `[tmux-debug] exit=${exitCode} stdout="${output.trim()}" stderr="${stderr.trim()}"`
-      );
 
       if (exitCode !== 0) {
         return null;
@@ -47,8 +34,7 @@ export class TmuxController implements TerminalController {
       if (!paneId) return null;
 
       return { id: paneId, agentId };
-    } catch (err) {
-      console.error(`[tmux-debug] exception: ${err}`);
+    } catch {
       // tmux 指令失敗（binary 不存在等情況）
       return null;
     }

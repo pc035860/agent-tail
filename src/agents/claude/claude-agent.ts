@@ -98,8 +98,8 @@ class ClaudeSessionFinder implements SessionFinder {
     for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
       const filename = file.split('/').pop() || '';
 
-      // 驗證 subagent 檔名格式: agent-{7位十六進制}.jsonl
-      const subagentPattern = /^agent-[0-9a-f]{7}\.jsonl$/i;
+      // 驗證 subagent 檔名格式: agent-{7~40位十六進制}.jsonl
+      const subagentPattern = /^agent-[0-9a-f]{7,40}\.jsonl$/i;
       if (!subagentPattern.test(filename)) continue;
 
       // project filter
@@ -296,7 +296,7 @@ class ClaudeSessionFinder implements SessionFinder {
     const glob = new Glob('**/*/subagents/agent-*.jsonl');
     const candidates: { path: string; mtime: Date; priority: number }[] = [];
 
-    const subagentPattern = /^agent-([0-9a-f]{7})\.jsonl$/i;
+    const subagentPattern = /^agent-([0-9a-f]{7,40})\.jsonl$/i;
 
     for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
       const filename = file.split('/').pop() || '';

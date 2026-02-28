@@ -14,14 +14,14 @@ const MAX_PANES = 6;
  */
 export class PaneManager {
   private controller: TerminalController;
-  private commandBuilder: (agentId: string) => string;
+  private commandBuilder: (agentId: string, subagentPath: string) => string;
   private panes: Map<string, PaneInfo> = new Map(); // agentId -> PaneInfo
   /** 正在開啟中的 agentId（防止併發超開） */
   private pendingAgentIds: Set<string> = new Set();
 
   constructor(
     controller: TerminalController,
-    commandBuilder: (agentId: string) => string
+    commandBuilder: (agentId: string, subagentPath: string) => string
   ) {
     this.controller = controller;
     this.commandBuilder = commandBuilder;
@@ -33,28 +33,15 @@ export class PaneManager {
    * - 超過 MAX_PANES 時跳過（安全上限）
    * - 使用 pendingAgentIds 防止併發呼叫超開
    */
-  async openPane(agentId: string): Promise<void> {
-    if (this.panes.has(agentId)) {
-      console.error(`[pane-debug] skip: already has pane for ${agentId}`);
-      return;
-    }
-    if (this.pendingAgentIds.has(agentId)) {
-      console.error(`[pane-debug] skip: pending for ${agentId}`);
-      return;
-    }
-    if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) {
-      console.error(`[pane-debug] skip: MAX_PANES reached`);
-      return;
-    }
+  async openPane(agentId: string, subagentPath: string): Promise<void> {
+    if (this.panes.has(agentId)) return;
+    if (this.pendingAgentIds.has(agentId)) return;
+    if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
 
     this.pendingAgentIds.add(agentId);
     try {
-      const cmd = this.commandBuilder(agentId);
-      console.error(`[pane-debug] createPane cmd: ${cmd}`);
+      const cmd = this.commandBuilder(agentId, subagentPath);
       const pane = await this.controller.createPane(cmd, agentId);
-      console.error(
-        `[pane-debug] createPane result: ${pane ? `id=${pane.id}` : 'null'}`
-      );
       if (pane) {
         this.panes.set(agentId, pane);
       }

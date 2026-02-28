@@ -292,10 +292,10 @@ async function startClaudeMultiWatch(
   if (options.pane) {
     const controller = createTerminalController();
     if (controller.isAvailable()) {
-      paneManager = new PaneManager(controller, (agentId) => {
+      paneManager = new PaneManager(controller, (agentId, _subagentPath) => {
         // 使用當前執行方式重建指令（支援 bun run、npx、全域安裝等）
-        const runtime = process.argv[0]; // e.g. /path/to/bun
-        const script = process.argv[1]; // e.g. /path/to/src/index.ts
+        const runtime = process.argv[0];
+        const script = process.argv[1];
         return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
       });
     } else {
@@ -308,9 +308,9 @@ async function startClaudeMultiWatch(
 
   // 建立 onNewSubagent 回呼（pane 自動開啟）
   const onNewSubagent = paneManager
-    ? (agentId: string, _subagentPath: string) => {
+    ? (agentId: string, subagentPath: string) => {
         log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
-        paneManager!.openPane(agentId).catch((err) => {
+        paneManager!.openPane(agentId, subagentPath).catch((err) => {
           log(
             options.quiet,
             chalk.yellow(`[pane] Failed to open pane: ${err}`)
