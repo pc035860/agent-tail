@@ -14,12 +14,17 @@ const MAX_PANES = 6;
  */
 export class PaneManager {
   private controller: TerminalController;
+  private commandBuilder: (agentId: string) => string;
   private panes: Map<string, PaneInfo> = new Map(); // agentId -> PaneInfo
   /** 正在開啟中的 agentId（防止併發超開） */
   private pendingAgentIds: Set<string> = new Set();
 
-  constructor(controller: TerminalController) {
+  constructor(
+    controller: TerminalController,
+    commandBuilder: (agentId: string) => string
+  ) {
     this.controller = controller;
+    this.commandBuilder = commandBuilder;
   }
 
   /**
@@ -28,14 +33,14 @@ export class PaneManager {
    * - 超過 MAX_PANES 時跳過（安全上限）
    * - 使用 pendingAgentIds 防止併發呼叫超開
    */
-  async openPane(agentId: string, _subagentPath: string): Promise<void> {
+  async openPane(agentId: string): Promise<void> {
     if (this.panes.has(agentId)) return;
     if (this.pendingAgentIds.has(agentId)) return;
     if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
 
     this.pendingAgentIds.add(agentId);
     try {
-      const cmd = this.buildCommand(agentId);
+      const cmd = this.commandBuilder(agentId);
       const pane = await this.controller.createPane(cmd, agentId);
       if (pane) {
         this.panes.set(agentId, pane);
@@ -61,15 +66,5 @@ export class PaneManager {
    */
   get activePaneCount(): number {
     return this.panes.size;
-  }
-
-  /**
-   * 建構 pane 中執行的指令
-   *
-   * 已知限制：假設 agent-tail 在 PATH 中（全域安裝或 npx）。
-   * 如果使用 bun run 方式執行，pane 中的指令可能失敗。
-   */
-  private buildCommand(agentId: string): string {
-    return `agent-tail claude --subagent ${agentId} -q`;
   }
 }

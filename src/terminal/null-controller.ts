@@ -25,8 +25,4 @@ export class NullController implements TerminalController {
   async closePane(_paneId: string): Promise<void> {
     // no-op
   }
-
-  async closeAllPanes(): Promise<void> {
-    // no-op
-  }
 }

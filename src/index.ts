@@ -292,7 +292,10 @@ async function startClaudeMultiWatch(
   if (options.pane) {
     const controller = createTerminalController();
     if (controller.isAvailable()) {
-      paneManager = new PaneManager(controller);
+      paneManager = new PaneManager(
+        controller,
+        (agentId) => `agent-tail claude --subagent ${agentId}`
+      );
     } else {
       log(
         options.quiet,
@@ -303,8 +306,8 @@ async function startClaudeMultiWatch(
 
   // 建立 onNewSubagent 回呼（pane 自動開啟）
   const onNewSubagent = paneManager
-    ? (agentId: string, subagentPath: string) => {
-        paneManager!.openPane(agentId, subagentPath);
+    ? (agentId: string, _subagentPath: string) => {
+        paneManager!.openPane(agentId);
       }
     : undefined;
 

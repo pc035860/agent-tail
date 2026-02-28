@@ -51,12 +51,4 @@ export class TmuxController implements TerminalController {
       // 靜默忽略（pane 可能已經關閉）
     }
   }
-
-  /**
-   * No-op: TmuxController 是 stateless 的，
-   * 由 PaneManager 負責追蹤和逐一關閉。
-   */
-  async closeAllPanes(): Promise<void> {
-    // no-op
-  }
 }

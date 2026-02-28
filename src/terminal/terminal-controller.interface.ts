@@ -20,6 +20,4 @@ export interface TerminalController {
   createPane(command: string, agentId: string): Promise<PaneInfo | null>;
   /** 關閉指定 pane */
   closePane(paneId: string): Promise<void>;
-  /** 關閉所有已追蹤的 pane */
-  closeAllPanes(): Promise<void>;
 }

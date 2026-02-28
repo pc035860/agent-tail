@@ -57,11 +57,4 @@ describe('TmuxController', () => {
       ).resolves.toBeUndefined();
     });
   });
-
-  describe('closeAllPanes', () => {
-    test('is a no-op (stateless controller)', async () => {
-      const controller = new TmuxController();
-      await expect(controller.closeAllPanes()).resolves.toBeUndefined();
-    });
-  });
 });

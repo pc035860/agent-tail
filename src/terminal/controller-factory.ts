@@ -12,8 +12,7 @@ import { NullController } from './null-controller.ts';
  * Phase 2 將加入 iTerm2 支援。
  */
 export function createTerminalController(): TerminalController {
-  if (process.env.TMUX) {
-    return new TmuxController();
-  }
+  const tmux = new TmuxController();
+  if (tmux.isAvailable()) return tmux;
   return new NullController();
 }

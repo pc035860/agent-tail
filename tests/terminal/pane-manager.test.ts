@@ -9,10 +9,12 @@ import type {
 // Mock Helpers
 // ============================================================
 
+const defaultCommandBuilder = (agentId: string) =>
+  `agent-tail claude --subagent ${agentId}`;
+
 function createMockController(): TerminalController & {
   createdPanes: { command: string; agentId: string }[];
   closedPanes: string[];
-  closeAllCalled: number;
   shouldFail: boolean;
 } {
   let paneCounter = 0;
@@ -20,7 +22,6 @@ function createMockController(): TerminalController & {
     name: 'mock',
     createdPanes: [],
     closedPanes: [],
-    closeAllCalled: 0,
     shouldFail: false,
     isAvailable: () => true,
     createPane: async function (
@@ -35,9 +36,6 @@ function createMockController(): TerminalController & {
     closePane: async function (paneId: string): Promise<void> {
       this.closedPanes.push(paneId);
     },
-    closeAllPanes: async function (): Promise<void> {
-      this.closeAllCalled++;
-    },
   };
 }
 
@@ -49,9 +47,9 @@ describe('PaneManager', () => {
   describe('openPane', () => {
     test('creates a pane via controller', async () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234', '/path/to/subagent');
+      await manager.openPane('abc1234');
 
       expect(controller.createdPanes).toHaveLength(1);
       expect(controller.createdPanes[0]!.agentId).toBe('abc1234');
@@ -61,10 +59,10 @@ describe('PaneManager', () => {
 
     test('deduplicates by agentId', async () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234', '/path/to/subagent');
-      await manager.openPane('abc1234', '/path/to/subagent');
+      await manager.openPane('abc1234');
+      await manager.openPane('abc1234');
 
       expect(controller.createdPanes).toHaveLength(1);
       expect(manager.activePaneCount).toBe(1);
@@ -72,10 +70,10 @@ describe('PaneManager', () => {
 
     test('allows different agentIds', async () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234', '/path1');
-      await manager.openPane('def5678', '/path2');
+      await manager.openPane('abc1234');
+      await manager.openPane('def5678');
 
       expect(controller.createdPanes).toHaveLength(2);
       expect(manager.activePaneCount).toBe(2);
@@ -83,10 +81,10 @@ describe('PaneManager', () => {
 
     test('respects MAX_PANES cap (6)', async () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
       for (let i = 0; i < 8; i++) {
-        await manager.openPane(`agent${i}`, `/path/${i}`);
+        await manager.openPane(`agent${i}`);
       }
 
       expect(controller.createdPanes).toHaveLength(6);
@@ -105,11 +103,11 @@ describe('PaneManager', () => {
         return originalCreatePane(command, agentId);
       };
 
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
       // Fire 8 concurrent openPane calls
       const promises = Array.from({ length: 8 }, (_, i) =>
-        manager.openPane(`agent${i}`, `/path/${i}`)
+        manager.openPane(`agent${i}`)
       );
       await Promise.all(promises);
 
@@ -120,9 +118,9 @@ describe('PaneManager', () => {
     test('handles controller failure gracefully', async () => {
       const controller = createMockController();
       controller.shouldFail = true;
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234', '/path');
+      await manager.openPane('abc1234');
 
       expect(controller.createdPanes).toHaveLength(1);
       expect(manager.activePaneCount).toBe(0); // not tracked since creation failed
@@ -132,10 +130,10 @@ describe('PaneManager', () => {
   describe('closeAll', () => {
     test('closes all tracked panes', async () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234', '/path1');
-      await manager.openPane('def5678', '/path2');
+      await manager.openPane('abc1234');
+      await manager.openPane('def5678');
       expect(manager.activePaneCount).toBe(2);
 
       await manager.closeAll();
@@ -154,9 +152,9 @@ describe('PaneManager', () => {
         return originalClosePane.call(this, paneId);
       };
 
-      const manager = new PaneManager(controller);
-      await manager.openPane('abc1234', '/path1');
-      await manager.openPane('def5678', '/path2');
+      const manager = new PaneManager(controller, defaultCommandBuilder);
+      await manager.openPane('abc1234');
+      await manager.openPane('def5678');
 
       // Should not throw even if one close fails
       await expect(manager.closeAll()).resolves.toBeUndefined();
@@ -165,9 +163,9 @@ describe('PaneManager', () => {
 
     test('is idempotent', async () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
 
-      await manager.openPane('abc1234', '/path1');
+      await manager.openPane('abc1234');
       await manager.closeAll();
       await manager.closeAll();
 
@@ -179,7 +177,7 @@ describe('PaneManager', () => {
   describe('activePaneCount', () => {
     test('starts at 0', () => {
       const controller = createMockController();
-      const manager = new PaneManager(controller);
+      const manager = new PaneManager(controller, defaultCommandBuilder);
       expect(manager.activePaneCount).toBe(0);
     });
   });
