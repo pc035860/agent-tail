@@ -26,6 +26,8 @@ export interface CliOptions {
   withSubagents: boolean;
   /** Claude only: auto-switch to latest main session in project */
   autoSwitch: boolean;
+  /** Claude only: auto-open tmux pane for each new subagent */
+  pane: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
 }

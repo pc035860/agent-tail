@@ -56,7 +56,9 @@ function createProgram(): Command {
       '-a, --all',
       'Claude only: show all content (verbose + with-subagents + auto-switch)',
       false
-    );
+    )
+    .option('--pane', 'Claude only: auto-open tmux pane for each new subagent')
+    .option('--no-pane', 'Disable pane auto-open (default)');
 
   return program;
 }
@@ -110,8 +112,9 @@ export function parseArgs(args: string[]): CliOptions {
   // 將 undefined 轉換為 false（對於非 preset 選項）
   const finalVerbose = opts.verbose ?? false;
   const finalInteractive = opts.interactive ?? false;
-  const finalWithSubagents = opts.withSubagents ?? false;
+  let finalWithSubagents = opts.withSubagents ?? false;
   const finalAutoSwitch = opts.autoSwitch ?? false;
+  const finalPane = opts.pane ?? false;
 
   // interactive 選項僅對 claude 有效
   if (finalInteractive && agentTypeArg !== 'claude') {
@@ -135,6 +138,35 @@ export function parseArgs(args: string[]): CliOptions {
       'Error: --interactive requires --follow mode (cannot use with --no-follow).'
     );
     process.exit(1);
+  }
+
+  // pane 選項僅對 claude 有效
+  if (finalPane && agentTypeArg !== 'claude') {
+    console.error(
+      'Error: --pane option is only available for "claude" agent type.'
+    );
+    process.exit(1);
+  }
+
+  // pane 和 interactive 互斥
+  if (finalPane && finalInteractive) {
+    console.error(
+      'Error: --pane and --interactive options cannot be used together.'
+    );
+    process.exit(1);
+  }
+
+  // pane 需要 follow 模式
+  if (finalPane && !opts.follow) {
+    console.error(
+      'Error: --pane requires --follow mode (cannot use with --no-follow).'
+    );
+    process.exit(1);
+  }
+
+  // pane 自動啟用 withSubagents（subagent 偵測必須啟用才能開 pane）
+  if (finalPane && !finalWithSubagents) {
+    finalWithSubagents = true;
   }
 
   // withSubagents 選項僅對 claude 有效
@@ -175,6 +207,7 @@ export function parseArgs(args: string[]): CliOptions {
     interactive: finalInteractive,
     withSubagents: finalWithSubagents,
     autoSwitch: finalAutoSwitch,
+    pane: finalPane,
     sessionId: sessionIdArg,
   };
 }

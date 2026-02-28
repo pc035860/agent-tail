@@ -68,6 +68,8 @@ export interface SubagentDetectorConfig {
   enabled: boolean;
   /** 是否啟用目錄監控（預設 true） */
   watchDir?: boolean;
+  /** 新 subagent 偵測時的回呼（用於 pane 自動開啟等） */
+  onNewSubagent?: (agentId: string, subagentPath: string) => void;
 }
 
 // ============================================================
@@ -424,6 +426,9 @@ export class SubagentDetector {
 
     if (this.config.enabled) {
       this.config.output.warn(message);
+
+      // 觸發 onNewSubagent 回呼（pane 自動開啟等用途）
+      this.config.onNewSubagent?.(agentId, subagentPath);
 
       // 非阻塞式新增檔案監控
       const timer = setTimeout(() => {

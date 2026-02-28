@@ -38,6 +38,8 @@ import {
   createSuperFollowController,
 } from './claude/watch-builder.ts';
 import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
+import { createTerminalController } from './terminal/controller-factory.ts';
+import { PaneManager } from './terminal/pane-manager.ts';
 
 /**
  * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
@@ -285,6 +287,27 @@ async function startClaudeMultiWatch(
 
   let multiWatcher = new MultiFileWatcher();
 
+  // 建立 PaneManager（--pane 模式時自動開啟 tmux pane）
+  let paneManager: PaneManager | null = null;
+  if (options.pane) {
+    const controller = createTerminalController();
+    if (controller.isAvailable()) {
+      paneManager = new PaneManager(controller);
+    } else {
+      log(
+        options.quiet,
+        chalk.yellow('Warning: tmux not detected, --pane disabled')
+      );
+    }
+  }
+
+  // 建立 onNewSubagent 回呼（pane 自動開啟）
+  const onNewSubagent = paneManager
+    ? (agentId: string, subagentPath: string) => {
+        paneManager!.openPane(agentId, subagentPath);
+      }
+    : undefined;
+
   // 建立 SubagentDetector（整合 early detection 和 fallback detection）
   let detector = new SubagentDetector(existingAgentIds, {
     subagentsDir,
@@ -292,6 +315,7 @@ async function startClaudeMultiWatch(
     watcher: { addFile: (f) => multiWatcher.addFile(f) },
     session: new NoOpSessionHandler(),
     enabled: options.follow && options.withSubagents,
+    onNewSubagent,
   });
   detector.startDirectoryWatch();
 
@@ -359,13 +383,14 @@ async function startClaudeMultiWatch(
     // 重新建立 multiWatcher（先建立，但還不啟動）
     const newMultiWatcher = new MultiFileWatcher();
 
-    // 重新建立 detector（捕獲新的 multiWatcher）
+    // 重新建立 detector（捕獲新的 multiWatcher，沿用 paneManager）
     const newDetector = new SubagentDetector(newExistingAgentIds, {
       subagentsDir: newSubagentsDir,
       output: new ConsoleOutputHandler(),
       watcher: { addFile: (f) => newMultiWatcher.addFile(f) },
       session: new NoOpSessionHandler(),
       enabled: options.follow && options.withSubagents,
+      onNewSubagent,
     });
     newDetector.startDirectoryWatch();
 
@@ -405,6 +430,8 @@ async function startClaudeMultiWatch(
     console.log(chalk.gray('\nStopping...'));
     detector?.stop();
     multiWatcher.stop();
+    // best-effort 清理所有 pane（async 但不等待，因為即將 exit）
+    paneManager?.closeAll();
     process.exit(0);
   });
 
