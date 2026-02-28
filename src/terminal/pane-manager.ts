@@ -44,6 +44,8 @@ export class PaneManager {
       const pane = await this.controller.createPane(cmd, agentId);
       if (pane) {
         this.panes.set(agentId, pane);
+        // 每次開新 pane 後重新計算佈局
+        await this.applyLayout();
       }
     } finally {
       this.pendingAgentIds.delete(agentId);
@@ -59,6 +61,20 @@ export class PaneManager {
     );
     await Promise.all(closePromises);
     this.panes.clear();
+  }
+
+  /**
+   * 套用佈局（如果 controller 支援）
+   * Best-effort 操作，失敗不影響核心功能
+   */
+  private async applyLayout(): Promise<void> {
+    if (this.controller.applyLayout) {
+      try {
+        await this.controller.applyLayout('main-vertical');
+      } catch {
+        // 靜默忽略佈局失敗
+      }
+    }
   }
 
   /**

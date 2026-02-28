@@ -20,4 +20,8 @@ export interface TerminalController {
   createPane(command: string, agentId: string): Promise<PaneInfo | null>;
   /** 關閉指定 pane */
   closePane(paneId: string): Promise<void>;
+  /** 套用佈局（可選方法，tmux 專用） */
+  applyLayout?(
+    type?: 'main-vertical' | 'main-horizontal' | 'tiled'
+  ): Promise<void>;
 }

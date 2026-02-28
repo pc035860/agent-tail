@@ -51,4 +51,22 @@ export class TmuxController implements TerminalController {
       // 靜默忽略（pane 可能已經關閉）
     }
   }
+
+  /**
+   * 套用佈局（main-vertical：主左、subagent 堆右均分）
+   * Best-effort 操作，失敗不影響 pane 建立
+   */
+  async applyLayout(
+    type: 'main-vertical' | 'main-horizontal' | 'tiled' = 'main-vertical'
+  ): Promise<void> {
+    try {
+      const proc = Bun.spawn(['tmux', 'select-layout', type], {
+        stdout: 'ignore',
+        stderr: 'ignore',
+      });
+      await proc.exited;
+    } catch {
+      // 靜默忽略佈局失敗（best-effort）
+    }
+  }
 }
