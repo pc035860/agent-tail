@@ -15,6 +15,8 @@ const MAX_PANES = 6;
 export class PaneManager {
   private controller: TerminalController;
   private panes: Map<string, PaneInfo> = new Map(); // agentId -> PaneInfo
+  /** 正在開啟中的 agentId（防止併發超開） */
+  private pendingAgentIds: Set<string> = new Set();
 
   constructor(controller: TerminalController) {
     this.controller = controller;
@@ -24,15 +26,22 @@ export class PaneManager {
    * 為 subagent 開啟新 pane
    * - 已存在相同 agentId 的 pane 時跳過（去重）
    * - 超過 MAX_PANES 時跳過（安全上限）
+   * - 使用 pendingAgentIds 防止併發呼叫超開
    */
   async openPane(agentId: string, _subagentPath: string): Promise<void> {
     if (this.panes.has(agentId)) return;
-    if (this.panes.size >= MAX_PANES) return;
+    if (this.pendingAgentIds.has(agentId)) return;
+    if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
 
-    const cmd = this.buildCommand(agentId);
-    const pane = await this.controller.createPane(cmd, agentId);
-    if (pane) {
-      this.panes.set(agentId, pane);
+    this.pendingAgentIds.add(agentId);
+    try {
+      const cmd = this.buildCommand(agentId);
+      const pane = await this.controller.createPane(cmd, agentId);
+      if (pane) {
+        this.panes.set(agentId, pane);
+      }
+    } finally {
+      this.pendingAgentIds.delete(agentId);
     }
   }
 

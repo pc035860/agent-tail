@@ -317,4 +317,85 @@ describe('parseArgs', () => {
       expect(options.quiet).toBe(false);
     });
   });
+
+  describe('pane option', () => {
+    test('--pane sets pane to true', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--pane']);
+      expect(options.pane).toBe(true);
+    });
+
+    test('pane defaults to false', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude']);
+      expect(options.pane).toBe(false);
+    });
+
+    test('--pane auto-enables withSubagents', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--pane']);
+      expect(options.withSubagents).toBe(true);
+    });
+
+    test('--pane with non-claude agent exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'codex', '--pane'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--pane with --interactive exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--pane', '--interactive'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--pane with --subagent exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--pane', '--subagent'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--pane with --no-follow exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--pane', '--no-follow'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
 });

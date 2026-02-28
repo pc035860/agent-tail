@@ -93,6 +93,30 @@ describe('PaneManager', () => {
       expect(manager.activePaneCount).toBe(6);
     });
 
+    test('prevents concurrent openPane from exceeding MAX_PANES', async () => {
+      const controller = createMockController();
+      // Add a small delay to simulate async createPane
+      const originalCreatePane = controller.createPane.bind(controller);
+      controller.createPane = async function (
+        command: string,
+        agentId: string
+      ): Promise<PaneInfo | null> {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return originalCreatePane(command, agentId);
+      };
+
+      const manager = new PaneManager(controller);
+
+      // Fire 8 concurrent openPane calls
+      const promises = Array.from({ length: 8 }, (_, i) =>
+        manager.openPane(`agent${i}`, `/path/${i}`)
+      );
+      await Promise.all(promises);
+
+      // Should not exceed MAX_PANES (6) even with concurrency
+      expect(manager.activePaneCount).toBeLessThanOrEqual(6);
+    });
+
     test('handles controller failure gracefully', async () => {
       const controller = createMockController();
       controller.shouldFail = true;

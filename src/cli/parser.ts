@@ -156,6 +156,14 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
+  // pane 和 subagent 互斥（pane 在多檔案監控模式，subagent 在單檔案模式）
+  if (finalPane && opts.subagent !== undefined) {
+    console.error(
+      'Error: --pane and --subagent options cannot be used together.'
+    );
+    process.exit(1);
+  }
+
   // pane 需要 follow 模式
   if (finalPane && !opts.follow) {
     console.error(
