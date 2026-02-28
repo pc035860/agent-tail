@@ -341,6 +341,9 @@ async function startClaudeMultiWatch(
     enabled: options.follow && options.withSubagents,
     onNewSubagent,
     onSubagentDone,
+    hasPane: paneManager
+      ? (agentId) => paneManager!.hasPaneForAgent(agentId)
+      : undefined,
   });
   detector.startDirectoryWatch();
 
@@ -416,6 +419,10 @@ async function startClaudeMultiWatch(
       session: new NoOpSessionHandler(),
       enabled: options.follow && options.withSubagents,
       onNewSubagent,
+      onSubagentDone, // Phase 2.2: 保留自動關閉功能
+      hasPane: paneManager
+        ? (agentId) => paneManager!.hasPaneForAgent(agentId)
+        : undefined,
     });
     newDetector.startDirectoryWatch();
 

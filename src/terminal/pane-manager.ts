@@ -18,6 +18,8 @@ export class PaneManager {
   private panes: Map<string, PaneInfo> = new Map(); // agentId -> PaneInfo
   /** 正在開啟中的 agentId（防止併發超開） */
   private pendingAgentIds: Set<string> = new Set();
+  /** 待關閉的 agentId（pane 還在 pending 時就收到 done 事件） */
+  private pendingCloseAgentIds: Set<string> = new Set();
 
   constructor(
     controller: TerminalController,
@@ -46,7 +48,20 @@ export class PaneManager {
         this.panes.set(agentId, pane);
         // 每次開新 pane 後重新計算佈局
         await this.applyLayout();
+
+        // 檢查是否在 pending 期間收到了 done 事件
+        if (this.pendingCloseAgentIds.has(agentId)) {
+          this.pendingCloseAgentIds.delete(agentId);
+          // 立刻關閉這個 pane
+          await this.closePaneByAgentId(agentId);
+        }
+      } else {
+        // createPane 失敗，清除待關閉狀態（沒有 pane 就不需要關閉）
+        this.pendingCloseAgentIds.delete(agentId);
       }
+    } catch {
+      // 非預期錯誤（如 commandBuilder throw），清理所有相關狀態
+      this.pendingCloseAgentIds.delete(agentId);
     } finally {
       this.pendingAgentIds.delete(agentId);
     }
@@ -61,6 +76,7 @@ export class PaneManager {
     );
     await Promise.all(closePromises);
     this.panes.clear();
+    this.pendingCloseAgentIds.clear();
   }
 
   /**
@@ -80,16 +96,25 @@ export class PaneManager {
   /**
    * 根據 agentId 關閉對應的 pane
    * Best-effort 操作，失敗不影響核心功能
+   * 如果 pane 還在 pending，會標記為待關閉，等 pane 建立後自動關閉
    */
   async closePaneByAgentId(agentId: string): Promise<void> {
+    // 如果 pane 還在開啟中，標記為待關閉
+    if (this.pendingAgentIds.has(agentId) && !this.panes.has(agentId)) {
+      this.pendingCloseAgentIds.add(agentId);
+      return;
+    }
+
     const pane = this.panes.get(agentId);
     if (!pane) return;
 
     try {
       await this.controller.closePane(pane.id);
-      this.panes.delete(agentId);
     } catch {
       // 靜默忽略關閉失敗（pane 可能已經關閉）
+    } finally {
+      // 無論成功或失敗，都清除 map 狀態，避免污染
+      this.panes.delete(agentId);
     }
   }
 
@@ -101,9 +126,10 @@ export class PaneManager {
   }
 
   /**
-   * 檢查指定 agentId 是否有對應的 pane
+   * 檢查指定 agentId 是否有對應的 pane（包含 pending 狀態）
+   * 用於判斷是否需要觸發 onSubagentDone
    */
   hasPaneForAgent(agentId: string): boolean {
-    return this.panes.has(agentId);
+    return this.panes.has(agentId) || this.pendingAgentIds.has(agentId);
   }
 }

@@ -72,6 +72,8 @@ export interface SubagentDetectorConfig {
   onNewSubagent?: (agentId: string, subagentPath: string) => void;
   /** Subagent 完成時的回呼（用於 pane 自動關閉等） */
   onSubagentDone?: (agentId: string) => void;
+  /** 檢查 agentId 是否有對應的 pane（用於判斷是否需要關閉） */
+  hasPane?: (agentId: string) => boolean;
 }
 
 // ============================================================
@@ -311,16 +313,46 @@ export class SubagentDetector {
       return;
     }
 
-    // 檢查是否已經監控中（用於判斷是否需要輸出訊息）
+    // 檢查是否已經監控中
     const isAlreadyMonitored = this.knownAgentIds.has(agentId);
 
-    this.registerNewAgent(
-      agentId,
-      FALLBACK_DETECTION_RETRY,
-      isAlreadyMonitored
-        ? `Subagent completed: ${agentId}`
-        : `New subagent detected (completed): ${agentId}`
-    );
+    if (isAlreadyMonitored) {
+      // 已經監控中，表示之前透過 early detection 發現過
+      // 輸出完成訊息，觸發 onSubagentDone（關閉 pane）
+      this.config.output.warn(`Subagent completed: ${agentId}`);
+    } else {
+      // 首次發現且已完成：不開 pane，只註冊監控
+      this.knownAgentIds.add(agentId);
+
+      const subagentPath = join(
+        this.config.subagentsDir,
+        `agent-${agentId}.jsonl`
+      );
+
+      // Session 處理（Interactive 模式）
+      this.config.session?.addSession?.(agentId, `[${agentId}]`, subagentPath);
+
+      if (this.config.enabled) {
+        this.config.output.warn(
+          `New subagent detected (completed): ${agentId}`
+        );
+
+        // 非阻塞式新增檔案監控（但不觸發 onNewSubagent，因為已完成）
+        const timer = setTimeout(() => {
+          this.pendingTimers.delete(timer);
+          if (!this.isWatching) return;
+
+          tryAddSubagentFile(
+            subagentPath,
+            agentId,
+            this.config.watcher,
+            this.config.output,
+            FALLBACK_DETECTION_RETRY
+          );
+        }, FALLBACK_DETECTION_RETRY.initialDelay);
+        this.pendingTimers.add(timer);
+      }
+    }
 
     // toolUseResult 表示 subagent 已完成
     if (this.config.session?.markSessionDone) {
@@ -329,8 +361,10 @@ export class SubagentDetector {
     }
     this.config.session?.updateUI?.();
 
-    // ✨ 新增：觸發 onSubagentDone 回呼（pane 自動關閉等用途）
-    this.config.onSubagentDone?.(agentId);
+    // 只有已監控的（有開 pane 的）才需要觸發 onSubagentDone
+    if (isAlreadyMonitored && this.config.hasPane?.(agentId)) {
+      this.config.onSubagentDone?.(agentId);
+    }
   }
 
   /**
