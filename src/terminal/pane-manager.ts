@@ -34,14 +34,27 @@ export class PaneManager {
    * - 使用 pendingAgentIds 防止併發呼叫超開
    */
   async openPane(agentId: string): Promise<void> {
-    if (this.panes.has(agentId)) return;
-    if (this.pendingAgentIds.has(agentId)) return;
-    if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
+    if (this.panes.has(agentId)) {
+      console.error(`[pane-debug] skip: already has pane for ${agentId}`);
+      return;
+    }
+    if (this.pendingAgentIds.has(agentId)) {
+      console.error(`[pane-debug] skip: pending for ${agentId}`);
+      return;
+    }
+    if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) {
+      console.error(`[pane-debug] skip: MAX_PANES reached`);
+      return;
+    }
 
     this.pendingAgentIds.add(agentId);
     try {
       const cmd = this.commandBuilder(agentId);
+      console.error(`[pane-debug] createPane cmd: ${cmd}`);
       const pane = await this.controller.createPane(cmd, agentId);
+      console.error(
+        `[pane-debug] createPane result: ${pane ? `id=${pane.id}` : 'null'}`
+      );
       if (pane) {
         this.panes.set(agentId, pane);
       }
