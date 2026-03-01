@@ -1,6 +1,6 @@
 import { Glob } from 'bun';
 import { watch, type FSWatcher } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { WatchedFile } from '../core/multi-file-watcher.ts';
 
 // ============================================================
@@ -93,6 +93,38 @@ export const FALLBACK_DETECTION_RETRY: RetryConfig = {
   retryDelay: 100,
   initialDelay: 100,
 };
+
+// ============================================================
+// Constants & Label Utilities
+// ============================================================
+
+/** 主 session 的標籤常數 */
+export const MAIN_LABEL = '[MAIN]';
+
+/** 從 agentId 建立標籤（例如 '[abc1234]'） */
+export function makeAgentLabel(agentId: string): string {
+  return `[${agentId}]`;
+}
+
+/** 從標籤提取 agentId（例如 '[abc1234]' -> 'abc1234'） */
+export function extractAgentIdFromLabel(label: string): string {
+  return label.slice(1, -1);
+}
+
+/** 建立 subagent 檔案路徑 */
+export function buildSubagentPath(
+  subagentsDir: string,
+  agentId: string
+): string {
+  return join(subagentsDir, `agent-${agentId}.jsonl`);
+}
+
+/** 從 session 檔案路徑推導 subagents 目錄 */
+export function getSubagentsDir(sessionFilePath: string): string {
+  const projectDir = dirname(sessionFilePath);
+  const sessionId = basename(sessionFilePath, '.jsonl');
+  return join(projectDir, sessionId, 'subagents');
+}
 
 // ============================================================
 // Utility Functions
@@ -198,7 +230,7 @@ export async function tryAddSubagentFile(
       if (await file.exists()) {
         await watcher.addFile({
           path: subagentPath,
-          label: `[${agentId}]`,
+          label: makeAgentLabel(agentId),
         });
         return true;
       } else if (retriesLeft > 0) {
@@ -324,13 +356,14 @@ export class SubagentDetector {
       // 首次發現且已完成：不開 pane，只註冊監控
       this.knownAgentIds.add(agentId);
 
-      const subagentPath = join(
-        this.config.subagentsDir,
-        `agent-${agentId}.jsonl`
-      );
+      const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
 
       // Session 處理（Interactive 模式）
-      this.config.session?.addSession?.(agentId, `[${agentId}]`, subagentPath);
+      this.config.session?.addSession?.(
+        agentId,
+        makeAgentLabel(agentId),
+        subagentPath
+      );
 
       if (this.config.enabled) {
         this.config.output.warn(
@@ -338,19 +371,22 @@ export class SubagentDetector {
         );
 
         // 非阻塞式新增檔案監控（但不觸發 onNewSubagent，因為已完成）
-        const timer = setTimeout(() => {
-          this.pendingTimers.delete(timer);
-          if (!this.isWatching) return;
+        // 只在 directory watch 已啟動時才建立 timer，避免孤立 timer 洩漏
+        if (this.isWatching) {
+          const timer = setTimeout(() => {
+            this.pendingTimers.delete(timer);
+            if (!this.isWatching) return;
 
-          tryAddSubagentFile(
-            subagentPath,
-            agentId,
-            this.config.watcher,
-            this.config.output,
-            FALLBACK_DETECTION_RETRY
-          );
-        }, FALLBACK_DETECTION_RETRY.initialDelay);
-        this.pendingTimers.add(timer);
+            tryAddSubagentFile(
+              subagentPath,
+              agentId,
+              this.config.watcher,
+              this.config.output,
+              FALLBACK_DETECTION_RETRY
+            );
+          }, FALLBACK_DETECTION_RETRY.initialDelay);
+          this.pendingTimers.add(timer);
+        }
       }
     }
 
@@ -466,7 +502,11 @@ export class SubagentDetector {
     );
 
     // Session 處理（Interactive 模式）
-    this.config.session?.addSession?.(agentId, `[${agentId}]`, subagentPath);
+    this.config.session?.addSession?.(
+      agentId,
+      makeAgentLabel(agentId),
+      subagentPath
+    );
 
     if (this.config.enabled) {
       this.config.output.warn(message);

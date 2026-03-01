@@ -1,10 +1,13 @@
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
 import { ClaudeAgent } from '../agents/claude/claude-agent.ts';
 import type { LineParser } from '../agents/agent.interface.ts';
 import type { Formatter } from '../formatters/formatter.interface.ts';
 import type { ParsedLine, SessionFile } from '../core/types.ts';
-import type { SubagentDetector } from './subagent-detector.ts';
+import {
+  type SubagentDetector,
+  MAIN_LABEL,
+  buildSubagentPath,
+} from './subagent-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
@@ -63,25 +66,26 @@ export async function buildSubagentFiles(
   subagentsDir: string,
   initialAgentIds: Set<string>
 ): Promise<Array<{ agentId: string; path: string; birthtime: Date }>> {
-  const result: Array<{ agentId: string; path: string; birthtime: Date }> = [];
+  // 平行化 stat 呼叫，直接用 stat() 取代 exists() + stat() 的雙重 syscall
+  const results = await Promise.all(
+    [...initialAgentIds].map(async (agentId) => {
+      const subagentPath = buildSubagentPath(subagentsDir, agentId);
+      try {
+        const stats = await stat(subagentPath);
+        return { agentId, path: subagentPath, birthtime: stats.birthtime };
+      } catch {
+        // 檔案不存在（ENOENT）或無法存取，跳過
+        return null;
+      }
+    })
+  );
 
-  for (const agentId of initialAgentIds) {
-    const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    const subagentFile = Bun.file(subagentPath);
-    if (await subagentFile.exists()) {
-      const stats = await stat(subagentPath);
-      result.push({
-        agentId,
-        path: subagentPath,
-        birthtime: stats.birthtime,
-      });
-    }
-  }
-
-  // 按建立時間升序排序（最舊的先加入）
-  result.sort((a, b) => a.birthtime.getTime() - b.birthtime.getTime());
-
-  return result;
+  // 過濾掉不存在的檔案，按建立時間升序排序（最舊的先加入）
+  return results
+    .filter(
+      (r): r is { agentId: string; path: string; birthtime: Date } => r !== null
+    )
+    .sort((a, b) => a.birthtime.getTime() - b.birthtime.getTime());
 }
 
 /**
@@ -124,12 +128,12 @@ export function createOnLineHandler(
       config.onOutput(config.formatter.format(parsed), label);
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-      if (label === '[MAIN]' && parsed.isTaskToolUse) {
+      if (label === MAIN_LABEL && parsed.isTaskToolUse) {
         config.detector.handleEarlyDetection();
       }
 
       // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
-      if (label === '[MAIN]') {
+      if (label === MAIN_LABEL) {
         const raw = parsed.raw as {
           toolUseResult?: {
             agentId?: string;

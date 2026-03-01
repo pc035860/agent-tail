@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { parseArgs } from './cli/parser.ts';
 import { FileWatcher } from './core/file-watcher.ts';
 import {
@@ -23,6 +23,11 @@ import type {
 import {
   SubagentDetector,
   scanForNewSubagents,
+  MAIN_LABEL,
+  makeAgentLabel,
+  extractAgentIdFromLabel,
+  buildSubagentPath,
+  getSubagentsDir,
 } from './claude/subagent-detector.ts';
 import {
   ConsoleOutputHandler,
@@ -232,11 +237,10 @@ async function startClaudeMultiWatch(
   initialSubagent: SessionFile | null = null
 ): Promise<void> {
   const projectDir = dirname(sessionFile.path);
-  const sessionId = basename(sessionFile.path, '.jsonl');
-  let subagentsDir = join(projectDir, sessionId, 'subagents');
+  let subagentsDir = getSubagentsDir(sessionFile.path);
 
   // 建立監控檔案列表（主 session）
-  const files: WatchedFile[] = [{ path: sessionFile.path, label: '[MAIN]' }];
+  const files: WatchedFile[] = [{ path: sessionFile.path, label: MAIN_LABEL }];
 
   // 只有在 withSubagents 為 true 時才掃描 subagent
   const existingAgentIds = new Set<string>();
@@ -261,7 +265,7 @@ async function startClaudeMultiWatch(
       existingAgentIds
     );
     for (const { agentId, path } of existingSubagentFiles) {
-      files.push({ path, label: `[${agentId}]` });
+      files.push({ path, label: makeAgentLabel(agentId) });
     }
 
     if (existingAgentIds.size > 0) {
@@ -295,8 +299,9 @@ async function startClaudeMultiWatch(
     if (controller.isAvailable()) {
       paneManager = new PaneManager(controller, (agentId, _subagentPath) => {
         // 使用當前執行方式重建指令（支援 bun run、npx、全域安裝等）
-        const runtime = process.argv[0];
-        const script = process.argv[1];
+        // 用雙引號包覆路徑，防止空格造成 shell 指令斷裂
+        const runtime = `"${process.argv[0]}"`;
+        const script = `"${process.argv[1]}"`;
         return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
       });
     } else {
@@ -307,11 +312,12 @@ async function startClaudeMultiWatch(
     }
   }
 
-  // 建立 onNewSubagent 回呼（pane 自動開啟）
-  const onNewSubagent = paneManager
+  // 提取 pane 相關回呼（消除 paneManager! 斷言，用 const 捕獲確認非 null 的參照）
+  const pm = paneManager; // 閉包捕獲，不受外部重賦值影響
+  const onNewSubagent = pm
     ? (agentId: string, subagentPath: string) => {
         log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
-        paneManager!.openPane(agentId, subagentPath).catch((err) => {
+        pm.openPane(agentId, subagentPath).catch((err) => {
           log(
             options.quiet,
             chalk.yellow(`[pane] Failed to open pane: ${err}`)
@@ -320,35 +326,48 @@ async function startClaudeMultiWatch(
       }
     : undefined;
 
-  // 建立 onSubagentDone 回呼（回顯最終報告 + pane 自動關閉）
-  const onSubagentDone = paneManager
+  const onSubagentDone = pm
     ? (agentId: string) => {
-        const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
+        const subagentPath = buildSubagentPath(subagentsDir, agentId);
 
         // 先讀取並輸出最後的 assistant 訊息，再關閉 pane
-        readLastAssistantMessage(subagentPath, options.verbose)
-          .then((parts) => {
-            const label = `[${agentId}]`;
+        (async () => {
+          try {
+            const parts = await readLastAssistantMessage(
+              subagentPath,
+              options.verbose
+            );
+            const label = makeAgentLabel(agentId);
             for (const part of parts) {
               part.sourceLabel = label;
               console.log(formatter.format(part));
             }
-          })
-          .catch(() => {
+          } catch {
             // 讀取失敗不影響 pane 關閉
-          })
-          .finally(() => {
+          } finally {
             log(
               options.quiet,
               chalk.gray(`[pane] Closing pane for ${agentId}...`)
             );
-            paneManager!.closePaneByAgentId(agentId).catch((err) => {
+            await pm.closePaneByAgentId(agentId).catch((err) => {
               log(
                 options.quiet,
                 chalk.yellow(`[pane] Failed to close pane: ${err}`)
               );
             });
-          });
+          }
+        })().catch(() => {});
+      }
+    : undefined;
+
+  const hasPaneCallback = pm
+    ? (agentId: string) => pm.hasPaneForAgent(agentId)
+    : undefined;
+
+  const shouldOutput = pm
+    ? (label: string) => {
+        if (label === MAIN_LABEL) return true;
+        return !pm.hasPaneForAgent(extractAgentIdFromLabel(label));
       }
     : undefined;
 
@@ -361,9 +380,7 @@ async function startClaudeMultiWatch(
     enabled: options.follow && options.withSubagents,
     onNewSubagent,
     onSubagentDone,
-    hasPane: paneManager
-      ? (agentId) => paneManager!.hasPaneForAgent(agentId)
-      : undefined,
+    hasPane: hasPaneCallback,
   });
   detector.startDirectoryWatch();
 
@@ -381,12 +398,11 @@ async function startClaudeMultiWatch(
     currentSessionPath = nextSessionFile.path;
 
     // 重新初始化監控
-    const newProjectDir = dirname(nextSessionFile.path);
     const newSessionId = basename(nextSessionFile.path, '.jsonl');
-    const newSubagentsDir = join(newProjectDir, newSessionId, 'subagents');
+    const newSubagentsDir = getSubagentsDir(nextSessionFile.path);
 
     const newFiles: WatchedFile[] = [
-      { path: nextSessionFile.path, label: '[MAIN]' },
+      { path: nextSessionFile.path, label: MAIN_LABEL },
     ];
     const newExistingAgentIds = new Set<string>();
 
@@ -402,7 +418,7 @@ async function startClaudeMultiWatch(
         newExistingAgentIds
       );
       for (const { agentId, path } of existingSubagentFiles) {
-        newFiles.push({ path, label: `[${agentId}]` });
+        newFiles.push({ path, label: makeAgentLabel(agentId) });
       }
 
       if (newExistingAgentIds.size > 0) {
@@ -431,7 +447,7 @@ async function startClaudeMultiWatch(
     // 重新建立 multiWatcher（先建立，但還不啟動）
     const newMultiWatcher = new MultiFileWatcher();
 
-    // 重新建立 detector（捕獲新的 multiWatcher，沿用 paneManager）
+    // 重新建立 detector（捕獲新的 multiWatcher，沿用 pane 回呼）
     const newDetector = new SubagentDetector(newExistingAgentIds, {
       subagentsDir: newSubagentsDir,
       output: new ConsoleOutputHandler(),
@@ -439,10 +455,8 @@ async function startClaudeMultiWatch(
       session: new NoOpSessionHandler(),
       enabled: options.follow && options.withSubagents,
       onNewSubagent,
-      onSubagentDone, // Phase 2.2: 保留自動關閉功能
-      hasPane: paneManager
-        ? (agentId) => paneManager!.hasPaneForAgent(agentId)
-        : undefined,
+      onSubagentDone,
+      hasPane: hasPaneCallback,
     });
     newDetector.startDirectoryWatch();
 
@@ -462,14 +476,7 @@ async function startClaudeMultiWatch(
         detector,
         onOutput: (formatted) => console.log(formatted),
         verbose: options.verbose,
-        // Phase 2.3: 過濾已有 pane 的 subagent 輸出
-        shouldOutput: paneManager
-          ? (label) => {
-              if (label === '[MAIN]') return true;
-              const agentId = label.slice(1, -1);
-              return !paneManager!.hasPaneForAgent(agentId);
-            }
-          : undefined,
+        shouldOutput,
       }),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
@@ -506,14 +513,7 @@ async function startClaudeMultiWatch(
       detector,
       onOutput: (formatted) => console.log(formatted),
       verbose: options.verbose,
-      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
-      shouldOutput: paneManager
-        ? (label) => {
-            if (label === '[MAIN]') return true; // 主 session 永遠輸出
-            const agentId = label.slice(1, -1); // 移除 '[' 和 ']'
-            return !paneManager!.hasPaneForAgent(agentId); // 沒有 pane 才輸出
-          }
-        : undefined,
+      shouldOutput,
     }),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
@@ -540,7 +540,7 @@ async function outputTimeSorted(
   files: WatchedFile[],
   parsers: Map<string, LineParser>,
   formatter: Formatter,
-  options: CliOptions
+  _options: CliOptions
 ): Promise<void> {
   // 收集所有已解析的行
   const allParsedLines: Array<{
@@ -560,16 +560,14 @@ async function outputTimeSorted(
     const lines = content.split('\n').filter((line) => line.trim());
 
     for (const line of lines) {
-      // 為每行建立新的 parser 實例避免狀態衝突
-      const parserAgent = new ClaudeAgent({ verbose: options.verbose });
-      let parsed = parserAgent.parser.parse(line);
+      let parsed = parser.parse(line);
       while (parsed) {
         parsed.sourceLabel = file.label;
         allParsedLines.push({
           parsed,
           timestamp: new Date(parsed.timestamp),
         });
-        parsed = parserAgent.parser.parse(line);
+        parsed = parser.parse(line);
       }
     }
   }
@@ -669,12 +667,10 @@ async function startClaudeInteractiveWatch(
     initialSubagentFile: SessionFile | null,
     showIntro: boolean
   ): Promise<void> => {
-    const projectDir = dirname(targetSessionFile.path);
-    const sessionId = basename(targetSessionFile.path, '.jsonl');
-    const subagentsDir = join(projectDir, sessionId, 'subagents');
+    const subagentsDir = getSubagentsDir(targetSessionFile.path);
 
     sessionManager = createSessionManager();
-    sessionManager.addSession('main', '[MAIN]', targetSessionFile.path);
+    sessionManager.addSession('main', MAIN_LABEL, targetSessionFile.path);
 
     // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
     const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
@@ -694,7 +690,7 @@ async function startClaudeInteractiveWatch(
       existingAgentIds
     );
     for (const { agentId, path } of existingSubagentFiles) {
-      sessionManager.addSession(agentId, `[${agentId}]`, path);
+      sessionManager.addSession(agentId, makeAgentLabel(agentId), path);
     }
 
     if (showIntro) {
@@ -890,8 +886,8 @@ async function startSingleWatch(
   // Codex parser 是無狀態的，不需要重建
   let currentParser = agent.parser;
 
-  // 建立 onLine handler 函數（共用邏輯）
-  const createOnLineHandler =
+  // 建立 onLine handler 函數（單一 agent 用，與 Claude 多檔案的 createOnLineHandler 不同）
+  const makeSingleLineHandler =
     (parser: LineParser) =>
     (line: string): void => {
       if (options.agentType === 'gemini') {
@@ -933,7 +929,7 @@ async function startSingleWatch(
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
       jsonMode: options.agentType === 'gemini',
-      onLine: createOnLineHandler(currentParser),
+      onLine: makeSingleLineHandler(currentParser),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
       },
@@ -969,7 +965,7 @@ async function startSingleWatch(
     initialLines: options.lines,
     // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
     jsonMode: options.agentType === 'gemini',
-    onLine: createOnLineHandler(currentParser),
+    onLine: makeSingleLineHandler(currentParser),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
     },

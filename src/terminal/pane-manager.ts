@@ -6,6 +6,9 @@ import type {
 /** MVP 最大 pane 數量（安全上限，Phase 2 可設定） */
 const MAX_PANES = 6;
 
+/** applyLayout debounce 延遲（ms） */
+const LAYOUT_DEBOUNCE_MS = 50;
+
 /**
  * Pane 生命週期管理器
  *
@@ -20,6 +23,8 @@ export class PaneManager {
   private pendingAgentIds: Set<string> = new Set();
   /** 待關閉的 agentId（pane 還在 pending 時就收到 done 事件） */
   private pendingCloseAgentIds: Set<string> = new Set();
+  /** applyLayout debounce timer */
+  private layoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     controller: TerminalController,
@@ -46,8 +51,8 @@ export class PaneManager {
       const pane = await this.controller.createPane(cmd, agentId);
       if (pane) {
         this.panes.set(agentId, pane);
-        // 每次開新 pane 後重新計算佈局
-        await this.applyLayout();
+        // 排程佈局更新（debounce，連續開多個 pane 時只觸發一次）
+        this.scheduleLayout();
 
         // 檢查是否在 pending 期間收到了 done 事件
         if (this.pendingCloseAgentIds.has(agentId)) {
@@ -71,12 +76,32 @@ export class PaneManager {
    * 關閉所有已追蹤的 pane（best-effort）
    */
   async closeAll(): Promise<void> {
+    this.clearLayoutTimer();
     const closePromises = [...this.panes.values()].map((p) =>
       this.controller.closePane(p.id).catch(() => {})
     );
     await Promise.all(closePromises);
     this.panes.clear();
     this.pendingCloseAgentIds.clear();
+  }
+
+  /**
+   * 排程佈局更新（debounce）
+   * 連續開多個 pane 時只在最後觸發一次 tmux select-layout
+   */
+  private scheduleLayout(): void {
+    this.clearLayoutTimer();
+    this.layoutTimer = setTimeout(() => {
+      this.layoutTimer = null;
+      this.applyLayout().catch(() => {});
+    }, LAYOUT_DEBOUNCE_MS);
+  }
+
+  private clearLayoutTimer(): void {
+    if (this.layoutTimer) {
+      clearTimeout(this.layoutTimer);
+      this.layoutTimer = null;
+    }
   }
 
   /**
@@ -108,13 +133,13 @@ export class PaneManager {
     const pane = this.panes.get(agentId);
     if (!pane) return;
 
+    // 立刻移除，防止並行呼叫重複觸發 closePane
+    this.panes.delete(agentId);
+
     try {
       await this.controller.closePane(pane.id);
     } catch {
       // 靜默忽略關閉失敗（pane 可能已經關閉）
-    } finally {
-      // 無論成功或失敗，都清除 map 狀態，避免污染
-      this.panes.delete(agentId);
     }
   }
 

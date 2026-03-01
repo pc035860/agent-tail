@@ -159,16 +159,16 @@ describe('tryAddSubagentFile', () => {
     const output = createMockOutputHandler();
     const watcher = createMockWatcherHandler();
 
-    // 這個測試主要確認不會拋出錯誤
-    const resultPromise = tryAddSubagentFile(
+    // 使用快速配置驗證行為（預設配置太慢會拖累測試）
+    const result = await tryAddSubagentFile(
       '/nonexistent/path/agent-abc1234.jsonl',
       'abc1234',
       watcher,
-      output
+      output,
+      fastRetryConfig
     );
 
-    // 我們不等待完成（因為預設配置會很慢），只確認 Promise 被建立
-    expect(resultPromise).toBeInstanceOf(Promise);
+    expect(result).toBe(false);
   });
 });
 
@@ -190,6 +190,7 @@ describe('SubagentDetector', () => {
       });
 
       expect(detector.getKnownAgentIds().size).toBe(0);
+      detector.stop();
     });
 
     test('initializes with provided knownAgentIds', () => {
@@ -208,6 +209,7 @@ describe('SubagentDetector', () => {
       expect(knownIds.size).toBe(2);
       expect(knownIds.has('abc1234')).toBe(true);
       expect(knownIds.has('def5678')).toBe(true);
+      detector.stop();
     });
 
     test('creates independent copy of knownAgentIds', () => {
@@ -225,6 +227,7 @@ describe('SubagentDetector', () => {
       // 修改原始 Set 不應該影響 detector
       initialIds.add('xyz9999');
       expect(detector.getKnownAgentIds().has('xyz9999')).toBe(false);
+      detector.stop();
     });
   });
 
@@ -241,6 +244,7 @@ describe('SubagentDetector', () => {
       });
 
       expect(detector.isKnownAgent('abc1234')).toBe(true);
+      detector.stop();
     });
 
     test('returns false for unknown agent', () => {
@@ -255,6 +259,7 @@ describe('SubagentDetector', () => {
       });
 
       expect(detector.isKnownAgent('xyz9999')).toBe(false);
+      detector.stop();
     });
   });
 
@@ -278,6 +283,7 @@ describe('SubagentDetector', () => {
           (l) => l.level === 'debug' && l.message.includes('invalid')
         )
       ).toBe(true);
+      detector.stop();
     });
 
     test('adds new agent to knownAgentIds', () => {
@@ -294,6 +300,7 @@ describe('SubagentDetector', () => {
       detector.handleFallbackDetection('abc1234');
 
       expect(detector.getKnownAgentIds().has('abc1234')).toBe(true);
+      detector.stop();
     });
 
     test('logs warn for new agent when enabled', () => {
@@ -314,6 +321,7 @@ describe('SubagentDetector', () => {
           (l) => l.level === 'warn' && l.message.includes('abc1234')
         )
       ).toBe(true);
+      detector.stop();
     });
 
     test('does not log warn when disabled', () => {
@@ -333,6 +341,7 @@ describe('SubagentDetector', () => {
       expect(detector.getKnownAgentIds().has('abc1234')).toBe(true);
       // But no warn log
       expect(output.logs.some((l) => l.level === 'warn')).toBe(false);
+      detector.stop();
     });
 
     test('calls sessionHandler.addSession for new agent', () => {
@@ -355,6 +364,7 @@ describe('SubagentDetector', () => {
       expect(addedSession).toBeDefined();
       expect(addedSession!.agentId).toBe('abc1234');
       expect(addedSession!.label).toBe('[abc1234]');
+      detector.stop();
     });
 
     test('calls sessionHandler.markSessionDone', () => {
@@ -373,6 +383,7 @@ describe('SubagentDetector', () => {
       detector.handleFallbackDetection('abc1234');
 
       expect(session.markedDone).toContain('abc1234');
+      detector.stop();
     });
 
     test('calls sessionHandler.updateUI', () => {
@@ -391,6 +402,7 @@ describe('SubagentDetector', () => {
       detector.handleFallbackDetection('abc1234');
 
       expect(session.uiUpdateCount).toBeGreaterThan(0);
+      detector.stop();
     });
 
     test('marks session done even for already known agent', () => {
@@ -412,6 +424,7 @@ describe('SubagentDetector', () => {
       expect(session.addedSessions).toHaveLength(0);
       // But SHOULD mark done
       expect(session.markedDone).toContain('abc1234');
+      detector.stop();
     });
 
     test('does not duplicate knownAgentIds', () => {
@@ -429,6 +442,7 @@ describe('SubagentDetector', () => {
       detector.handleFallbackDetection('abc1234');
 
       expect(detector.getKnownAgentIds().size).toBe(1);
+      detector.stop();
     });
   });
 
@@ -449,6 +463,7 @@ describe('SubagentDetector', () => {
       // 沒有任何副作用
       expect(output.logs).toHaveLength(0);
       expect(watcher.addedFiles).toHaveLength(0);
+      detector.stop();
     });
 
     // Note: 更多 handleEarlyDetection 測試需要 mock scanForNewSubagents，
