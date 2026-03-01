@@ -36,6 +36,7 @@ import {
   buildSubagentFiles,
   createOnLineHandler,
   createSuperFollowController,
+  readLastAssistantMessage,
 } from './claude/watch-builder.ts';
 import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
 import { createTerminalController } from './terminal/controller-factory.ts';
@@ -232,7 +233,7 @@ async function startClaudeMultiWatch(
 ): Promise<void> {
   const projectDir = dirname(sessionFile.path);
   const sessionId = basename(sessionFile.path, '.jsonl');
-  const subagentsDir = join(projectDir, sessionId, 'subagents');
+  let subagentsDir = join(projectDir, sessionId, 'subagents');
 
   // 建立監控檔案列表（主 session）
   const files: WatchedFile[] = [{ path: sessionFile.path, label: '[MAIN]' }];
@@ -319,16 +320,35 @@ async function startClaudeMultiWatch(
       }
     : undefined;
 
-  // 建立 onSubagentDone 回呼（pane 自動關閉）
+  // 建立 onSubagentDone 回呼（回顯最終報告 + pane 自動關閉）
   const onSubagentDone = paneManager
     ? (agentId: string) => {
-        log(options.quiet, chalk.gray(`[pane] Closing pane for ${agentId}...`));
-        paneManager!.closePaneByAgentId(agentId).catch((err) => {
-          log(
-            options.quiet,
-            chalk.yellow(`[pane] Failed to close pane: ${err}`)
-          );
-        });
+        const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
+
+        // 先讀取並輸出最後的 assistant 訊息，再關閉 pane
+        readLastAssistantMessage(subagentPath, options.verbose)
+          .then((parts) => {
+            const label = `[${agentId}]`;
+            for (const part of parts) {
+              part.sourceLabel = label;
+              console.log(formatter.format(part));
+            }
+          })
+          .catch(() => {
+            // 讀取失敗不影響 pane 關閉
+          })
+          .finally(() => {
+            log(
+              options.quiet,
+              chalk.gray(`[pane] Closing pane for ${agentId}...`)
+            );
+            paneManager!.closePaneByAgentId(agentId).catch((err) => {
+              log(
+                options.quiet,
+                chalk.yellow(`[pane] Failed to close pane: ${err}`)
+              );
+            });
+          });
       }
     : undefined;
 
@@ -427,6 +447,7 @@ async function startClaudeMultiWatch(
     newDetector.startDirectoryWatch();
 
     // 更新外層變數
+    subagentsDir = newSubagentsDir;
     multiWatcher = newMultiWatcher;
     detector = newDetector;
 

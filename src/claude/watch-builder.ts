@@ -3,11 +3,58 @@ import { join } from 'node:path';
 import { ClaudeAgent } from '../agents/claude/claude-agent.ts';
 import type { LineParser } from '../agents/agent.interface.ts';
 import type { Formatter } from '../formatters/formatter.interface.ts';
-import type { SessionFile } from '../core/types.ts';
+import type { ParsedLine, SessionFile } from '../core/types.ts';
 import type { SubagentDetector } from './subagent-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
+
+/**
+ * 從 subagent JSONL 檔案讀取最後一條 assistant 訊息的所有 ParsedLine parts
+ * 用於在 pane 關閉前回顯 subagent 的最終報告
+ */
+export async function readLastAssistantMessage(
+  filePath: string,
+  verbose: boolean
+): Promise<ParsedLine[]> {
+  try {
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return [];
+
+    const content = await file.text();
+    const lines = content.split('\n').filter(Boolean);
+
+    // 從尾部往前找最後一條 type === 'assistant' 的行
+    let lastAssistantLine: string | null = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!;
+      try {
+        const data = JSON.parse(line);
+        if (data.type === 'assistant') {
+          lastAssistantLine = line;
+          break;
+        }
+      } catch {
+        // 略過無效 JSON
+      }
+    }
+
+    if (!lastAssistantLine) return [];
+
+    // 用新的 parser 實例解析（避免狀態污染）
+    const parser = new ClaudeAgent({ verbose }).parser;
+    const parts: ParsedLine[] = [];
+    let parsed = parser.parse(lastAssistantLine);
+    while (parsed) {
+      parts.push(parsed);
+      parsed = parser.parse(lastAssistantLine);
+    }
+
+    return parts;
+  } catch {
+    return [];
+  }
+}
 
 /**
  * 掃描 subagents 目錄，取得現有 subagent 檔案並按 birthtime 升序排序
