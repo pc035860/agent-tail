@@ -108,6 +108,26 @@ export function createOnLineHandler(
   config: OnLineHandlerConfig
 ): (line: string, label: string) => void {
   return (line: string, label: string) => {
+    // agent_progress：subagent 進入或 resume，每次進入都觸發 pane 開啟
+    // 前置字串檢查避免每行都 JSON.parse（熱路徑優化）
+    if (label === MAIN_LABEL && line.includes('"agent_progress"')) {
+      try {
+        const data = JSON.parse(line) as {
+          type?: string;
+          data?: { type?: string; agentId?: string };
+        };
+        if (
+          data.type === 'progress' &&
+          data.data?.type === 'agent_progress' &&
+          data.data?.agentId
+        ) {
+          config.detector.handleAgentProgress(data.data.agentId);
+        }
+      } catch {
+        // 非 JSON 或無關格式，略過
+      }
+    }
+
     let parser = config.parsers.get(label);
     if (!parser) {
       const newAgent = new ClaudeAgent({ verbose: config.verbose });

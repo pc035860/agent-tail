@@ -314,7 +314,7 @@ async function startClaudeMultiWatch(
 
   // 提取 pane 相關回呼（消除 paneManager! 斷言，用 const 捕獲確認非 null 的參照）
   const pm = paneManager; // 閉包捕獲，不受外部重賦值影響
-  const onNewSubagent = pm
+  const openPaneForSubagent = pm
     ? (agentId: string, subagentPath: string, description?: string) => {
         log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
         pm.openPane(agentId, subagentPath, description).catch((err) => {
@@ -378,7 +378,8 @@ async function startClaudeMultiWatch(
     watcher: { addFile: (f) => multiWatcher.addFile(f) },
     session: new NoOpSessionHandler(),
     enabled: options.follow && options.withSubagents,
-    onNewSubagent,
+    onNewSubagent: openPaneForSubagent,
+    onSubagentEnter: openPaneForSubagent,
     onSubagentDone,
     hasPane: hasPaneCallback,
   });
@@ -454,7 +455,8 @@ async function startClaudeMultiWatch(
       watcher: { addFile: (f) => newMultiWatcher.addFile(f) },
       session: new NoOpSessionHandler(),
       enabled: options.follow && options.withSubagents,
-      onNewSubagent,
+      onNewSubagent: openPaneForSubagent,
+      onSubagentEnter: openPaneForSubagent,
       onSubagentDone,
       hasPane: hasPaneCallback,
     });

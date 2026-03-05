@@ -446,6 +446,96 @@ describe('SubagentDetector', () => {
     });
   });
 
+  describe('handleAgentProgress', () => {
+    test('does NOT call onSubagentEnter for new agentId (create scenario)', () => {
+      const output = createMockOutputHandler();
+      const watcher = createMockWatcherHandler();
+      const enterCalls: string[] = [];
+
+      // 使用空的 Set 模擬新 agentId
+      const detector = new SubagentDetector(new Set(), {
+        subagentsDir: '/test/subagents',
+        output,
+        watcher,
+        enabled: true,
+        onSubagentEnter: (agentId) => enterCalls.push(agentId),
+      });
+
+      detector.handleAgentProgress('acfe87919d57b2295');
+
+      // 新 agentId 不應觸發 onSubagentEnter（由 onNewSubagent 負責）
+      expect(enterCalls).toHaveLength(0);
+      // 但 agentId 應被加入 knownAgentIds
+      expect(detector.getKnownAgentIds().has('acfe87919d57b2295')).toBe(true);
+      detector.stop();
+    });
+
+    test('calls onSubagentEnter for known agentId (resume scenario)', () => {
+      const output = createMockOutputHandler();
+      const watcher = createMockWatcherHandler();
+      const enterCalls: { agentId: string; subagentPath: string }[] = [];
+
+      // 使用包含目標 agentId 的 Set 模擬 resume 情境
+      const detector = new SubagentDetector(new Set(['acfe87919d57b2295']), {
+        subagentsDir: '/test/subagents',
+        output,
+        watcher,
+        enabled: true,
+        onSubagentEnter: (agentId, subagentPath) => {
+          enterCalls.push({ agentId, subagentPath });
+        },
+      });
+
+      detector.handleAgentProgress('acfe87919d57b2295');
+
+      // 已知 agentId（resume）應觸發 onSubagentEnter
+      expect(enterCalls).toHaveLength(1);
+      expect(enterCalls[0]!.agentId).toBe('acfe87919d57b2295');
+      expect(enterCalls[0]!.subagentPath).toContain(
+        'agent-acfe87919d57b2295.jsonl'
+      );
+      detector.stop();
+    });
+
+    test('does nothing when disabled', () => {
+      const output = createMockOutputHandler();
+      const watcher = createMockWatcherHandler();
+      const enterCalls: string[] = [];
+
+      const detector = new SubagentDetector(new Set(['acfe87919d57b2295']), {
+        subagentsDir: '/test/subagents',
+        output,
+        watcher,
+        enabled: false,
+        onSubagentEnter: (agentId) => enterCalls.push(agentId),
+      });
+
+      detector.handleAgentProgress('acfe87919d57b2295');
+
+      expect(enterCalls).toHaveLength(0);
+      detector.stop();
+    });
+
+    test('ignores invalid agentId', () => {
+      const output = createMockOutputHandler();
+      const watcher = createMockWatcherHandler();
+      const enterCalls: string[] = [];
+
+      const detector = new SubagentDetector(new Set(), {
+        subagentsDir: '/test/subagents',
+        output,
+        watcher,
+        enabled: true,
+        onSubagentEnter: (agentId) => enterCalls.push(agentId),
+      });
+
+      detector.handleAgentProgress('short');
+
+      expect(enterCalls).toHaveLength(0);
+      detector.stop();
+    });
+  });
+
   describe('handleEarlyDetection', () => {
     test('does nothing when disabled', () => {
       const output = createMockOutputHandler();

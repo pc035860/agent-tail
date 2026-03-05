@@ -74,6 +74,8 @@ export interface SubagentDetectorConfig {
     subagentPath: string,
     description?: string
   ) => void;
+  /** Subagent 進入時的回呼（含 resume，每次進入都觸發，用於 pane 開啟） */
+  onSubagentEnter?: (agentId: string, subagentPath: string) => void;
   /** Subagent 完成時的回呼（用於 pane 自動關閉等） */
   onSubagentDone?: (agentId: string) => void;
   /** 檢查 agentId 是否有對應的 pane（用於判斷是否需要關閉） */
@@ -340,6 +342,25 @@ export class SubagentDetector {
       }
     }, EARLY_DETECTION_RETRY.initialDelay);
     this.pendingTimers.add(timer);
+  }
+
+  /**
+   * 處理 agent_progress 事件（subagent 進入或 resume 時）
+   * 只在 resume（已知 agentId）時觸發 onSubagentEnter
+   * 新 agentId 的 pane 開啟由 onNewSubagent 負責，避免重複觸發
+   */
+  handleAgentProgress(agentId: string): void {
+    if (!this.config.enabled) return;
+    if (!isValidAgentId(agentId)) return;
+
+    const isNew = !this.knownAgentIds.has(agentId);
+    this.knownAgentIds.add(agentId);
+
+    // 只有已知的 agentId 才觸發（resume 情境）
+    if (isNew) return;
+
+    const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
+    this.config.onSubagentEnter?.(agentId, subagentPath);
   }
 
   /**

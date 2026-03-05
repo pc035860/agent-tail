@@ -72,7 +72,7 @@ src/
 │   ├── auto-switch.ts        # Find latest session in project for auto-switch mode
 │   ├── output-handlers.ts    # Output handler implementations (console, display controller)
 │   ├── session-handlers.ts   # Session event handling
-│   └── watch-builder.ts      # Shared utilities (buildSubagentFiles, createSuperFollowController)
+│   └── watch-builder.ts      # Shared utilities (buildSubagentFiles, createSuperFollowController, agent_progress parsing)
 ├── interactive/
 │   └── display-controller.ts # Terminal UI for interactive mode (status line, history)
 ├── terminal/                 # Terminal pane management (tmux, future iTerm2)
@@ -104,7 +104,10 @@ src/
 - **Super Follow** (`createSuperFollowController`): Auto-switch to latest session, configurable per-agent via `findLatestInProject` callback
 - **Codex Session Cache**: Cwd-indexed cache with 2s incremental refresh (scans today's directory only)
 - Formatters transform ParsedLine to output string (raw JSON or pretty colored)
-- **Pane auto-open** (`--pane`): Uses `SubagentDetector.onNewSubagent` hook → `PaneManager` → `TerminalController` to open tmux panes for each new subagent. Requires tmux environment.
+- **Pane auto-open** (`--pane`): Uses `SubagentDetector` hooks → `PaneManager` → `TerminalController` to open tmux panes for subagent create/resume, and closes on `toolUseResult`. Requires tmux environment.
+  - `onNewSubagent`: Fired on subagent **create** (via `registerNewAgent`)
+  - `onSubagentEnter`: Fired on subagent **resume** (via `handleAgentProgress` when agentId already known)
+  - Both callbacks point to same `openPaneForSubagent` function; `PaneManager.openPane` guards against duplicate panes
 - **Pane naming**: Task `description` is extracted from `tool_use` input, queued in `SubagentDetector` (FIFO), and matched to new agents. `PaneManager` sanitizes and applies via `tmux select-pane -T` (2.6+, best-effort). Known limitation: parallel Tasks may mismatch descriptions.
 
 **Adding Super Follow to a New Agent:**
@@ -120,6 +123,7 @@ src/
 - **`--pane` mutual exclusions**: Cannot combine with `--interactive` or `--subagent`. Requires `--follow` mode. Auto-enables `--with-subagents`.
 - **PaneManager command builder** uses `process.argv[0]` and `process.argv[1]` to reconstruct the CLI command, supporting bun run, npx, and global install scenarios.
 - **SubagentDetector description queue**: FIFO `pendingDescriptions` must be consumed in both `registerNewAgent` (early detection) and `handleFallbackDetection` (completed path) to prevent queue drift. The queue is cleared in `stop()`.
+- **`handleAgentProgress` only triggers for resume**: New agentIds are added to `knownAgentIds` but don't trigger `onSubagentEnter` (create is handled by `onNewSubagent`). This prevents duplicate pane opens.
 
 ## Code Quality
 

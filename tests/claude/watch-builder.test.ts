@@ -39,11 +39,13 @@ function createMockDetector(): SubagentDetector & {
   earlyDetectionCalls: number;
   fallbackDetectionCalls: string[];
   pushDescriptionCalls: string[];
+  agentProgressCalls: string[];
 } {
   const detector = {
     earlyDetectionCalls: 0,
     fallbackDetectionCalls: [] as string[],
     pushDescriptionCalls: [] as string[],
+    agentProgressCalls: [] as string[],
     handleEarlyDetection() {
       detector.earlyDetectionCalls++;
     },
@@ -52,6 +54,9 @@ function createMockDetector(): SubagentDetector & {
     },
     pushDescription(description: string) {
       detector.pushDescriptionCalls.push(description);
+    },
+    handleAgentProgress(agentId: string) {
+      detector.agentProgressCalls.push(agentId);
     },
     getKnownAgentIds: () => new Set<string>(),
     isKnownAgent: () => false,
@@ -62,6 +67,7 @@ function createMockDetector(): SubagentDetector & {
     earlyDetectionCalls: number;
     fallbackDetectionCalls: string[];
     pushDescriptionCalls: string[];
+    agentProgressCalls: string[];
   };
 }
 
@@ -283,6 +289,52 @@ describe('createOnLineHandler', () => {
     handler('{"type":"assistant"}', '[MAIN]');
 
     expect(detector.earlyDetectionCalls).toBe(1);
+  });
+
+  test('label [MAIN] with agent_progress triggers handleAgentProgress', () => {
+    const detector = createMockDetector();
+    const mockParser: LineParser = {
+      parse: () => null, // progress 不產生 parsed output
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[MAIN]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    const progressLine = JSON.stringify({
+      type: 'progress',
+      data: { type: 'agent_progress', agentId: 'acfe87919d57b2295' },
+    });
+    handler(progressLine, '[MAIN]');
+
+    expect(detector.agentProgressCalls).toContain('acfe87919d57b2295');
+  });
+
+  test('non-[MAIN] label with agent_progress does NOT trigger handleAgentProgress', () => {
+    const detector = createMockDetector();
+    const mockParser: LineParser = { parse: () => null };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[abc1234]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    const progressLine = JSON.stringify({
+      type: 'progress',
+      data: { type: 'agent_progress', agentId: 'xyz789' },
+    });
+    handler(progressLine, '[abc1234]');
+
+    expect(detector.agentProgressCalls).toHaveLength(0);
   });
 
   test('label [MAIN] with toolUseResult.agentId (no commandName) triggers handleFallbackDetection', () => {
