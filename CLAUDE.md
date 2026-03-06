@@ -57,6 +57,8 @@ src/
 ├── cli/parser.ts             # CLI argument parsing with commander
 ├── core/
 │   ├── types.ts              # Shared types (AgentType, ParsedLine, SessionFile, CliOptions, ProjectInfo)
+│   ├── detector-interfaces.ts # Shared interfaces: OutputHandler, WatcherHandler, SessionHandler, RetryConfig
+│   │                         # + MAIN_LABEL, makeAgentLabel, extractAgentIdFromLabel
 │   ├── file-watcher.ts       # Single file monitoring with tail -f behavior
 │   ├── multi-file-watcher.ts # Multi-file monitoring (for subagent support)
 │   └── session-manager.ts    # Session state management for interactive mode
@@ -73,6 +75,10 @@ src/
 │   ├── output-handlers.ts    # Output handler implementations (console, display controller)
 │   ├── session-handlers.ts   # Session event handling
 │   └── watch-builder.ts      # Shared utilities (buildSubagentFiles, createSuperFollowController, agent_progress parsing)
+├── codex/                    # Codex-specific modules
+│   ├── subagent-detector.ts  # CodexSubagentDetector: event-driven UUID subagent detection
+│   └── watch-builder.ts      # extractUUIDFromPath, extractCodexSubagentIds, buildCodexSubagentFiles,
+│                             # createCodexOnLineHandler (spawn_agent + function_call_output + subagent_notification)
 ├── interactive/
 │   └── display-controller.ts # Terminal UI for interactive mode (status line, history)
 ├── terminal/                 # Terminal pane management (tmux, future iTerm2)
@@ -114,6 +120,14 @@ src/
 1. Implement `getProjectInfo(sessionPath)` - Return `{ projectDir, displayName }` for the session
 2. Implement `findLatestInProject(projectDir)` - Find newest session in same project scope
 3. Add agent-specific logic to `startSingleWatch` in `src/index.ts`
+
+**Codex Subagent Detection (Phase 1):**
+- **Event-driven only** (no directory watch): Codex日期目錄混合多個使用者的主 session，無法用 fs.watch 過濾。偵測靠解析主 session JSONL 的 `spawn_agent` + `function_call_output` 事件。
+- **UUID format**: Codex subagent ID 是 UUID v7（`019cc375-5af5-7ed1-9ff8-8a5757d815d1`），不同於 Claude 的 7-40 hex。`isValidCodexAgentId` 用 UUID regex 驗證。
+- **Flat directory**: subagent JSONL 和主 session 在同一個日期目錄（非巢狀）。`dirname(mainSessionPath)` 即日期目錄。
+- **Label collision gotcha**: UUID v7 前兩段都是 timestamp。`makeCodexAgentLabel` 改用 `parts[0]` + `parts[4].slice(0,4)`（node segment）避免同毫秒碰撞。
+- **Parser option relaxation**: `--with-subagents`、`--subagent`、`--all` 現在同時支援 `claude` 和 `codex`（`--pane` 和 `--interactive` 仍為 claude-only 直到 Phase 2/3）。
+- **Shared interfaces in core**: `OutputHandler`、`WatcherHandler`、`SessionHandler` 等介面在 `src/core/detector-interfaces.ts`，Claude module 透過 re-export 向後相容。
 
 **Gotchas:**
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
