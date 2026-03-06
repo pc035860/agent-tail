@@ -43,6 +43,13 @@ agent-tail claude -a               # show all content (verbose + subagents + aut
 agent-tail claude --all            # same as -a
 agent-tail claude --pane           # auto-open tmux pane for each new subagent
 
+# Codex-specific options (Phase 2/3 complete)
+agent-tail codex --subagent <uuid> # tail specific Codex subagent by UUID
+agent-tail codex --with-subagents  # include subagent content in output
+agent-tail codex -i                # interactive mode (Tab to switch sessions)
+agent-tail codex -a                # show all content (verbose + subagents + auto-switch)
+agent-tail codex --pane            # auto-open tmux pane for each new subagent
+
 # Super Follow (auto-switch to latest session in project)
 agent-tail claude --auto-switch    # Claude: project-based
 agent-tail gemini --auto-switch    # Gemini: .project_root based
@@ -77,8 +84,11 @@ src/
 │   └── watch-builder.ts      # Shared utilities (buildSubagentFiles, createSuperFollowController, agent_progress parsing)
 ├── codex/                    # Codex-specific modules
 │   ├── subagent-detector.ts  # CodexSubagentDetector: event-driven UUID subagent detection
+│   │                         # registerExistingAgent(), handleSubagentResume(), getAgentPath()
+│   │                         # stopped flag guards in-flight _resolveSubagent against session switches
 │   └── watch-builder.ts      # extractUUIDFromPath, extractCodexSubagentIds, buildCodexSubagentFiles,
-│                             # createCodexOnLineHandler (spawn_agent + function_call_output + subagent_notification)
+│                             # createCodexOnLineHandler (spawn_agent + function_call_output + resume_agent + subagent_notification)
+│                             # readLastCodexAssistantMessage(filePath, parser: LineParser)
 ├── interactive/
 │   └── display-controller.ts # Terminal UI for interactive mode (status line, history)
 ├── terminal/                 # Terminal pane management (tmux, future iTerm2)
@@ -121,13 +131,16 @@ src/
 2. Implement `findLatestInProject(projectDir)` - Find newest session in same project scope
 3. Add agent-specific logic to `startSingleWatch` in `src/index.ts`
 
-**Codex Subagent Detection (Phase 1):**
+**Codex Subagent Detection (Phases 1-3 complete):**
 - **Event-driven only** (no directory watch): Codex日期目錄混合多個使用者的主 session，無法用 fs.watch 過濾。偵測靠解析主 session JSONL 的 `spawn_agent` + `function_call_output` 事件。
 - **UUID format**: Codex subagent ID 是 UUID v7（`019cc375-5af5-7ed1-9ff8-8a5757d815d1`），不同於 Claude 的 7-40 hex。`isValidCodexAgentId` 用 UUID regex 驗證。
 - **Flat directory**: subagent JSONL 和主 session 在同一個日期目錄（非巢狀）。`dirname(mainSessionPath)` 即日期目錄。
 - **Label collision gotcha**: UUID v7 前兩段都是 timestamp。`makeCodexAgentLabel` 改用 `parts[0]` + `parts[4].slice(0,4)`（node segment）避免同毫秒碰撞。
-- **Parser option relaxation**: `--with-subagents`、`--subagent`、`--all` 現在同時支援 `claude` 和 `codex`（`--pane` 和 `--interactive` 仍為 claude-only 直到 Phase 2/3）。
+- **All CLI options supported**: `--with-subagents`、`--subagent`、`--all`、`--pane`、`--interactive` 現在同時支援 `claude` 和 `codex`。
 - **Shared interfaces in core**: `OutputHandler`、`WatcherHandler`、`SessionHandler` 等介面在 `src/core/detector-interfaces.ts`，Claude module 透過 re-export 向後相容。
+- **Stateless parser in interactive mode**: Codex parser 無狀態，`startCodexInteractiveWatch` 所有 session 共用 `sharedParser`（Claude 每 session 需獨立 parser 防止狀態污染）。
+- **registerExistingAgent() required for resume**: 啟動時已知的 subagent 必須呼叫 `detector.registerExistingAgent(agentId, path)` 預填路徑，否則 `resume_agent` 事件的 `handleSubagentResume` 找不到路徑，`onSubagentEnter` 不會觸發。
+- **stopped flag prevents cross-session contamination**: `CodexSubagentDetector.stop()` 設定 `stopped = true`，`_resolveSubagent` 在每個 await 點後檢查，防止舊 detector 的 in-flight resolve 污染新 session 的 watcher。
 
 **Gotchas:**
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
@@ -138,6 +151,8 @@ src/
 - **PaneManager command builder** uses `process.argv[0]` and `process.argv[1]` to reconstruct the CLI command, supporting bun run, npx, and global install scenarios.
 - **SubagentDetector description queue**: FIFO `pendingDescriptions` must be consumed in both `registerNewAgent` (early detection) and `handleFallbackDetection` (completed path) to prevent queue drift. The queue is cleared in `stop()`.
 - **`handleAgentProgress` only triggers for resume**: Unknown agentIds are ignored (registration is handled by `onNewSubagent` via early/fallback paths), and only known agentIds trigger `onSubagentEnter`. This prevents duplicate pane opens and registration race issues.
+- **`readLastCodexAssistantMessage` signature**: Takes `(filePath, parser: LineParser)` — not `verbose` bool like the Claude version. Parser is injected to avoid circular imports.
+- **`createInteractiveSessionManager(displayController)`**: Module-level helper in `src/index.ts` shared by both `startClaudeInteractiveWatch` and `startCodexInteractiveWatch`. Do not duplicate this into each function.
 
 ## Code Quality
 
