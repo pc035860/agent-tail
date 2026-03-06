@@ -363,6 +363,10 @@ export class SubagentDetector {
       // 首次發現且已完成：不開 pane，只註冊監控
       this.knownAgentIds.add(agentId);
 
+      // Consume pending description to prevent queue drift
+      // (this agent's Task tool_use pushed a description, but no pane will open)
+      this.pendingDescriptions.shift();
+
       const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
 
       // Session 處理（Interactive 模式）

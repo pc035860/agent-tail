@@ -119,6 +119,50 @@ describe('SubagentDetector description queue', () => {
     detector.stop();
   });
 
+  test('fallback completed path consumes description to prevent queue drift', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-desc-drift-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    // Agent B will be discovered via early detection after A completes via fallback
+    await writeFile(join(subagentsDir, 'agent-bbbbbbb.jsonl'), '');
+
+    const hookCalls: {
+      agentId: string;
+      description?: string;
+    }[] = [];
+
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      onNewSubagent: (agentId: string, _path: string, description?: string) => {
+        hookCalls.push({ agentId, description });
+      },
+    });
+
+    detector.startDirectoryWatch();
+
+    // Push two descriptions: "desc A" for agent A, "desc B" for agent B
+    detector.pushDescription('desc A');
+    detector.pushDescription('desc B');
+
+    // Agent A completes via fallback (no early detection, no pane opened)
+    // This should consume "desc A" from the queue
+    detector.handleFallbackDetection('aaaaaaa');
+
+    // Agent B is discovered via early detection (should get "desc B", not "desc A")
+    detector.handleEarlyDetection();
+    await new Promise((r) => setTimeout(r, 500));
+
+    expect(hookCalls).toHaveLength(1);
+    expect(hookCalls[0]!.agentId).toBe('bbbbbbb');
+    expect(hookCalls[0]!.description).toBe('desc B');
+
+    detector.stop();
+  });
+
   test('pushDescription without corresponding agent does not error', () => {
     const detector = new SubagentDetector(new Set(), {
       subagentsDir: '/tmp/nonexistent-desc-test',
