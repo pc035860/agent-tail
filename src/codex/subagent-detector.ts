@@ -17,10 +17,14 @@ export function isValidCodexAgentId(id: string): boolean {
   return UUID_REGEX.test(id);
 }
 
-/** 取 UUID 前兩段作為短 label，例如 '[019cc375-5af5]' */
+/**
+ * 取 UUID 的高位時間戳段 + node 段前 4 碼作為短 label
+ * 例如 '019cc375-8a57'（避免 UUID v7 前兩段均為 timestamp 導致碰撞）
+ */
 export function makeCodexAgentLabel(agentId: string): string {
   const parts = agentId.split('-');
-  const shortId = `${parts[0]}-${parts[1]}`;
+  // parts[4] 為 node/random 段，提供唯一性；parts[0] 為可讀時間戳
+  const shortId = `${parts[0]}-${(parts[4] ?? '').slice(0, 4)}`;
   return makeAgentLabel(shortId);
 }
 
@@ -86,6 +90,10 @@ export class CodexSubagentDetector {
   handleSpawnAgent(callId: string, agentType: string, message: string): void {
     if (!this.config.enabled) return;
 
+    // 防止同一 callId 重複登錄導致舊 timer 洩漏
+    const existing = this.pendingSpawns.get(callId);
+    if (existing) clearTimeout(existing.timer);
+
     const timer = setTimeout(() => {
       this.pendingSpawns.delete(callId);
     }, 60000);
@@ -114,7 +122,11 @@ export class CodexSubagentDetector {
     }
 
     // Fire async, but don't await in sync handler
-    void this._resolveSubagent(callId, pending, agentId);
+    this._resolveSubagent(callId, pending, agentId).catch((err) => {
+      this.config.output.error(
+        `Codex: Failed to resolve subagent ${agentId} - ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
   }
 
   private async _resolveSubagent(

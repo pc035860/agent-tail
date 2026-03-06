@@ -307,7 +307,7 @@ describe('createCodexOnLineHandler', () => {
       },
     });
 
-    handler(line, '[019cc375-5af5]');
+    handler(line, '[019cc375-8a57]');
 
     expect(detector.spawnCalls).toHaveLength(0);
     expect(detector.outputCalls).toHaveLength(0);
