@@ -1184,6 +1184,14 @@ async function startCodexMultiWatch(
 
   const pm = paneManager;
 
+  // pane 模式下，有 pane 的 subagent 不在主 session 輸出（避免重複）
+  const shouldOutput = pm
+    ? (label: string) => {
+        if (label === MAIN_LABEL) return true;
+        return !pm.hasPaneForAgent(extractAgentIdFromLabel(label));
+      }
+    : undefined;
+
   const openPaneForSubagent = pm
     ? (agentId: string, subagentPath: string, description?: string) => {
         log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
@@ -1250,6 +1258,7 @@ async function startCodexMultiWatch(
   let detectionHandler = createCodexOnLineHandler(detector);
   const makeOnLine = () => (line: string, label: string) => {
     detectionHandler(line, label); // 只對 MAIN label 做 detection（內部已過濾）
+    if (shouldOutput && !shouldOutput(label)) return;
     const parsed = parser.parse(line);
     if (!parsed) return;
     parsed.sourceLabel = label;
