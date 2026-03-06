@@ -129,6 +129,10 @@ export function createOnLineHandler(
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
       if (label === MAIN_LABEL && parsed.isTaskToolUse) {
+        // Push description before early detection so it's queued when scan triggers
+        if (parsed.taskDescription) {
+          config.detector.pushDescription(parsed.taskDescription);
+        }
         config.detector.handleEarlyDetection();
       }
 

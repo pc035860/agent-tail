@@ -105,6 +105,7 @@ src/
 - **Codex Session Cache**: Cwd-indexed cache with 2s incremental refresh (scans today's directory only)
 - Formatters transform ParsedLine to output string (raw JSON or pretty colored)
 - **Pane auto-open** (`--pane`): Uses `SubagentDetector.onNewSubagent` hook → `PaneManager` → `TerminalController` to open tmux panes for each new subagent. Requires tmux environment.
+- **Pane naming**: Task `description` is extracted from `tool_use` input, queued in `SubagentDetector` (FIFO), and matched to new agents. `PaneManager` sanitizes and applies via `tmux select-pane -T` (2.6+, best-effort). Known limitation: parallel Tasks may mismatch descriptions.
 
 **Adding Super Follow to a New Agent:**
 1. Implement `getProjectInfo(sessionPath)` - Return `{ projectDir, displayName }` for the session
@@ -118,6 +119,7 @@ src/
 - **Subagent ID length varies**: Claude Code subagent filenames use 7-40 hex chars (`agent-[0-9a-f]{7,40}.jsonl`), not fixed 7. Regex must accommodate this.
 - **`--pane` mutual exclusions**: Cannot combine with `--interactive` or `--subagent`. Requires `--follow` mode. Auto-enables `--with-subagents`.
 - **PaneManager command builder** uses `process.argv[0]` and `process.argv[1]` to reconstruct the CLI command, supporting bun run, npx, and global install scenarios.
+- **SubagentDetector description queue**: FIFO `pendingDescriptions` must be consumed in both `registerNewAgent` (early detection) and `handleFallbackDetection` (completed path) to prevent queue drift. The queue is cleared in `stop()`.
 
 ## Code Quality
 

@@ -81,4 +81,6 @@ export interface ParsedLine {
   sourceLabel?: string;
   /** 是否為 Task tool_use（用於早期 Subagent 偵測） */
   isTaskToolUse?: boolean;
+  /** Task tool_use 的 description 欄位（用於 pane 命名） */
+  taskDescription?: string;
 }

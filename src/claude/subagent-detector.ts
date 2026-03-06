@@ -69,7 +69,11 @@ export interface SubagentDetectorConfig {
   /** 是否啟用目錄監控（預設 true） */
   watchDir?: boolean;
   /** 新 subagent 偵測時的回呼（用於 pane 自動開啟等） */
-  onNewSubagent?: (agentId: string, subagentPath: string) => void;
+  onNewSubagent?: (
+    agentId: string,
+    subagentPath: string,
+    description?: string
+  ) => void;
   /** Subagent 完成時的回呼（用於 pane 自動關閉等） */
   onSubagentDone?: (agentId: string) => void;
   /** 檢查 agentId 是否有對應的 pane（用於判斷是否需要關閉） */
@@ -267,6 +271,9 @@ export class SubagentDetector {
   private isWatching = false;
   // 追蹤所有 pending 的 setTimeout 句柄，用於 stop() 時清除
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  // FIFO queue: Task tool_use descriptions, matched to agents in registration order.
+  // May mismatch with parallel Task launches (known limitation, wrong label only).
+  private pendingDescriptions: string[] = [];
 
   constructor(initialAgentIds: Set<string>, config: SubagentDetectorConfig) {
     this.knownAgentIds = new Set(initialAgentIds);
@@ -296,6 +303,7 @@ export class SubagentDetector {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    this.pendingDescriptions = [];
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -356,6 +364,10 @@ export class SubagentDetector {
       // 首次發現且已完成：不開 pane，只註冊監控
       this.knownAgentIds.add(agentId);
 
+      // Consume pending description to prevent queue drift
+      // (this agent's Task tool_use pushed a description, but no pane will open)
+      this.pendingDescriptions.shift();
+
       const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
 
       // Session 處理（Interactive 模式）
@@ -401,6 +413,15 @@ export class SubagentDetector {
     if (isAlreadyMonitored && this.config.hasPane?.(agentId)) {
       this.config.onSubagentDone?.(agentId);
     }
+  }
+
+  /**
+   * Push a Task description to the FIFO queue.
+   * Called when a Task tool_use with description is detected in the main session.
+   * The description will be matched to the next newly registered agent.
+   */
+  pushDescription(description: string): void {
+    this.pendingDescriptions.push(description);
   }
 
   /**
@@ -512,7 +533,8 @@ export class SubagentDetector {
       this.config.output.warn(message);
 
       // 觸發 onNewSubagent 回呼（pane 自動開啟等用途）
-      this.config.onNewSubagent?.(agentId, subagentPath);
+      const description = this.pendingDescriptions.shift();
+      this.config.onNewSubagent?.(agentId, subagentPath, description);
 
       // 非阻塞式新增檔案監控
       const timer = setTimeout(() => {
