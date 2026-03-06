@@ -38,15 +38,20 @@ function createMockFormatter(): Formatter {
 function createMockDetector(): SubagentDetector & {
   earlyDetectionCalls: number;
   fallbackDetectionCalls: string[];
+  pushDescriptionCalls: string[];
 } {
   const detector = {
     earlyDetectionCalls: 0,
     fallbackDetectionCalls: [] as string[],
+    pushDescriptionCalls: [] as string[],
     handleEarlyDetection() {
       detector.earlyDetectionCalls++;
     },
     handleFallbackDetection(agentId: string) {
       detector.fallbackDetectionCalls.push(agentId);
+    },
+    pushDescription(description: string) {
+      detector.pushDescriptionCalls.push(description);
     },
     getKnownAgentIds: () => new Set<string>(),
     isKnownAgent: () => false,
@@ -56,6 +61,7 @@ function createMockDetector(): SubagentDetector & {
   return detector as unknown as SubagentDetector & {
     earlyDetectionCalls: number;
     fallbackDetectionCalls: string[];
+    pushDescriptionCalls: string[];
   };
 }
 
@@ -169,6 +175,80 @@ describe('createOnLineHandler', () => {
     expect(outputs).toHaveLength(1);
     expect(outputs[0]!.formatted).toBe('hello world');
     expect(outputs[0]!.label).toBe('[MAIN]');
+  });
+
+  test('label [MAIN] with isTaskToolUse and taskDescription pushes description before early detection', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      type: 'function_call',
+      isTaskToolUse: true,
+      taskDescription: 'explore codebase',
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[MAIN]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{"type":"assistant"}', '[MAIN]');
+
+    expect(detector.pushDescriptionCalls).toHaveLength(1);
+    expect(detector.pushDescriptionCalls[0]).toBe('explore codebase');
+    expect(detector.earlyDetectionCalls).toBe(1);
+  });
+
+  test('label [MAIN] with isTaskToolUse but no taskDescription does not push description', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      type: 'function_call',
+      isTaskToolUse: true,
+      // no taskDescription
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[MAIN]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{"type":"assistant"}', '[MAIN]');
+
+    expect(detector.pushDescriptionCalls).toHaveLength(0);
+    // Early detection should still fire
+    expect(detector.earlyDetectionCalls).toBe(1);
   });
 
   test('label [MAIN] with isTaskToolUse triggers handleEarlyDetection', () => {

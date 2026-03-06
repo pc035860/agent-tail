@@ -57,4 +57,21 @@ describe('TmuxController', () => {
       ).resolves.toBeUndefined();
     });
   });
+
+  describe('renamePane', () => {
+    test('does not throw on invalid pane ID', async () => {
+      const controller = new TmuxController();
+      // Should silently catch errors even with invalid pane
+      await expect(
+        controller.renamePane('%nonexistent', 'test title')
+      ).resolves.toBeUndefined();
+    });
+
+    test('does not throw with special characters in title', async () => {
+      const controller = new TmuxController();
+      await expect(
+        controller.renamePane('%nonexistent', 'title with "quotes" & symbols')
+      ).resolves.toBeUndefined();
+    });
+  });
 });
