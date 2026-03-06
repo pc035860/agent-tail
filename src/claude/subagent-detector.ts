@@ -353,11 +353,8 @@ export class SubagentDetector {
     if (!this.config.enabled) return;
     if (!isValidAgentId(agentId)) return;
 
-    const isNew = !this.knownAgentIds.has(agentId);
-    this.knownAgentIds.add(agentId);
-
-    // 只有已知的 agentId 才觸發（resume 情境）
-    if (isNew) return;
+    // 新 agentId 仍由 early/fallback 路徑完成註冊，避免提前標記 known 造成漏註冊
+    if (!this.knownAgentIds.has(agentId)) return;
 
     const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
     this.config.onSubagentEnter?.(agentId, subagentPath);

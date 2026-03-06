@@ -465,8 +465,30 @@ describe('SubagentDetector', () => {
 
       // 新 agentId 不應觸發 onSubagentEnter（由 onNewSubagent 負責）
       expect(enterCalls).toHaveLength(0);
-      // 但 agentId 應被加入 knownAgentIds
-      expect(detector.getKnownAgentIds().has('acfe87919d57b2295')).toBe(true);
+      // 新 agentId 不應提前標記為 known（避免後續 fallback 被短路）
+      expect(detector.getKnownAgentIds().has('acfe87919d57b2295')).toBe(false);
+      detector.stop();
+    });
+
+    test('new agent_progress does not block fallback registration', () => {
+      const output = createMockOutputHandler();
+      const watcher = createMockWatcherHandler();
+      const session = createMockSessionHandler();
+
+      const detector = new SubagentDetector(new Set(), {
+        subagentsDir: '/test/subagents',
+        output,
+        watcher,
+        session,
+        enabled: true,
+      });
+
+      detector.handleAgentProgress('acfe87919d57b2295');
+      detector.handleFallbackDetection('acfe87919d57b2295');
+
+      expect(session.addedSessions).toHaveLength(1);
+      expect(session.addedSessions[0]?.agentId).toBe('acfe87919d57b2295');
+      expect(session.markedDone).toContain('acfe87919d57b2295');
       detector.stop();
     });
 
