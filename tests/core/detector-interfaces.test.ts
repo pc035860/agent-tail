@@ -83,7 +83,7 @@ describe('detector-interfaces', () => {
         'info:hello',
         'warn:warning',
         'error:err',
-        'dbg:dbg',
+        'debug:dbg',
       ]);
     });
   });
