@@ -60,11 +60,11 @@ async function findSubagentFile(
   agentId: string
 ): Promise<string | null> {
   const glob = new Glob(`rollout-*-${agentId}.jsonl`);
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 30; i++) {
     for await (const file of glob.scan(dateDir)) {
       return join(dateDir, file);
     }
-    if (i < 9) await new Promise((r) => setTimeout(r, 100));
+    if (i < 29) await new Promise((r) => setTimeout(r, 300));
   }
   return null;
 }
