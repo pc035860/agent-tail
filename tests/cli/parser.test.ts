@@ -508,6 +508,28 @@ describe('parseArgs', () => {
       consoleSpy.mockRestore();
     });
 
+    // Phase 3 RED: codex --interactive should succeed after parser relaxation
+    test('TC16: codex --interactive 不再報錯（Phase 3 支援）', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      let options: ReturnType<typeof parseArgs> | undefined;
+      let threw = false;
+      try {
+        options = parseArgs(['node', 'agent-tail', 'codex', '--interactive']);
+      } catch {
+        threw = true;
+      }
+
+      consoleSpy.mockRestore();
+      // RED: 目前 threw=true（parser 拒絕），GREEN: threw=false
+      expect(threw).toBe(false);
+      expect(options?.interactive).toBe(true);
+    });
+
     // Phase 2 GREEN: codex --pane now supported
     test('TC15: codex --pane 不再報錯（Phase 2 支援）', () => {
       process.exit = ((code?: number) => {
