@@ -73,18 +73,14 @@ async function findSubagentFile(
 
 export class CodexSubagentDetector {
   private pendingSpawns: Map<string, PendingSpawn> = new Map();
-  private knownAgentIds: Set<string> = new Set();
-  private shortIdToFullId: Map<string, string> = new Map();
   private config: CodexSubagentDetectorConfig;
 
-  constructor(existingAgentIds: string[], config: CodexSubagentDetectorConfig) {
+  constructor(
+    _existingAgentIds: string[],
+    config: CodexSubagentDetectorConfig
+  ) {
     this.config = config;
-    for (const id of existingAgentIds) {
-      this.knownAgentIds.add(id);
-      const parts = id.split('-');
-      const shortId = `${parts[0]}-${parts[1]}`;
-      this.shortIdToFullId.set(shortId, id);
-    }
+    // existingAgentIds reserved for future deduplication use
   }
 
   handleSpawnAgent(callId: string, agentType: string, message: string): void {
@@ -150,20 +146,9 @@ export class CodexSubagentDetector {
     clearTimeout(pending.timer);
     this.pendingSpawns.delete(callId);
 
-    // Register agent
-    this.knownAgentIds.add(agentId);
-    const parts = agentId.split('-');
-    const shortId = `${parts[0]}-${parts[1]}`;
-    if (this.shortIdToFullId.has(shortId)) {
-      this.config.output.warn(
-        `Codex: shortId collision for ${shortId}, keeping existing mapping`
-      );
-    } else {
-      this.shortIdToFullId.set(shortId, agentId);
-    }
-
     const label = makeCodexAgentLabel(agentId);
     await this.config.watcher.addFile({ path: foundPath, label });
+    // pending.message reserved for Phase 2 pane description
     this.config.onNewSubagent?.(agentId, foundPath);
   }
 

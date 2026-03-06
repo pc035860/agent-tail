@@ -63,6 +63,7 @@ export async function extractCodexSubagentIds(
 
 /**
  * 根據 agentIds 在 dateDir 中找到對應的 JSONL 檔案
+ * 使用單一 Glob 掃描 + 平行 stat，效率為 O(M+N)
  */
 export async function buildCodexSubagentFiles(
   dateDir: string,
@@ -70,26 +71,31 @@ export async function buildCodexSubagentFiles(
 ): Promise<SessionFile[]> {
   if (agentIds.length === 0) return [];
 
-  const results: SessionFile[] = [];
-  for (const agentId of agentIds) {
-    const glob = new Glob(`rollout-*-${agentId}.jsonl`);
-    for await (const file of glob.scan(dateDir)) {
+  const idSet = new Set(agentIds);
+  const glob = new Glob('rollout-*.jsonl');
+  const statPromises: Promise<SessionFile | null>[] = [];
+
+  for await (const file of glob.scan(dateDir)) {
+    const uuid = extractUUIDFromPath(file);
+    if (uuid && idSet.has(uuid)) {
       const fullPath = join(dateDir, file);
-      try {
-        const stat = await Bun.file(fullPath).stat();
-        results.push({
-          path: fullPath,
-          mtime: stat.mtime ?? new Date(0),
-          agentType: 'codex',
-        });
-      } catch {
-        // skip inaccessible files
-      }
-      break; // take first match per agentId
+      statPromises.push(
+        Bun.file(fullPath)
+          .stat()
+          .then(
+            (stat): SessionFile => ({
+              path: fullPath,
+              mtime: stat.mtime ?? new Date(0),
+              agentType: 'codex',
+            })
+          )
+          .catch(() => null)
+      );
     }
   }
 
-  return results;
+  const results = await Promise.all(statPromises);
+  return results.filter((r): r is SessionFile => r !== null);
 }
 
 // ============================================================
