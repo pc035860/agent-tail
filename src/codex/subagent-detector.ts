@@ -163,8 +163,14 @@ export class CodexSubagentDetector {
     // 記錄已知 agent（供 handleSubagentResume 查詢路徑）
     this.registeredAgentPaths.set(agentId, foundPath);
 
+    // Guard：addFile 前再次確認未停止（watcher 是 let 閉包，可能已換新實例）
+    if (this.stopped) return;
+
     const label = makeCodexAgentLabel(agentId);
     await this.config.watcher.addFile({ path: foundPath, label });
+
+    // Guard：addFile 是 async，完成後再確認一次，防止 onNewSubagent 對已切換的 session 觸發
+    if (this.stopped) return;
 
     const description =
       pending.agentType && pending.message
