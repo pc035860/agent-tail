@@ -315,9 +315,9 @@ async function startClaudeMultiWatch(
   // 提取 pane 相關回呼（消除 paneManager! 斷言，用 const 捕獲確認非 null 的參照）
   const pm = paneManager; // 閉包捕獲，不受外部重賦值影響
   const onNewSubagent = pm
-    ? (agentId: string, subagentPath: string) => {
+    ? (agentId: string, subagentPath: string, description?: string) => {
         log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
-        pm.openPane(agentId, subagentPath).catch((err) => {
+        pm.openPane(agentId, subagentPath, description).catch((err) => {
           log(
             options.quiet,
             chalk.yellow(`[pane] Failed to open pane: ${err}`)

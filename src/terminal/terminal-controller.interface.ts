@@ -24,4 +24,6 @@ export interface TerminalController {
   applyLayout?(
     type?: 'main-vertical' | 'main-horizontal' | 'tiled'
   ): Promise<void>;
+  /** 重新命名 pane（可選方法，tmux 2.6+ 支援） */
+  renamePane?(paneId: string, title: string): Promise<void>;
 }

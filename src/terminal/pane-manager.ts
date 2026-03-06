@@ -6,6 +6,29 @@ import type {
 /** MVP 最大 pane 數量（安全上限，Phase 2 可設定） */
 const MAX_PANES = 6;
 
+/** Pane title description 最大長度 */
+const MAX_DESCRIPTION_LENGTH = 50;
+
+/**
+ * 清理並格式化 pane title
+ * - 移除 control characters 和 tmux # 特殊序列
+ * - 截斷超長描述
+ * - 格式: "agentId: description"
+ */
+export function sanitizePaneTitle(
+  agentId: string,
+  description: string
+): string {
+  const sanitized = description
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]/g, ' ') // control chars -> space
+    .replace(/#/g, '') // tmux interprets #() sequences
+    .trim()
+    .slice(0, MAX_DESCRIPTION_LENGTH);
+
+  return `${agentId}: ${sanitized}`;
+}
+
 /** applyLayout debounce 延遲（ms） */
 const LAYOUT_DEBOUNCE_MS = 50;
 
@@ -39,8 +62,13 @@ export class PaneManager {
    * - 已存在相同 agentId 的 pane 時跳過（去重）
    * - 超過 MAX_PANES 時跳過（安全上限）
    * - 使用 pendingAgentIds 防止併發呼叫超開
+   * - description 用於命名 pane（可選，來自 Task tool_use 的 description 欄位）
    */
-  async openPane(agentId: string, subagentPath: string): Promise<void> {
+  async openPane(
+    agentId: string,
+    subagentPath: string,
+    description?: string
+  ): Promise<void> {
     if (this.panes.has(agentId)) return;
     if (this.pendingAgentIds.has(agentId)) return;
     if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
@@ -51,6 +79,17 @@ export class PaneManager {
       const pane = await this.controller.createPane(cmd, agentId);
       if (pane) {
         this.panes.set(agentId, pane);
+
+        // Best-effort pane naming (before pendingClose check)
+        if (description && this.controller.renamePane) {
+          const title = sanitizePaneTitle(agentId, description);
+          try {
+            await this.controller.renamePane(pane.id, title);
+          } catch {
+            // 命名失敗不影響 pane 功能
+          }
+        }
+
         // 排程佈局更新（debounce，連續開多個 pane 時只觸發一次）
         this.scheduleLayout();
 

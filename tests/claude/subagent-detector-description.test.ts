@@ -52,11 +52,18 @@ describe('SubagentDetector description queue', () => {
       output: createMockOutputHandler(),
       watcher: createMockWatcherHandler(),
       enabled: true,
-      watchDir: false,
-      onNewSubagent: (agentId, subagentPath, description) => {
+      // watchDir defaults to true — needed for handleEarlyDetection's isWatching guard
+      onNewSubagent: (
+        agentId: string,
+        subagentPath: string,
+        description?: string
+      ) => {
         hookCalls.push({ agentId, path: subagentPath, description });
       },
     });
+
+    // Start directory watch (sets isWatching=true, required for handleEarlyDetection)
+    detector.startDirectoryWatch();
 
     // Push descriptions before agents are registered
     detector.pushDescription('desc A');
@@ -66,7 +73,7 @@ describe('SubagentDetector description queue', () => {
     detector.handleEarlyDetection();
 
     // Wait for the async scan to complete
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 500));
 
     expect(hookCalls).toHaveLength(2);
     // FIFO order: first description goes to first agent
@@ -93,16 +100,18 @@ describe('SubagentDetector description queue', () => {
       output: createMockOutputHandler(),
       watcher: createMockWatcherHandler(),
       enabled: true,
-      watchDir: false,
-      onNewSubagent: (agentId, _path, description) => {
+      onNewSubagent: (agentId: string, _path: string, description?: string) => {
         hookCalls.push({ agentId, description });
       },
     });
 
+    // Start directory watch (sets isWatching=true)
+    detector.startDirectoryWatch();
+
     // No descriptions pushed — queue is empty
 
     detector.handleEarlyDetection();
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 500));
 
     expect(hookCalls).toHaveLength(1);
     expect(hookCalls[0]!.description).toBeUndefined();

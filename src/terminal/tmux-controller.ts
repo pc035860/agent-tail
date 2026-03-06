@@ -53,6 +53,22 @@ export class TmuxController implements TerminalController {
   }
 
   /**
+   * 重新命名 pane（tmux 2.6+ 支援 select-pane -T）
+   * Best-effort 操作，失敗靜默忽略
+   */
+  async renamePane(paneId: string, title: string): Promise<void> {
+    try {
+      const proc = Bun.spawn(
+        ['tmux', 'select-pane', '-t', paneId, '-T', title],
+        { stdout: 'ignore', stderr: 'ignore' }
+      );
+      await proc.exited;
+    } catch {
+      // 靜默忽略（tmux 版本不支援或 pane 已關閉）
+    }
+  }
+
+  /**
    * 套用佈局（main-vertical：主左、subagent 堆右均分）
    * Best-effort 操作，失敗不影響 pane 建立
    */

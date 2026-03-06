@@ -500,6 +500,12 @@ class ClaudeLineParser implements LineParser {
     }
 
     if (part.type === 'tool_use' && part.name) {
+      const isTask = part.name === 'Task';
+      const taskDescription =
+        isTask && typeof part.input?.description === 'string'
+          ? part.input.description
+          : undefined;
+
       return {
         type: 'function_call',
         timestamp,
@@ -508,7 +514,8 @@ class ClaudeLineParser implements LineParser {
           verbose: this.verbose,
         }),
         toolName: part.name,
-        isTaskToolUse: part.name === 'Task',
+        isTaskToolUse: isTask,
+        taskDescription,
       };
     }
 
