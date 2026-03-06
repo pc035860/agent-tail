@@ -398,4 +398,125 @@ describe('parseArgs', () => {
       consoleSpy.mockRestore();
     });
   });
+
+  // ================================================================
+  // Codex subagent support (Phase 1)
+  // ================================================================
+
+  describe('codex subagent options (Phase 1)', () => {
+    // 這些測試驗證 codex 能使用 --with-subagents、--subagent、--all
+    // 目前（Phase 1 前）會因 parser 驗證失敗而拋出，屬於 RED 狀態
+    // 使用 process.exit mock 確保測試不殺死 runner
+
+    test('TC12: codex --with-subagents 不再報錯', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      let options: ReturnType<typeof parseArgs> | undefined;
+      let threw = false;
+      try {
+        options = parseArgs(['node', 'agent-tail', 'codex', '--with-subagents']);
+      } catch {
+        threw = true;
+      }
+
+      consoleSpy.mockRestore();
+      // RED: 目前 threw=true（parser 拒絕），GREEN: threw=false
+      expect(threw).toBe(false);
+      expect(options?.withSubagents).toBe(true);
+    });
+
+    test('TC13: codex --subagent 不再報錯', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      let options: ReturnType<typeof parseArgs> | undefined;
+      let threw = false;
+      try {
+        options = parseArgs(['node', 'agent-tail', 'codex', '--subagent']);
+      } catch {
+        threw = true;
+      }
+
+      consoleSpy.mockRestore();
+      expect(threw).toBe(false);
+      expect(options?.subagent).toBe(true);
+    });
+
+    test('TC13b: codex --all 展開為 verbose + withSubagents + autoSwitch', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      let options: ReturnType<typeof parseArgs> | undefined;
+      let threw = false;
+      try {
+        options = parseArgs(['node', 'agent-tail', 'codex', '-a']);
+      } catch {
+        threw = true;
+      }
+
+      consoleSpy.mockRestore();
+      expect(threw).toBe(false);
+      expect(options?.verbose).toBe(true);
+      expect(options?.withSubagents).toBe(true);
+      expect(options?.autoSwitch).toBe(true);
+    });
+
+    test('TC14: gemini --with-subagents 仍然報錯', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'gemini', '--with-subagents'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('codex --interactive 仍然報錯（Phase 3 才支援）', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'codex', '--interactive'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('codex --pane 仍然報錯（Phase 2 才支援）', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'codex', '--pane'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
 });
