@@ -186,21 +186,33 @@ if (line.includes('"send_input"')) { /* parse send_input */ }
 
 ## 要修改的檔案
 
-| 檔案 | 動作 | Phase |
-|------|------|-------|
-| `src/core/detector-interfaces.ts` | 新建 | 0 |
-| `src/claude/subagent-detector.ts` | 修改（re-export 介面） | 0 |
-| `src/claude/output-handlers.ts` | 修改（import 路徑） | 0 |
-| `src/claude/session-handlers.ts` | 修改（import 路徑） | 0 |
-| `src/codex/subagent-detector.ts` | 新建 | 1 |
-| `src/codex/watch-builder.ts` | 新建 | 1 |
-| `src/cli/parser.ts` | 修改 | 1 |
-| `src/core/types.ts` | 修改 | 1 |
-| `src/agents/codex/codex-agent.ts` | 修改 | 1 |
-| `src/index.ts` | 修改 | 1-3 |
-| `tests/codex/subagent-detector.test.ts` | 新建 | 1 |
-| `tests/codex/watch-builder.test.ts` | 新建 | 1 |
-| `tests/cli/parser.test.ts` | 修改 | 1 |
+| 檔案 | 動作 | Phase | 狀態 |
+|------|------|-------|------|
+| `src/core/detector-interfaces.ts` | 新建 | 0 | ✅ 完成 (27b305c) |
+| `src/claude/subagent-detector.ts` | 修改（re-export 介面） | 0 | ✅ 完成 (27b305c) |
+| `src/claude/output-handlers.ts` | 修改（import 路徑） | 0 | ✅ 完成 (27b305c) |
+| `src/claude/session-handlers.ts` | 修改（import 路徑） | 0 | ✅ 完成 (27b305c) |
+| `src/codex/subagent-detector.ts` | 新建 | 1 | ✅ 完成 (1580923) |
+| `src/codex/watch-builder.ts` | 新建 | 1 | ✅ 完成 (1580923) |
+| `src/cli/parser.ts` | 修改（放寬 codex 選項） | 1 | ✅ 完成 (bdcaaea) |
+| `src/core/types.ts` | 修改（JSDoc 更新） | 1 | ⏳ 待實作 |
+| `src/agents/codex/codex-agent.ts` | 修改（findSubagent） | 1 | ⏳ 待實作 |
+| `src/index.ts` | 修改（路由 + startCodexMultiWatch） | 1-3 | ⏳ 待實作 |
+| `tests/codex/subagent-detector.test.ts` | 新建 | 1 | ✅ 完成 (0da60fe) |
+| `tests/codex/watch-builder.test.ts` | 新建 | 1 | ✅ 完成 (0da60fe) |
+| `tests/cli/parser.test.ts` | 修改 | 1 | ✅ 完成 (bdcaaea) |
+
+### Phase 0 完成記錄（2026-03-06）
+
+- 356 個測試全部通過，typecheck 乾淨
+- 介面提取完成，Claude 模組向後相容
+
+### Phase 1 完成記錄（2026-03-06）
+
+- 核心偵測模組（subagent-detector、watch-builder）完成並通過 Gemini review
+- CLI parser 放寬 codex 的 `--with-subagents`、`--subagent`、`--all` 選項
+- 356 個測試全部通過，typecheck 乾淨
+- **待完成**：`src/core/types.ts` JSDoc、`src/agents/codex/codex-agent.ts` findSubagent、`src/index.ts` 路由整合（這些屬於執行期整合，未含在 Phase 1 TDD 測試範圍內，需要 Phase 2+ 實作時一起完成）
 
 ## Known Limitations
 
