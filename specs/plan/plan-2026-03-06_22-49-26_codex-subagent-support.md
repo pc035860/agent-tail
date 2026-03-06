@@ -195,9 +195,9 @@ if (line.includes('"send_input"')) { /* parse send_input */ }
 | `src/codex/subagent-detector.ts` | 新建 | 1 | ✅ 完成 (1580923) |
 | `src/codex/watch-builder.ts` | 新建 | 1 | ✅ 完成 (1580923) |
 | `src/cli/parser.ts` | 修改（放寬 codex 選項） | 1 | ✅ 完成 (bdcaaea) |
-| `src/core/types.ts` | 修改（JSDoc 更新） | 1 | ⏳ 待實作 |
-| `src/agents/codex/codex-agent.ts` | 修改（findSubagent） | 1 | ⏳ 待實作 |
-| `src/index.ts` | 修改（路由 + startCodexMultiWatch） | 1-3 | ⏳ 待實作 |
+| `src/core/types.ts` | 修改（JSDoc 更新） | 1 | ✅ 完成 |
+| `src/agents/codex/codex-agent.ts` | 修改（findSubagent） | 1 | ✅ 完成 |
+| `src/index.ts` | 修改（路由 + startCodexMultiWatch + startCodexInteractiveWatch） | 1-3 | ✅ 完成 |
 | `tests/codex/subagent-detector.test.ts` | 新建 | 1 | ✅ 完成 (0da60fe) |
 | `tests/codex/watch-builder.test.ts` | 新建 | 1 | ✅ 完成 (0da60fe) |
 | `tests/cli/parser.test.ts` | 修改 | 1 | ✅ 完成 (bdcaaea) |
@@ -212,7 +212,25 @@ if (line.includes('"send_input"')) { /* parse send_input */ }
 - 核心偵測模組（subagent-detector、watch-builder）完成並通過 Gemini review
 - CLI parser 放寬 codex 的 `--with-subagents`、`--subagent`、`--all` 選項
 - 356 個測試全部通過，typecheck 乾淨
-- **待完成**：`src/core/types.ts` JSDoc、`src/agents/codex/codex-agent.ts` findSubagent、`src/index.ts` 路由整合（這些屬於執行期整合，未含在 Phase 1 TDD 測試範圍內，需要 Phase 2+ 實作時一起完成）
+
+### Phase 2 完成記錄（2026-03-07）
+
+- `CodexSubagentDetector` 新增 `handleSubagentResume`、`getAgentPath`、`registerExistingAgent` 方法
+- `createCodexOnLineHandler` 新增 `resume_agent`/`send_input` 事件偵測
+- `readLastCodexAssistantMessage(filePath, parser)` 實作
+- `startCodexMultiWatch` 整合 PaneManager（`--pane codex` 支援）
+- `stopped` guard 防止 in-flight `_resolveSubagent` 在 session 切換後繼續注入
+- 384 個測試通過，typecheck + lint 乾淨
+
+### Phase 3 完成記錄（2026-03-07）
+
+- `startCodexInteractiveWatch()` 實作：共用 `DisplayController` + `SessionManager`
+- Codex parser 無狀態 → 所有 session 共用 `sharedParser`（不同於 Claude 每 session 獨立）
+- `detectionHandler` 作為 `let` 變數，`buildInteractiveState` 結尾更新，確保 session 切換後指向新 detector
+- `registerExistingAgent` 在 `buildInteractiveState` 中預填既有 subagent 路徑
+- Refactor：提取 `createInteractiveSessionManager(displayController)` 共用 helper，消除 Claude/Codex 35 行重複定義
+- Code review：Codex MCP review loop 通過（2 輪 blocking issue 修正，最終無 blocking）
+- 384 個測試通過，typecheck + lint 乾淨
 
 ## Known Limitations
 
