@@ -1,15 +1,24 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import {
   extractCodexSubagentIds,
   buildCodexSubagentFiles,
   createCodexOnLineHandler,
   extractUUIDFromPath,
 } from '../../src/codex/watch-builder';
+// RED: readLastCodexAssistantMessage not yet exported from watch-builder
+// Use namespace import to avoid hard SyntaxError at module load time
+import * as watchBuilderModule from '../../src/codex/watch-builder';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const readLastCodexAssistantMessage = (watchBuilderModule as any).readLastCodexAssistantMessage as
+  | ((filePath: string, parser: unknown) => Promise<unknown[]>)
+  | undefined;
 import type { CodexSubagentDetector } from '../../src/codex/subagent-detector';
 import { MAIN_LABEL } from '../../src/core/detector-interfaces';
+import { CodexAgent } from '../../src/agents/codex/codex-agent';
 
 // ============================================================
 // Mock CodexSubagentDetector
@@ -22,6 +31,7 @@ function createMockDetector(): CodexSubagentDetector & {
     output: { agent_id: string; nickname?: string };
   }[];
   doneCalls: string[];
+  resumeCalls: string[];
 } {
   const spawnCalls: { callId: string; agentType: string; message: string }[] =
     [];
@@ -30,11 +40,13 @@ function createMockDetector(): CodexSubagentDetector & {
     output: { agent_id: string; nickname?: string };
   }[] = [];
   const doneCalls: string[] = [];
+  const resumeCalls: string[] = [];
 
   return {
     spawnCalls,
     outputCalls,
     doneCalls,
+    resumeCalls,
     handleSpawnAgent: (callId: string, agentType: string, message: string) =>
       spawnCalls.push({ callId, agentType, message }),
     handleSpawnAgentOutput: (
@@ -42,11 +54,14 @@ function createMockDetector(): CodexSubagentDetector & {
       output: { agent_id: string; nickname?: string }
     ) => outputCalls.push({ callId, output }),
     handleSubagentDone: (agentId: string) => doneCalls.push(agentId),
+    // RED: handleSubagentResume not yet on CodexSubagentDetector
+    handleSubagentResume: (agentId: string) => resumeCalls.push(agentId),
     stop: () => {},
   } as unknown as CodexSubagentDetector & {
     spawnCalls: typeof spawnCalls;
     outputCalls: typeof outputCalls;
     doneCalls: typeof doneCalls;
+    resumeCalls: typeof resumeCalls;
   };
 }
 
@@ -335,5 +350,182 @@ describe('createCodexOnLineHandler', () => {
     expect(detector.spawnCalls).toHaveLength(0);
     expect(detector.outputCalls).toHaveLength(0);
     expect(detector.doneCalls).toHaveLength(0);
+  });
+
+  // ============================================================
+  // Phase 2 RED Tests: resume_agent + send_input pre-filter
+  // ============================================================
+
+  const VALID_UUID = '019cc375-5af5-7ed1-9ff8-8a5757d815d1';
+
+  test('resume_agent 行 → 呼叫 detector.handleSubagentResume（Phase 2 RED）', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'resume_agent',
+        call_id: 'c-resume-1',
+        arguments: JSON.stringify({ agent_id: VALID_UUID }),
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+
+    // RED: createCodexOnLineHandler doesn't call handleSubagentResume yet
+    expect(detector.resumeCalls).toHaveLength(1);
+    expect(detector.resumeCalls[0]).toBe(VALID_UUID);
+  });
+
+  test('send_input 行 → 呼叫 detector.handleSubagentResume（Phase 2 RED）', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'send_input',
+        call_id: 'c-send-1',
+        arguments: JSON.stringify({ agent_id: VALID_UUID, message: 'continue' }),
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+
+    // RED: createCodexOnLineHandler doesn't call handleSubagentResume yet
+    expect(detector.resumeCalls).toHaveLength(1);
+    expect(detector.resumeCalls[0]).toBe(VALID_UUID);
+  });
+
+  test('resume_agent 行 on non-MAIN label → 不呼叫 handleSubagentResume', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'resume_agent',
+        call_id: 'c-resume-1',
+        arguments: JSON.stringify({ agent_id: VALID_UUID }),
+      },
+    });
+
+    handler(line, '[019cc375-8a57]');
+
+    expect(detector.resumeCalls).toHaveLength(0);
+  });
+
+  test('resume_agent 行含無效 agent_id → handleSubagentResume 被呼叫但 isValidCodexAgentId 過濾', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'resume_agent',
+        call_id: 'c-resume-1',
+        // 無效的 agent_id（非 UUID 格式）
+        arguments: JSON.stringify({ agent_id: 'not-a-valid-uuid' }),
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+
+    // handleSubagentResume is called with the invalid ID
+    // but isValidCodexAgentId inside the real detector would filter it out
+    // In mock, we just verify the call is made
+    expect(detector.resumeCalls).toHaveLength(1);
+    expect(detector.resumeCalls[0]).toBe('not-a-valid-uuid');
+  });
+});
+
+// ============================================================
+// Phase 2 RED Tests: readLastCodexAssistantMessage
+// ============================================================
+
+describe('readLastCodexAssistantMessage (Phase 2 RED)', () => {
+  let tempDir: string;
+  let parser: ReturnType<typeof createMockParser>;
+
+  function createMockParser() {
+    const agent = new CodexAgent({ verbose: false });
+    return agent.parser;
+  }
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'codex-last-msg-'));
+    parser = createMockParser();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  function makeAssistantLine(text: string): string {
+    return JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-03-07T00:00:00.000Z',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text }],
+      },
+    });
+  }
+
+  function makeUserLine(text: string): string {
+    return JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-03-07T00:00:00.000Z',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text }],
+      },
+    });
+  }
+
+  test('含 assistant 訊息的 JSONL → 回傳最後一條 assistant 行', async () => {
+    const filePath = join(tempDir, 'subagent.jsonl');
+    await writeFile(
+      filePath,
+      [
+        makeUserLine('請幫我做這個'),
+        makeAssistantLine('第一個回應'),
+        makeUserLine('繼續'),
+        makeAssistantLine('最後的回應'),  // ← 應回傳這條
+      ].join('\n') + '\n'
+    );
+
+    // RED: readLastCodexAssistantMessage doesn't exist yet
+    const result = await readLastCodexAssistantMessage(filePath, parser);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.formatted).toContain('最後的回應');
+  });
+
+  test('無 assistant 訊息的 JSONL → 回傳空陣列', async () => {
+    const filePath = join(tempDir, 'subagent.jsonl');
+    await writeFile(
+      filePath,
+      [makeUserLine('user msg 1'), makeUserLine('user msg 2')].join('\n') + '\n'
+    );
+
+    // RED: readLastCodexAssistantMessage doesn't exist yet
+    const result = await readLastCodexAssistantMessage(filePath, parser);
+
+    expect(result).toHaveLength(0);
+  });
+
+  test('空檔案 → 回傳空陣列', async () => {
+    const filePath = join(tempDir, 'empty.jsonl');
+    await writeFile(filePath, '');
+
+    // RED: readLastCodexAssistantMessage doesn't exist yet
+    const result = await readLastCodexAssistantMessage(filePath, parser);
+
+    expect(result).toHaveLength(0);
+  });
+
+  test('檔案不存在 → 回傳空陣列（不拋出例外）', async () => {
+    const filePath = join(tempDir, 'nonexistent.jsonl');
+
+    // RED: readLastCodexAssistantMessage doesn't exist yet
+    const result = await readLastCodexAssistantMessage(filePath, parser);
+
+    expect(result).toHaveLength(0);
   });
 });

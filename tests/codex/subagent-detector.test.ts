@@ -1,4 +1,7 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   isValidCodexAgentId,
   makeCodexAgentLabel,
@@ -167,5 +170,212 @@ describe('CodexSubagentDetector', () => {
       detector.stop();
       expect(() => detector.stop()).not.toThrow();
     });
+  });
+});
+
+// ============================================================
+// Phase 2 RED Tests: onSubagentEnter + handleSubagentResume + getAgentPath
+// ============================================================
+
+describe('CodexSubagentDetector - resume (Phase 2)', () => {
+  let tempDir: string;
+  let output: ReturnType<typeof createMockOutput>;
+  let watcher: ReturnType<typeof createMockWatcher>;
+  let onNewSubagentCalls: { agentId: string; path: string; description?: string }[];
+  let onSubagentEnterCalls: { agentId: string; path: string }[];
+
+  const SUBAGENT_UUID = '019cc375-5af5-7ed1-9ff8-8a5757d815d1';
+  const SUBAGENT_FILENAME = `rollout-2026-03-07T00-00-01-${SUBAGENT_UUID}.jsonl`;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'codex-resume-test-'));
+    output = createMockOutput();
+    watcher = createMockWatcher();
+    onNewSubagentCalls = [];
+    onSubagentEnterCalls = [];
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  // ------------------------------------------------------------------
+  // handleSubagentResume method existence
+  // ------------------------------------------------------------------
+
+  test('handleSubagentResume method should be defined', () => {
+    // RED: method doesn't exist in CodexSubagentDetector yet
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+    });
+    expect(typeof (det as unknown as Record<string, unknown>)['handleSubagentResume']).toBe('function');
+  });
+
+  // ------------------------------------------------------------------
+  // handleSubagentResume: unknown agentId → no trigger
+  // ------------------------------------------------------------------
+
+  test('handleSubagentResume: 未知 agentId → 不觸發 onSubagentEnter', () => {
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+      // RED: onSubagentEnter doesn't exist in config type yet
+      ...({ onSubagentEnter: (agentId: string, path: string) => onSubagentEnterCalls.push({ agentId, path }) } as object),
+    } as CodexSubagentDetectorConfig);
+
+    // RED: handleSubagentResume doesn't exist
+    (det as unknown as { handleSubagentResume: (id: string) => void }).handleSubagentResume(SUBAGENT_UUID);
+
+    expect(onSubagentEnterCalls).toHaveLength(0);
+  });
+
+  // ------------------------------------------------------------------
+  // handleSubagentResume: enabled=false → no trigger
+  // ------------------------------------------------------------------
+
+  test('handleSubagentResume: enabled=false → 不觸發', () => {
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: false,
+      ...({ onSubagentEnter: (agentId: string, path: string) => onSubagentEnterCalls.push({ agentId, path }) } as object),
+    } as CodexSubagentDetectorConfig);
+
+    (det as unknown as { handleSubagentResume: (id: string) => void }).handleSubagentResume(SUBAGENT_UUID);
+
+    expect(onSubagentEnterCalls).toHaveLength(0);
+  });
+
+  // ------------------------------------------------------------------
+  // handleSubagentResume: known agentId → triggers onSubagentEnter
+  // ------------------------------------------------------------------
+
+  test('handleSubagentResume: 已知 agentId → 觸發 onSubagentEnter 帶正確 path', async () => {
+    // 建立 subagent 檔案
+    const subagentFile = join(tempDir, SUBAGENT_FILENAME);
+    await writeFile(subagentFile, '{"type":"session_meta"}\n');
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+      onNewSubagent: (agentId, path, description) =>
+        onNewSubagentCalls.push({ agentId, path, description }),
+      ...({ onSubagentEnter: (agentId: string, path: string) => onSubagentEnterCalls.push({ agentId, path }) } as object),
+    } as CodexSubagentDetectorConfig);
+
+    // Register agentId via spawn → resolve cycle
+    det.handleSpawnAgent('call-1', 'software-engineer', 'Do the task');
+    det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
+
+    // Wait for _resolveSubagent to complete (file exists → fast)
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // onNewSubagent should have been called → agentId is now registered
+    expect(onNewSubagentCalls.length).toBeGreaterThan(0);
+
+    // RED: handleSubagentResume doesn't exist
+    (det as unknown as { handleSubagentResume: (id: string) => void }).handleSubagentResume(SUBAGENT_UUID);
+
+    expect(onSubagentEnterCalls).toHaveLength(1);
+    expect(onSubagentEnterCalls[0]!.agentId).toBe(SUBAGENT_UUID);
+    expect(onSubagentEnterCalls[0]!.path).toBe(subagentFile);
+  });
+
+  // ------------------------------------------------------------------
+  // getAgentPath
+  // ------------------------------------------------------------------
+
+  test('getAgentPath: 已知 agentId → 回傳正確路徑', async () => {
+    const subagentFile = join(tempDir, SUBAGENT_FILENAME);
+    await writeFile(subagentFile, '{"type":"session_meta"}\n');
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+    });
+
+    det.handleSpawnAgent('call-1', 'software-engineer', 'task');
+    det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // RED: getAgentPath doesn't exist
+    const path = (det as unknown as { getAgentPath: (id: string) => string | undefined }).getAgentPath(SUBAGENT_UUID);
+    expect(path).toBe(subagentFile);
+  });
+
+  test('getAgentPath: 未知 agentId → 回傳 undefined', () => {
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+    });
+
+    // RED: getAgentPath doesn't exist
+    const path = (det as unknown as { getAgentPath: (id: string) => string | undefined }).getAgentPath(SUBAGENT_UUID);
+    expect(path).toBeUndefined();
+  });
+
+  // ------------------------------------------------------------------
+  // stop() 清理 registeredAgentIds / registeredAgentPaths
+  // ------------------------------------------------------------------
+
+  test('stop() 清理後 getAgentPath 回傳 undefined', async () => {
+    const subagentFile = join(tempDir, SUBAGENT_FILENAME);
+    await writeFile(subagentFile, '{"type":"session_meta"}\n');
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+    });
+
+    det.handleSpawnAgent('call-1', 'software-engineer', 'task');
+    det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    det.stop();
+
+    // RED: getAgentPath doesn't exist; after stop, should return undefined
+    const path = (det as unknown as { getAgentPath: (id: string) => string | undefined }).getAgentPath(SUBAGENT_UUID);
+    expect(path).toBeUndefined();
+  });
+
+  // ------------------------------------------------------------------
+  // onNewSubagent description passthrough
+  // ------------------------------------------------------------------
+
+  test('onNewSubagent: 傳遞 description（agentType + message 前 50 碼）', async () => {
+    const subagentFile = join(tempDir, SUBAGENT_FILENAME);
+    await writeFile(subagentFile, '{"type":"session_meta"}\n');
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+      onNewSubagent: (agentId, path, description) =>
+        onNewSubagentCalls.push({ agentId, path, description }),
+    });
+
+    det.handleSpawnAgent('call-1', 'software-engineer', 'Do the task carefully');
+    det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(onNewSubagentCalls).toHaveLength(1);
+    // RED: current _resolveSubagent doesn't pass description
+    expect(onNewSubagentCalls[0]!.description).toBeDefined();
+    expect(onNewSubagentCalls[0]!.description).toContain('software-engineer');
   });
 });
