@@ -30,6 +30,16 @@ import {
   getSubagentsDir,
 } from './claude/subagent-detector.ts';
 import {
+  CodexSubagentDetector,
+  makeCodexAgentLabel,
+} from './codex/subagent-detector.ts';
+import {
+  createCodexOnLineHandler,
+  buildCodexSubagentFiles,
+  extractCodexSubagentIds,
+  extractUUIDFromPath,
+} from './codex/watch-builder.ts';
+import {
   ConsoleOutputHandler,
   DisplayControllerOutputHandler,
 } from './claude/output-handlers.ts';
@@ -132,8 +142,11 @@ async function main(): Promise<void> {
       options.quiet,
       chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`)
     );
-  } else if (options.agentType === 'claude' && options.subagent !== undefined) {
-    // Claude subagent 模式（使用 --subagent 選項）
+  } else if (
+    (options.agentType === 'claude' || options.agentType === 'codex') &&
+    options.subagent !== undefined
+  ) {
+    // Claude/Codex subagent 模式（使用 --subagent 選項）
     log(
       options.quiet,
       chalk.gray(`Searching for latest ${options.agentType} subagent...`)
@@ -197,10 +210,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Claude 模式判斷：
-  // 1. sessionId 指定 subagent → 多檔案監控（main + 指定的 subagent）
-  // 2. Claude 主 session 模式 → 多檔案監控
-  // 3. --subagent 選項 → 單檔案監控
+  // 監控模式判斷：
+  // 1. Claude 主 session 模式 → Claude 多檔案監控
+  // 2. Codex 主 session + withSubagents/pane → Codex 多檔案監控
+  // 3. --subagent 選項 → 單檔案監控（Claude/Codex）
   // 4. 其他 agent → 單檔案監控
   if (options.agentType === 'claude' && options.subagent === undefined) {
     if (options.interactive) {
@@ -220,8 +233,15 @@ async function main(): Promise<void> {
         subagentFile
       );
     }
+  } else if (
+    options.agentType === 'codex' &&
+    options.subagent === undefined &&
+    (options.withSubagents || options.pane)
+  ) {
+    // Codex 多檔案監控（主 session + subagents）
+    await startCodexMultiWatch(sessionFile, formatter, options);
   } else {
-    // 其他 agent 或 Claude subagent 模式：單檔案監控
+    // 其他 agent 或 Claude/Codex subagent 模式：單檔案監控
     await startSingleWatch(agent, sessionFile, formatter, options);
   }
 }
@@ -862,6 +882,162 @@ async function startClaudeInteractiveWatch(
   displayController.write(
     chalk.gray('Watching for changes... (Tab to switch, q to quit)')
   );
+}
+
+/**
+ * Codex 多檔案監控（主 session + subagents）
+ */
+async function startCodexMultiWatch(
+  sessionFile: SessionFile,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // 1. dateDir（Codex subagent 與主 session 在同一個日期目錄）
+  const dateDir = dirname(sessionFile.path);
+
+  // 2. projectDir（super-follow 用），從 session_meta 取得 cwd
+  const codexAgent = new CodexAgent({ verbose: options.verbose });
+  const projectInfo = codexAgent.finder.getProjectInfo
+    ? await codexAgent.finder.getProjectInfo(sessionFile.path)
+    : null;
+  const projectDir = projectInfo?.projectDir ?? dateDir;
+
+  // 3. 掃描既有 subagent IDs
+  const existingIds = options.withSubagents
+    ? await extractCodexSubagentIds(sessionFile.path)
+    : [];
+
+  // 4. 建立監控檔案列表
+  const existingSubFiles =
+    options.withSubagents && existingIds.length > 0
+      ? await buildCodexSubagentFiles(dateDir, existingIds)
+      : [];
+
+  const files: WatchedFile[] = [
+    { path: sessionFile.path, label: MAIN_LABEL },
+    ...existingSubFiles.map((f) => {
+      // makeCodexAgentLabel 接受 UUID，不是路徑
+      const agentId = extractUUIDFromPath(f.path);
+      return { path: f.path, label: makeCodexAgentLabel(agentId) };
+    }),
+  ];
+
+  if (existingIds.length > 0) {
+    log(options.quiet, chalk.gray(`Found ${existingIds.length} subagent(s)`));
+  }
+  log(options.quiet, chalk.gray('---'));
+
+  // 5. Codex parser 無狀態，多 file 共用一個實例
+  const parser = codexAgent.parser;
+
+  // 6. MultiFileWatcher + CodexSubagentDetector
+  let multiWatcher = new MultiFileWatcher();
+
+  let detector = new CodexSubagentDetector(existingIds, {
+    sessionDateDir: dateDir,
+    output: new ConsoleOutputHandler(),
+    watcher: { addFile: (f) => multiWatcher.addFile(f) },
+    enabled: options.follow && options.withSubagents,
+    onNewSubagent: undefined, // Phase 2: PaneManager 整合
+    onSubagentDone: undefined, // Phase 2: PaneManager 整合
+  });
+
+  // 7. 組合 line handler：detection + output
+  // makeOnLine() 使用 closure，switchToSession 更新 detectionHandler 後自動生效
+  let detectionHandler = createCodexOnLineHandler(detector);
+  const makeOnLine = () => (line: string, label: string) => {
+    detectionHandler(line, label); // 只對 MAIN label 做 detection（內部已過濾）
+    const parsed = parser.parse(line);
+    if (!parsed) return;
+    parsed.sourceLabel = label;
+    console.log(formatter.format(parsed));
+  };
+
+  // 8. Super-follow：包含完整的 switchToSession 重建邏輯
+  let currentSessionPath = sessionFile.path;
+
+  const switchToSession = async (nextFile: SessionFile): Promise<void> => {
+    detector.stop();
+    multiWatcher.stop();
+
+    currentSessionPath = nextFile.path;
+    const newDateDir = dirname(nextFile.path);
+
+    const newExistingIds = options.withSubagents
+      ? await extractCodexSubagentIds(nextFile.path)
+      : [];
+    const newSubFiles =
+      options.withSubagents && newExistingIds.length > 0
+        ? await buildCodexSubagentFiles(newDateDir, newExistingIds)
+        : [];
+
+    const newFiles: WatchedFile[] = [
+      { path: nextFile.path, label: MAIN_LABEL },
+      ...newSubFiles.map((f) => {
+        const agentId = extractUUIDFromPath(f.path);
+        return { path: f.path, label: makeCodexAgentLabel(agentId) };
+      }),
+    ];
+
+    log(
+      options.quiet,
+      chalk.gray(
+        `--- Switched to session ${basename(nextFile.path, '.jsonl')} ---`
+      )
+    );
+
+    const newMultiWatcher = new MultiFileWatcher();
+    const newDetector = new CodexSubagentDetector(newExistingIds, {
+      sessionDateDir: newDateDir,
+      output: new ConsoleOutputHandler(),
+      watcher: { addFile: (f) => newMultiWatcher.addFile(f) },
+      enabled: options.follow && options.withSubagents,
+      onNewSubagent: undefined,
+      onSubagentDone: undefined,
+    });
+
+    multiWatcher = newMultiWatcher;
+    detector = newDetector;
+    detectionHandler = createCodexOnLineHandler(newDetector);
+
+    await multiWatcher.start(newFiles, {
+      follow: options.follow,
+      pollInterval: options.sleepInterval,
+      initialLines: options.lines,
+      onLine: makeOnLine(),
+      onError: (error) => console.error(chalk.red(`Error: ${error.message}`)),
+    });
+  };
+
+  const superFollow = createSuperFollowController({
+    projectDir,
+    getCurrentPath: () => currentSessionPath,
+    onSwitch: switchToSession,
+    autoSwitch: options.autoSwitch,
+    findLatestInProject: (cwd) => codexAgent.finder.findLatestInProject!(cwd),
+  });
+
+  // 9. 信號處理
+  process.on('SIGINT', () => {
+    superFollow.stop();
+    detector.stop();
+    multiWatcher.stop();
+    console.log(chalk.gray('\nStopping...'));
+    process.exit(0);
+  });
+
+  // 10. 啟動監控
+  await multiWatcher.start(files, {
+    follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
+    onLine: makeOnLine(),
+    onError: (error) => console.error(chalk.red(`Error: ${error.message}`)),
+  });
+
+  if (!options.follow) process.exit(0);
+  superFollow.start();
+  log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
 }
 
 /**

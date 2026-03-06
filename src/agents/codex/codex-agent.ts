@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
 import type {
@@ -12,6 +12,10 @@ import type {
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 import { CodexSessionCache } from './session-cache.ts';
+import {
+  buildCodexSubagentFiles,
+  extractCodexSubagentIds,
+} from '../../codex/watch-builder.ts';
 
 /**
  * Codex Session Finder
@@ -212,6 +216,120 @@ class CodexSessionFinder implements SessionFinder {
    */
   async findLatestInProject(cwd: string): Promise<SessionFile | null> {
     return this.cache.getLatestByCwd(cwd);
+  }
+
+  /**
+   * 找到 subagent 檔案
+   * - 有 subagentId：用 UUID glob 在所有日期目錄查找
+   * - 無 subagentId：從最新 session 掃描 subagent IDs，回傳最新的 subagent 檔案
+   *
+   * 已知限制：無 subagentId 時，findLatest() 不保證回傳主 session（可能回傳 subagent 檔案）。
+   * 若 extractCodexSubagentIds 回傳空陣列，會回傳 null。
+   */
+  async findSubagent(options: {
+    project?: string;
+    subagentId?: string;
+  }): Promise<SessionFile | null> {
+    if (options.subagentId) {
+      // 有 subagentId：用 UUID glob 精確查找
+      return this._findSubagentById(options.subagentId, options.project);
+    } else {
+      // 無 subagentId：從最新 session 掃描 subagent IDs
+      return this._findLatestSubagent(options.project);
+    }
+  }
+
+  /**
+   * 依 subagentId（UUID 前綴或完整 UUID）在所有日期目錄查找 subagent 檔案
+   */
+  private async _findSubagentById(
+    subagentId: string,
+    project?: string
+  ): Promise<SessionFile | null> {
+    const glob = new Glob('**/*.jsonl');
+    const candidates: { path: string; mtime: Date }[] = [];
+
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
+      const filename = file.split('/').pop() || '';
+      if (!filename.startsWith('rollout-')) continue;
+
+      // project filter
+      if (project) {
+        if (!file.toLowerCase().includes(project.toLowerCase())) continue;
+      }
+
+      // 包含 subagentId（大小寫不敏感）
+      if (!filename.toLowerCase().includes(subagentId.toLowerCase())) continue;
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime });
+      } catch {
+        // 忽略無法讀取的檔案
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    const best = candidates[0];
+    if (!best) return null;
+
+    return { path: best.path, mtime: best.mtime, agentType: 'codex' };
+  }
+
+  /**
+   * 掃描所有 session，從最新的開始找第一個含 subagent IDs 的，回傳最新的 subagent 檔案
+   *
+   * 注意：findLatest() 不區分主 session 和 subagent session（依 mtime 排序）。
+   * 此方法改為迭代所有候選 session，跳過不含 spawn_agent 事件的（通常是 subagent 本身）。
+   */
+  private async _findLatestSubagent(
+    project?: string
+  ): Promise<SessionFile | null> {
+    const glob = new Glob('**/*.jsonl');
+    const candidates: { path: string; mtime: Date }[] = [];
+
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
+      const filename = file.split('/').pop() || '';
+      if (!filename.startsWith('rollout-')) continue;
+
+      if (project) {
+        if (!file.toLowerCase().includes(project.toLowerCase())) continue;
+      }
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime });
+      } catch {
+        // 忽略無法讀取的檔案
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // 由新到舊排序，優先從最新的 session 找 subagent
+    candidates.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+    for (const candidate of candidates) {
+      const agentIds = await extractCodexSubagentIds(candidate.path);
+      if (agentIds.length === 0) continue;
+
+      const dateDir = dirname(candidate.path);
+      const subFiles = await buildCodexSubagentFiles(dateDir, agentIds);
+      if (subFiles.length === 0) continue;
+
+      subFiles.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+      return subFiles[0] ?? null;
+    }
+
+    return null;
   }
 }
 
