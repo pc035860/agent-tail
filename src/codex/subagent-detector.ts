@@ -40,6 +40,8 @@ export interface CodexSubagentDetectorConfig {
   /** options.follow && options.withSubagents */
   enabled: boolean;
   onNewSubagent?: (agentId: string, path: string, description?: string) => void;
+  /** 觸發條件：resume_agent / send_input 且 agentId 已知 */
+  onSubagentEnter?: (agentId: string, path: string) => void;
   onSubagentDone?: (agentId: string) => void;
 }
 
@@ -73,6 +75,7 @@ async function findSubagentFile(
 
 export class CodexSubagentDetector {
   private pendingSpawns: Map<string, PendingSpawn> = new Map();
+  private registeredAgentPaths: Map<string, string> = new Map();
   private config: CodexSubagentDetectorConfig;
 
   constructor(
@@ -146,10 +149,31 @@ export class CodexSubagentDetector {
     clearTimeout(pending.timer);
     this.pendingSpawns.delete(callId);
 
+    // 記錄已知 agent（供 handleSubagentResume 查詢路徑）
+    this.registeredAgentPaths.set(agentId, foundPath);
+
     const label = makeCodexAgentLabel(agentId);
     await this.config.watcher.addFile({ path: foundPath, label });
-    // pending.message reserved for Phase 2 pane description
-    this.config.onNewSubagent?.(agentId, foundPath);
+
+    const description =
+      pending.agentType && pending.message
+        ? `${pending.agentType}: ${pending.message.slice(0, 50)}`
+        : undefined;
+    this.config.onNewSubagent?.(agentId, foundPath, description);
+  }
+
+  handleSubagentResume(agentId: string): void {
+    if (!this.config.enabled) return;
+    if (!isValidCodexAgentId(agentId)) return;
+
+    const path = this.registeredAgentPaths.get(agentId);
+    if (path) {
+      this.config.onSubagentEnter?.(agentId, path);
+    }
+  }
+
+  getAgentPath(agentId: string): string | undefined {
+    return this.registeredAgentPaths.get(agentId);
   }
 
   handleSubagentDone(agentId: string): void {
@@ -161,5 +185,6 @@ export class CodexSubagentDetector {
       clearTimeout(pending.timer);
     }
     this.pendingSpawns.clear();
+    this.registeredAgentPaths.clear();
   }
 }

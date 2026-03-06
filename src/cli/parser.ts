@@ -57,7 +57,7 @@ function createProgram(): Command {
       'Claude only: show all content (verbose + with-subagents + auto-switch)',
       false
     )
-    .option('--pane', 'Claude only: auto-open tmux pane for each new subagent')
+    .option('--pane', 'Claude/Codex: auto-open tmux pane for each new subagent')
     .option('--no-pane', 'Disable pane auto-open (default)');
 
   return program;
@@ -144,10 +144,10 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // pane 選項僅對 claude 有效
-  if (finalPane && agentTypeArg !== 'claude') {
+  // pane 選項對 claude 和 codex 有效
+  if (finalPane && agentTypeArg !== 'claude' && agentTypeArg !== 'codex') {
     console.error(
-      'Error: --pane option is only available for "claude" agent type.'
+      'Error: --pane option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }

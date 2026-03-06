@@ -38,6 +38,7 @@ import {
   buildCodexSubagentFiles,
   extractCodexSubagentIds,
   extractUUIDFromPath,
+  readLastCodexAssistantMessage,
 } from './codex/watch-builder.ts';
 import {
   ConsoleOutputHandler,
@@ -930,7 +931,70 @@ async function startCodexMultiWatch(
   // 5. Codex parser 無狀態，多 file 共用一個實例
   const parser = codexAgent.parser;
 
-  // 6. MultiFileWatcher + CodexSubagentDetector
+  // 6. PaneManager 初始化（Phase 2: --pane 支援）
+  let paneManager: PaneManager | null = null;
+  if (options.pane) {
+    const controller = createTerminalController();
+    if (controller.isAvailable()) {
+      paneManager = new PaneManager(controller, (agentId, _subagentPath) => {
+        const runtime = `"${process.argv[0]}"`;
+        const script = `"${process.argv[1]}"`;
+        return `${runtime} ${script} codex --subagent ${agentId} -q --no-pane`;
+      });
+    } else {
+      log(
+        options.quiet,
+        chalk.yellow('Warning: tmux not detected, --pane disabled')
+      );
+    }
+  }
+
+  const pm = paneManager;
+
+  const openPaneForSubagent = pm
+    ? (agentId: string, subagentPath: string, description?: string) => {
+        log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
+        pm.openPane(agentId, subagentPath, description).catch(
+          (err: unknown) => {
+            log(
+              options.quiet,
+              chalk.yellow(`[pane] Failed to open pane: ${err}`)
+            );
+          }
+        );
+      }
+    : undefined;
+
+  const onSubagentDone = pm
+    ? (agentId: string) => {
+        // 使用 detector.getAgentPath() 取路徑（detector 是 let 變數，切換 session 後自動指向新 detector）
+        const subPath = detector.getAgentPath(agentId);
+
+        (async () => {
+          try {
+            if (subPath) {
+              const parts = await readLastCodexAssistantMessage(
+                subPath,
+                parser
+              );
+              const label = makeCodexAgentLabel(agentId);
+              for (const part of parts) {
+                part.sourceLabel = label;
+                console.log(formatter.format(part));
+              }
+            }
+          } finally {
+            log(
+              options.quiet,
+              chalk.gray(`[pane] Closing pane for ${agentId}...`)
+            );
+            await pm.closePaneByAgentId(agentId).catch(() => {});
+          }
+        })().catch(() => {});
+      }
+    : undefined;
+
+  // 7. MultiFileWatcher + CodexSubagentDetector
   let multiWatcher = new MultiFileWatcher();
 
   let detector = new CodexSubagentDetector(existingIds, {
@@ -938,11 +1002,12 @@ async function startCodexMultiWatch(
     output: new ConsoleOutputHandler(),
     watcher: { addFile: (f) => multiWatcher.addFile(f) },
     enabled: options.follow && options.withSubagents,
-    onNewSubagent: undefined, // Phase 2: PaneManager 整合
-    onSubagentDone: undefined, // Phase 2: PaneManager 整合
+    onNewSubagent: openPaneForSubagent,
+    onSubagentEnter: openPaneForSubagent,
+    onSubagentDone,
   });
 
-  // 7. 組合 line handler：detection + output
+  // 8. 組合 line handler：detection + output
   // makeOnLine() 使用 closure，switchToSession 更新 detectionHandler 後自動生效
   let detectionHandler = createCodexOnLineHandler(detector);
   const makeOnLine = () => (line: string, label: string) => {
@@ -953,10 +1018,11 @@ async function startCodexMultiWatch(
     console.log(formatter.format(parsed));
   };
 
-  // 8. Super-follow：包含完整的 switchToSession 重建邏輯
+  // 9. Super-follow：包含完整的 switchToSession 重建邏輯
   let currentSessionPath = sessionFile.path;
 
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
+    paneManager?.closeAll(); // 關閉現有 pane
     detector.stop();
     multiWatcher.stop();
 
@@ -992,8 +1058,9 @@ async function startCodexMultiWatch(
       output: new ConsoleOutputHandler(),
       watcher: { addFile: (f) => newMultiWatcher.addFile(f) },
       enabled: options.follow && options.withSubagents,
-      onNewSubagent: undefined,
-      onSubagentDone: undefined,
+      onNewSubagent: openPaneForSubagent,
+      onSubagentEnter: openPaneForSubagent,
+      onSubagentDone,
     });
 
     multiWatcher = newMultiWatcher;
@@ -1017,11 +1084,12 @@ async function startCodexMultiWatch(
     findLatestInProject: (cwd) => codexAgent.finder.findLatestInProject!(cwd),
   });
 
-  // 9. 信號處理
+  // 10. 信號處理
   process.on('SIGINT', () => {
     superFollow.stop();
     detector.stop();
     multiWatcher.stop();
+    paneManager?.closeAll();
     console.log(chalk.gray('\nStopping...'));
     process.exit(0);
   });

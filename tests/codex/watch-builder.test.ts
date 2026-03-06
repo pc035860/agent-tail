@@ -8,14 +8,8 @@ import {
   buildCodexSubagentFiles,
   createCodexOnLineHandler,
   extractUUIDFromPath,
+  readLastCodexAssistantMessage,
 } from '../../src/codex/watch-builder';
-// RED: readLastCodexAssistantMessage not yet exported from watch-builder
-// Use namespace import to avoid hard SyntaxError at module load time
-import * as watchBuilderModule from '../../src/codex/watch-builder';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const readLastCodexAssistantMessage = (watchBuilderModule as any).readLastCodexAssistantMessage as
-  | ((filePath: string, parser: unknown) => Promise<unknown[]>)
-  | undefined;
 import type { CodexSubagentDetector } from '../../src/codex/subagent-detector';
 import { MAIN_LABEL } from '../../src/core/detector-interfaces';
 import { CodexAgent } from '../../src/agents/codex/codex-agent';
@@ -383,7 +377,10 @@ describe('createCodexOnLineHandler', () => {
         type: 'function_call',
         name: 'send_input',
         call_id: 'c-send-1',
-        arguments: JSON.stringify({ agent_id: VALID_UUID, message: 'continue' }),
+        arguments: JSON.stringify({
+          agent_id: VALID_UUID,
+          message: 'continue',
+        }),
       },
     });
 
@@ -486,7 +483,7 @@ describe('readLastCodexAssistantMessage (Phase 2 RED)', () => {
         makeUserLine('請幫我做這個'),
         makeAssistantLine('第一個回應'),
         makeUserLine('繼續'),
-        makeAssistantLine('最後的回應'),  // ← 應回傳這條
+        makeAssistantLine('最後的回應'), // ← 應回傳這條
       ].join('\n') + '\n'
     );
 

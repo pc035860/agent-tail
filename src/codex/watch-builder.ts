@@ -5,7 +5,8 @@ import {
   type CodexSubagentDetector,
 } from './subagent-detector.ts';
 import { MAIN_LABEL } from '../core/detector-interfaces.ts';
-import type { SessionFile } from '../core/types.ts';
+import type { SessionFile, ParsedLine } from '../core/types.ts';
+import type { LineParser } from '../agents/agent.interface.ts';
 
 // ============================================================
 // Path Utilities
@@ -151,6 +152,25 @@ export function createCodexOnLineHandler(
       }
     }
 
+    if (line.includes('"resume_agent"') || line.includes('"send_input"')) {
+      try {
+        const data = JSON.parse(line);
+        if (
+          data.type === 'response_item' &&
+          data.payload?.type === 'function_call' &&
+          (data.payload?.name === 'resume_agent' ||
+            data.payload?.name === 'send_input')
+        ) {
+          const args = JSON.parse(data.payload.arguments ?? '{}');
+          if (args.agent_id) {
+            detector.handleSubagentResume(args.agent_id);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     if (line.includes('<subagent_notification>')) {
       try {
         const data = JSON.parse(line);
@@ -169,4 +189,52 @@ export function createCodexOnLineHandler(
       }
     }
   };
+}
+
+// ============================================================
+// Last Assistant Message Reader
+// ============================================================
+
+/**
+ * 讀取 Codex subagent JSONL 最後一條 assistant 訊息
+ * 用於 pane 關閉前輸出最後結果
+ * @param parser - 由呼叫方注入，避免循環依賴（watch-builder.ts → codex-agent.ts）
+ */
+export async function readLastCodexAssistantMessage(
+  filePath: string,
+  parser: LineParser
+): Promise<ParsedLine[]> {
+  try {
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return [];
+    const text = await file.text();
+    const lines = text.split('\n').filter((l) => l.trim());
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const data = JSON.parse(lines[i]!);
+        if (
+          data.type === 'response_item' &&
+          data.payload?.type === 'message' &&
+          data.payload?.role === 'assistant'
+        ) {
+          const content = data.payload.content as
+            | Array<{ type: string; text?: string }>
+            | undefined;
+          const msgText = content?.find(
+            (c) => c.type === 'output_text' || c.type === 'input_text'
+          )?.text;
+          if (!msgText?.trim()) continue;
+
+          const parsed = parser.parse(lines[i]!);
+          if (parsed) return [parsed];
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
 }

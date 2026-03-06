@@ -334,7 +334,7 @@ describe('parseArgs', () => {
       expect(options.withSubagents).toBe(true);
     });
 
-    test('--pane with non-claude agent exits with error', () => {
+    test('--pane with gemini agent exits with error', () => {
       process.exit = ((code?: number) => {
         exitCode = code;
         throw new Error('process.exit called');
@@ -343,7 +343,7 @@ describe('parseArgs', () => {
       const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
       expect(() =>
-        parseArgs(['node', 'agent-tail', 'codex', '--pane'])
+        parseArgs(['node', 'agent-tail', 'gemini', '--pane'])
       ).toThrow('process.exit called');
       expect(exitCode).toBe(1);
 
@@ -508,23 +508,7 @@ describe('parseArgs', () => {
       consoleSpy.mockRestore();
     });
 
-    test('codex --pane 仍然報錯（Phase 2 才支援）', () => {
-      process.exit = ((code?: number) => {
-        exitCode = code;
-        throw new Error('process.exit called');
-      }) as typeof process.exit;
-
-      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
-
-      expect(() =>
-        parseArgs(['node', 'agent-tail', 'codex', '--pane'])
-      ).toThrow('process.exit called');
-      expect(exitCode).toBe(1);
-
-      consoleSpy.mockRestore();
-    });
-
-    // Phase 2 RED: codex --pane should succeed after parser relaxation
+    // Phase 2 GREEN: codex --pane now supported
     test('TC15: codex --pane 不再報錯（Phase 2 支援）', () => {
       process.exit = ((code?: number) => {
         exitCode = code;
