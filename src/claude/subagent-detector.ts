@@ -303,6 +303,7 @@ export class SubagentDetector {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    this.pendingDescriptions = [];
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();

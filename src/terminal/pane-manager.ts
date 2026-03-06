@@ -15,10 +15,7 @@ const MAX_DESCRIPTION_LENGTH = 50;
  * - 截斷超長描述
  * - 格式: "agentId: description"
  */
-export function sanitizePaneTitle(
-  agentId: string,
-  description: string
-): string {
+function sanitizePaneTitle(agentId: string, description: string): string {
   const sanitized = description
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x1f\x7f]/g, ' ') // control chars -> space
