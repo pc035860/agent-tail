@@ -1327,7 +1327,7 @@ async function startCodexMultiWatch(
     findLatestInProject: (cwd) => codexAgent.finder.findLatestInProject!(cwd),
   });
 
-  // 11. 信號處理
+  // 10. 信號處理
   process.on('SIGINT', () => {
     superFollow.stop();
     detector.stop();
@@ -1337,7 +1337,7 @@ async function startCodexMultiWatch(
     process.exit(0);
   });
 
-  // 10. 啟動監控
+  // 11. 啟動監控
   await multiWatcher.start(files, {
     follow: options.follow,
     pollInterval: options.sleepInterval,
