@@ -608,6 +608,38 @@ async function outputTimeSorted(
 }
 
 /**
+ * Interactive 模式共用：建立 SessionManager（Claude/Codex 兩種 interactive 模式都相同）
+ */
+function createInteractiveSessionManager(
+  displayController: DisplayController
+): SessionManager {
+  const manager = new SessionManager({
+    bufferSize: 1000,
+    onOutput: (content: string, _session: WatcherSession) => {
+      displayController.write(content);
+    },
+    onSessionAdded: (session: WatcherSession) => {
+      displayController.write(
+        chalk.yellow(`New session added: ${session.label}`)
+      );
+      displayController.updateStatusLine(
+        manager.getAllSessions(),
+        manager.getActiveIndex()
+      );
+    },
+    onSessionSwitched: (
+      session: WatcherSession,
+      allSessions: WatcherSession[]
+    ) => {
+      const historyContent = session.buffer.slice();
+      displayController.updateStatusLine(allSessions, manager.getActiveIndex());
+      displayController.showSwitchMessage(session, historyContent);
+    },
+  });
+  return manager;
+}
+
+/**
  * Claude Interactive 模式（使用 SessionManager 和 DisplayController 管理輸出切換）
  */
 async function startClaudeInteractiveWatch(
@@ -648,46 +680,6 @@ async function startClaudeInteractiveWatch(
   let detector: SubagentDetector | null = null;
   let currentSessionFile = sessionFile;
 
-  const createSessionManager = (): SessionManager => {
-    const manager = new SessionManager({
-      bufferSize: 1000,
-      onOutput: (content: string, _session: WatcherSession) => {
-        // 使用 DisplayController 輸出（確保不覆蓋狀態列）
-        displayController.write(content);
-      },
-      onSessionAdded: (session: WatcherSession) => {
-        displayController.write(
-          chalk.yellow(`New session added: ${session.label}`)
-        );
-        // 更新狀態列
-        displayController.updateStatusLine(
-          manager.getAllSessions(),
-          manager.getActiveIndex()
-        );
-      },
-      onSessionSwitched: (
-        session: WatcherSession,
-        allSessions: WatcherSession[]
-      ) => {
-        // 取得切換前的緩衝內容
-        const historyContent = session.buffer.slice();
-
-        // 更新狀態列
-        displayController.updateStatusLine(
-          allSessions,
-          manager.getActiveIndex()
-        );
-
-        // 顯示切換訊息和歷史內容
-        displayController.showSwitchMessage(session, historyContent);
-
-        // 不清空 buffer，保留完整歷史供回看
-      },
-    });
-
-    return manager;
-  };
-
   const buildInteractiveState = async (
     targetSessionFile: SessionFile,
     initialSubagentFile: SessionFile | null,
@@ -695,7 +687,7 @@ async function startClaudeInteractiveWatch(
   ): Promise<void> => {
     const subagentsDir = getSubagentsDir(targetSessionFile.path);
 
-    sessionManager = createSessionManager();
+    sessionManager = createInteractiveSessionManager(displayController);
     sessionManager.addSession('main', MAIN_LABEL, targetSessionFile.path);
 
     // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
@@ -932,43 +924,13 @@ async function startCodexInteractiveWatch(
   // detectionHandler 在 buildInteractiveState 結尾更新，確保 switchToSession 後指向新 detector
   let detectionHandler: (line: string, label: string) => void = () => {};
 
-  const createSessionManager = (): SessionManager => {
-    const manager = new SessionManager({
-      bufferSize: 1000,
-      onOutput: (content: string, _session: WatcherSession) => {
-        displayController.write(content);
-      },
-      onSessionAdded: (session: WatcherSession) => {
-        displayController.write(
-          chalk.yellow(`New session added: ${session.label}`)
-        );
-        displayController.updateStatusLine(
-          manager.getAllSessions(),
-          manager.getActiveIndex()
-        );
-      },
-      onSessionSwitched: (
-        session: WatcherSession,
-        allSessions: WatcherSession[]
-      ) => {
-        const historyContent = session.buffer.slice();
-        displayController.updateStatusLine(
-          allSessions,
-          manager.getActiveIndex()
-        );
-        displayController.showSwitchMessage(session, historyContent);
-      },
-    });
-    return manager;
-  };
-
   const buildInteractiveState = async (
     targetSessionFile: SessionFile,
     showIntro: boolean
   ): Promise<void> => {
     const dateDirLocal = dirname(targetSessionFile.path);
 
-    sessionManager = createSessionManager();
+    sessionManager = createInteractiveSessionManager(displayController);
     sessionManager.addSession('main', MAIN_LABEL, targetSessionFile.path);
 
     // Codex 掃描：用 extractCodexSubagentIds 取代 scanForNewSubagents
@@ -1365,7 +1327,7 @@ async function startCodexMultiWatch(
     findLatestInProject: (cwd) => codexAgent.finder.findLatestInProject!(cwd),
   });
 
-  // 10. 信號處理
+  // 11. 信號處理
   process.on('SIGINT', () => {
     superFollow.stop();
     detector.stop();
