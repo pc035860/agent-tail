@@ -218,7 +218,7 @@ describe('parseArgs', () => {
       expect(options.interactive).toBe(false);
     });
 
-    test('--auto-switch with non-claude agent exits with error', () => {
+    test('--interactive with gemini agent exits with error', () => {
       process.exit = ((code?: number) => {
         exitCode = code;
         throw new Error('process.exit called');
@@ -227,13 +227,7 @@ describe('parseArgs', () => {
       const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
       expect(() =>
-        parseArgs([
-          'node',
-          'agent-tail',
-          'codex',
-          '--interactive',
-          '--auto-switch',
-        ])
+        parseArgs(['node', 'agent-tail', 'gemini', '--interactive'])
       ).toThrow('process.exit called');
       expect(exitCode).toBe(1);
 
@@ -492,23 +486,7 @@ describe('parseArgs', () => {
       consoleSpy.mockRestore();
     });
 
-    test('codex --interactive 仍然報錯（Phase 3 才支援）', () => {
-      process.exit = ((code?: number) => {
-        exitCode = code;
-        throw new Error('process.exit called');
-      }) as typeof process.exit;
-
-      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
-
-      expect(() =>
-        parseArgs(['node', 'agent-tail', 'codex', '--interactive'])
-      ).toThrow('process.exit called');
-      expect(exitCode).toBe(1);
-
-      consoleSpy.mockRestore();
-    });
-
-    // Phase 3 RED: codex --interactive should succeed after parser relaxation
+    // Phase 3 GREEN: codex --interactive now supported
     test('TC16: codex --interactive 不再報錯（Phase 3 支援）', () => {
       process.exit = ((code?: number) => {
         exitCode = code;

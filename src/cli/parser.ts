@@ -39,7 +39,7 @@ function createProgram(): Command {
     )
     .option(
       '-i, --interactive',
-      'Claude only: interactive mode for switching between sessions (Tab to switch)'
+      'Claude/Codex: interactive mode for switching between sessions (Tab to switch)'
     )
     .option('--no-interactive', 'Disable interactive mode (default)')
     .option(
@@ -54,7 +54,7 @@ function createProgram(): Command {
     .option('--no-auto-switch', 'Disable auto-switch (default)')
     .option(
       '-a, --all',
-      'Claude only: show all content (verbose + with-subagents + auto-switch)',
+      'Claude/Codex: show all content (verbose + with-subagents + auto-switch)',
       false
     )
     .option('--pane', 'Claude/Codex: auto-open tmux pane for each new subagent')
@@ -120,10 +120,14 @@ export function parseArgs(args: string[]): CliOptions {
   const finalAutoSwitch = opts.autoSwitch ?? false;
   const finalPane = opts.pane ?? false;
 
-  // interactive 選項僅對 claude 有效
-  if (finalInteractive && agentTypeArg !== 'claude') {
+  // interactive 選項對 claude 和 codex 有效
+  if (
+    finalInteractive &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex'
+  ) {
     console.error(
-      'Error: --interactive option is only available for "claude" agent type.'
+      'Error: --interactive option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
