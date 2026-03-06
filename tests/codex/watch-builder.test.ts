@@ -17,11 +17,18 @@ import { MAIN_LABEL } from '../../src/core/detector-interfaces';
 
 function createMockDetector(): CodexSubagentDetector & {
   spawnCalls: { callId: string; agentType: string; message: string }[];
-  outputCalls: { callId: string; output: { agent_id: string; nickname?: string } }[];
+  outputCalls: {
+    callId: string;
+    output: { agent_id: string; nickname?: string };
+  }[];
   doneCalls: string[];
 } {
-  const spawnCalls: { callId: string; agentType: string; message: string }[] = [];
-  const outputCalls: { callId: string; output: { agent_id: string; nickname?: string } }[] = [];
+  const spawnCalls: { callId: string; agentType: string; message: string }[] =
+    [];
+  const outputCalls: {
+    callId: string;
+    output: { agent_id: string; nickname?: string };
+  }[] = [];
   const doneCalls: string[] = [];
 
   return {
@@ -30,8 +37,10 @@ function createMockDetector(): CodexSubagentDetector & {
     doneCalls,
     handleSpawnAgent: (callId: string, agentType: string, message: string) =>
       spawnCalls.push({ callId, agentType, message }),
-    handleSpawnAgentOutput: (callId: string, output: { agent_id: string; nickname?: string }) =>
-      outputCalls.push({ callId, output }),
+    handleSpawnAgentOutput: (
+      callId: string,
+      output: { agent_id: string; nickname?: string }
+    ) => outputCalls.push({ callId, output }),
     handleSubagentDone: (agentId: string) => doneCalls.push(agentId),
     stop: () => {},
   } as unknown as CodexSubagentDetector & {
@@ -151,7 +160,9 @@ describe('extractCodexSubagentIds', () => {
   });
 
   test('不存在的檔案回傳空陣列', async () => {
-    const ids = await extractCodexSubagentIds('/nonexistent/path/session.jsonl');
+    const ids = await extractCodexSubagentIds(
+      '/nonexistent/path/session.jsonl'
+    );
     expect(ids).toHaveLength(0);
   });
 });
@@ -174,11 +185,13 @@ describe('buildCodexSubagentFiles', () => {
 
     const files = await buildCodexSubagentFiles(tmpDir, [VALID_UUID]);
     expect(files).toHaveLength(1);
-    expect(files[0].path).toContain(VALID_UUID);
+    expect(files[0]!.path).toContain(VALID_UUID);
   });
 
   test('TC10c: 檔案不存在時回傳空陣列', async () => {
-    const files = await buildCodexSubagentFiles(tmpDir, ['019cc375-9999-7ed1-9ff8-8a5757d815d1']);
+    const files = await buildCodexSubagentFiles(tmpDir, [
+      '019cc375-9999-7ed1-9ff8-8a5757d815d1',
+    ]);
     expect(files).toHaveLength(0);
   });
 
@@ -208,7 +221,10 @@ describe('createCodexOnLineHandler', () => {
         type: 'function_call',
         name: 'spawn_agent',
         call_id: 'c-123',
-        arguments: JSON.stringify({ agent_type: 'software-engineer', message: 'do task' }),
+        arguments: JSON.stringify({
+          agent_type: 'software-engineer',
+          message: 'do task',
+        }),
       },
     });
 
@@ -299,7 +315,9 @@ describe('createCodexOnLineHandler', () => {
   });
 
   test('損壞的 JSON 不拋出（靜默忽略）', () => {
-    expect(() => handler('{"spawn_agent": invalid json', MAIN_LABEL)).not.toThrow();
+    expect(() =>
+      handler('{"spawn_agent": invalid json', MAIN_LABEL)
+    ).not.toThrow();
   });
 
   test('普通 message 行（不含 spawn_agent）被忽略', () => {

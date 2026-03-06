@@ -72,7 +72,7 @@ describe('parseArgs', () => {
       expect(options.project).toBe('myproject');
     });
 
-    test('--subagent with non-claude agent exits with error', () => {
+    test('--subagent with gemini agent exits with error', () => {
       // Mock process.exit to capture exit code
       process.exit = ((code?: number) => {
         exitCode = code;
@@ -83,7 +83,7 @@ describe('parseArgs', () => {
       const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
       expect(() =>
-        parseArgs(['node', 'agent-tail', 'codex', '--subagent'])
+        parseArgs(['node', 'agent-tail', 'gemini', '--subagent'])
       ).toThrow('process.exit called');
       expect(exitCode).toBe(1);
 
@@ -256,7 +256,7 @@ describe('parseArgs', () => {
       expect(options.autoSwitch).toBe(true);
     });
 
-    test('--all with non-claude agent exits with error', () => {
+    test('--all with gemini agent exits with error', () => {
       process.exit = ((code?: number) => {
         exitCode = code;
         throw new Error('process.exit called');
@@ -264,9 +264,9 @@ describe('parseArgs', () => {
 
       const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
 
-      expect(() => parseArgs(['node', 'agent-tail', 'codex', '--all'])).toThrow(
-        'process.exit called'
-      );
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'gemini', '--all'])
+      ).toThrow('process.exit called');
       expect(exitCode).toBe(1);
 
       consoleSpy.mockRestore();
@@ -418,7 +418,12 @@ describe('parseArgs', () => {
       let options: ReturnType<typeof parseArgs> | undefined;
       let threw = false;
       try {
-        options = parseArgs(['node', 'agent-tail', 'codex', '--with-subagents']);
+        options = parseArgs([
+          'node',
+          'agent-tail',
+          'codex',
+          '--with-subagents',
+        ]);
       } catch {
         threw = true;
       }

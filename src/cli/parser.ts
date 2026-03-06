@@ -86,18 +86,22 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // subagent 選項僅對 claude 有效
-  if (opts.subagent !== undefined && agentTypeArg !== 'claude') {
+  // subagent 選項對 claude 和 codex 有效
+  if (
+    opts.subagent !== undefined &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex'
+  ) {
     console.error(
-      'Error: --subagent option is only available for "claude" agent type.'
+      'Error: --subagent option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
 
-  // --all preset 選項僅對 claude 有效（需要在展開前驗證）
-  if (opts.all && agentTypeArg !== 'claude') {
+  // --all preset 選項對 claude 和 codex 有效（需要在展開前驗證）
+  if (opts.all && agentTypeArg !== 'claude' && agentTypeArg !== 'codex') {
     console.error(
-      'Error: --all option is only available for "claude" agent type.'
+      'Error: --all option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
@@ -177,10 +181,14 @@ export function parseArgs(args: string[]): CliOptions {
     finalWithSubagents = true;
   }
 
-  // withSubagents 選項僅對 claude 有效
-  if (finalWithSubagents && agentTypeArg !== 'claude') {
+  // withSubagents 選項對 claude 和 codex 有效
+  if (
+    finalWithSubagents &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex'
+  ) {
     console.error(
-      'Error: --with-subagents option is only available for "claude" agent type.'
+      'Error: --with-subagents option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
