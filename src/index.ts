@@ -923,7 +923,6 @@ async function startCodexInteractiveWatch(
   });
 
   let sessionManager!: SessionManager;
-  let parsers = new Map<string, LineParser>();
   let multiWatcher: MultiFileWatcher | null = null;
   let detector: CodexSubagentDetector | null = null;
   let currentSessionFile = sessionFile;
@@ -999,12 +998,6 @@ async function startCodexInteractiveWatch(
       log(options.quiet, chalk.gray('---'));
     }
 
-    // Codex parser 無狀態，所有 session 共用 sharedParser
-    parsers = new Map<string, LineParser>();
-    for (const session of sessionManager.getAllSessions()) {
-      parsers.set(session.label, sharedParser);
-    }
-
     const watcher = new MultiFileWatcher();
     multiWatcher = watcher;
 
@@ -1016,7 +1009,6 @@ async function startCodexInteractiveWatch(
       onNewSubagent: (agentId, path, _description) => {
         const label = makeCodexAgentLabel(agentId);
         sessionManager.addSession(agentId, label, path);
-        parsers.set(label, sharedParser);
         displayController.updateStatusLine(
           sessionManager.getAllSessions(),
           sessionManager.getActiveIndex()
@@ -1033,6 +1025,12 @@ async function startCodexInteractiveWatch(
         );
       },
     });
+
+    // 預填既有 subagent 路徑，讓 resume_agent 事件能找到路徑
+    for (const f of existingSubFiles) {
+      detector.registerExistingAgent(extractUUIDFromPath(f.path), f.path);
+    }
+
     // 更新 detectionHandler（確保 switchToSession 後指向新 detector）
     detectionHandler = createCodexOnLineHandler(detector);
   };
@@ -1280,6 +1278,11 @@ async function startCodexMultiWatch(
     onSubagentDone,
   });
 
+  // 預填既有 subagent 路徑，讓 resume_agent 事件能找到路徑（用於 --pane onSubagentEnter）
+  for (const f of existingSubFiles) {
+    detector.registerExistingAgent(extractUUIDFromPath(f.path), f.path);
+  }
+
   // 8. 組合 line handler：detection + output
   // makeOnLine() 使用 closure，switchToSession 更新 detectionHandler 後自動生效
   let detectionHandler = createCodexOnLineHandler(detector);
@@ -1335,6 +1338,11 @@ async function startCodexMultiWatch(
       onSubagentEnter: openPaneForSubagent,
       onSubagentDone,
     });
+
+    // 預填既有 subagent 路徑
+    for (const f of newSubFiles) {
+      newDetector.registerExistingAgent(extractUUIDFromPath(f.path), f.path);
+    }
 
     multiWatcher = newMultiWatcher;
     detector = newDetector;

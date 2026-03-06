@@ -181,7 +181,11 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
   let tempDir: string;
   let output: ReturnType<typeof createMockOutput>;
   let watcher: ReturnType<typeof createMockWatcher>;
-  let onNewSubagentCalls: { agentId: string; path: string; description?: string }[];
+  let onNewSubagentCalls: {
+    agentId: string;
+    path: string;
+    description?: string;
+  }[];
   let onSubagentEnterCalls: { agentId: string; path: string }[];
 
   const SUBAGENT_UUID = '019cc375-5af5-7ed1-9ff8-8a5757d815d1';
@@ -211,7 +215,9 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
       watcher,
       enabled: true,
     });
-    expect(typeof (det as unknown as Record<string, unknown>)['handleSubagentResume']).toBe('function');
+    expect(
+      typeof (det as unknown as Record<string, unknown>)['handleSubagentResume']
+    ).toBe('function');
   });
 
   // ------------------------------------------------------------------
@@ -225,11 +231,16 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
       watcher,
       enabled: true,
       // RED: onSubagentEnter doesn't exist in config type yet
-      ...({ onSubagentEnter: (agentId: string, path: string) => onSubagentEnterCalls.push({ agentId, path }) } as object),
+      ...({
+        onSubagentEnter: (agentId: string, path: string) =>
+          onSubagentEnterCalls.push({ agentId, path }),
+      } as object),
     } as CodexSubagentDetectorConfig);
 
     // RED: handleSubagentResume doesn't exist
-    (det as unknown as { handleSubagentResume: (id: string) => void }).handleSubagentResume(SUBAGENT_UUID);
+    (
+      det as unknown as { handleSubagentResume: (id: string) => void }
+    ).handleSubagentResume(SUBAGENT_UUID);
 
     expect(onSubagentEnterCalls).toHaveLength(0);
   });
@@ -244,10 +255,15 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
       output,
       watcher,
       enabled: false,
-      ...({ onSubagentEnter: (agentId: string, path: string) => onSubagentEnterCalls.push({ agentId, path }) } as object),
+      ...({
+        onSubagentEnter: (agentId: string, path: string) =>
+          onSubagentEnterCalls.push({ agentId, path }),
+      } as object),
     } as CodexSubagentDetectorConfig);
 
-    (det as unknown as { handleSubagentResume: (id: string) => void }).handleSubagentResume(SUBAGENT_UUID);
+    (
+      det as unknown as { handleSubagentResume: (id: string) => void }
+    ).handleSubagentResume(SUBAGENT_UUID);
 
     expect(onSubagentEnterCalls).toHaveLength(0);
   });
@@ -268,7 +284,10 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
       enabled: true,
       onNewSubagent: (agentId, path, description) =>
         onNewSubagentCalls.push({ agentId, path, description }),
-      ...({ onSubagentEnter: (agentId: string, path: string) => onSubagentEnterCalls.push({ agentId, path }) } as object),
+      ...({
+        onSubagentEnter: (agentId: string, path: string) =>
+          onSubagentEnterCalls.push({ agentId, path }),
+      } as object),
     } as CodexSubagentDetectorConfig);
 
     // Register agentId via spawn → resolve cycle
@@ -282,7 +301,9 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
     expect(onNewSubagentCalls.length).toBeGreaterThan(0);
 
     // RED: handleSubagentResume doesn't exist
-    (det as unknown as { handleSubagentResume: (id: string) => void }).handleSubagentResume(SUBAGENT_UUID);
+    (
+      det as unknown as { handleSubagentResume: (id: string) => void }
+    ).handleSubagentResume(SUBAGENT_UUID);
 
     expect(onSubagentEnterCalls).toHaveLength(1);
     expect(onSubagentEnterCalls[0]!.agentId).toBe(SUBAGENT_UUID);
@@ -309,7 +330,9 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     // RED: getAgentPath doesn't exist
-    const path = (det as unknown as { getAgentPath: (id: string) => string | undefined }).getAgentPath(SUBAGENT_UUID);
+    const path = (
+      det as unknown as { getAgentPath: (id: string) => string | undefined }
+    ).getAgentPath(SUBAGENT_UUID);
     expect(path).toBe(subagentFile);
   });
 
@@ -322,7 +345,9 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
     });
 
     // RED: getAgentPath doesn't exist
-    const path = (det as unknown as { getAgentPath: (id: string) => string | undefined }).getAgentPath(SUBAGENT_UUID);
+    const path = (
+      det as unknown as { getAgentPath: (id: string) => string | undefined }
+    ).getAgentPath(SUBAGENT_UUID);
     expect(path).toBeUndefined();
   });
 
@@ -348,7 +373,9 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
     det.stop();
 
     // RED: getAgentPath doesn't exist; after stop, should return undefined
-    const path = (det as unknown as { getAgentPath: (id: string) => string | undefined }).getAgentPath(SUBAGENT_UUID);
+    const path = (
+      det as unknown as { getAgentPath: (id: string) => string | undefined }
+    ).getAgentPath(SUBAGENT_UUID);
     expect(path).toBeUndefined();
   });
 
@@ -369,7 +396,11 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
         onNewSubagentCalls.push({ agentId, path, description }),
     });
 
-    det.handleSpawnAgent('call-1', 'software-engineer', 'Do the task carefully');
+    det.handleSpawnAgent(
+      'call-1',
+      'software-engineer',
+      'Do the task carefully'
+    );
     det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
     await new Promise((resolve) => setTimeout(resolve, 300));
 
@@ -377,5 +408,68 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
     // RED: current _resolveSubagent doesn't pass description
     expect(onNewSubagentCalls[0]!.description).toBeDefined();
     expect(onNewSubagentCalls[0]!.description).toContain('software-engineer');
+  });
+
+  // ------------------------------------------------------------------
+  // registerExistingAgent（Review: 預填既有路徑）
+  // ------------------------------------------------------------------
+
+  test('registerExistingAgent: 預填路徑後 getAgentPath 能取得路徑', () => {
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+    });
+
+    det.registerExistingAgent(SUBAGENT_UUID, '/some/path/file.jsonl');
+    expect(det.getAgentPath(SUBAGENT_UUID)).toBe('/some/path/file.jsonl');
+  });
+
+  test('registerExistingAgent: 預填路徑後 handleSubagentResume 能觸發 onSubagentEnter', () => {
+    const enterCalls: { agentId: string; path: string }[] = [];
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+      onSubagentEnter: (agentId, path) => enterCalls.push({ agentId, path }),
+    });
+
+    det.registerExistingAgent(SUBAGENT_UUID, '/some/path/file.jsonl');
+    det.handleSubagentResume(SUBAGENT_UUID);
+
+    expect(enterCalls).toHaveLength(1);
+    expect(enterCalls[0]!.agentId).toBe(SUBAGENT_UUID);
+    expect(enterCalls[0]!.path).toBe('/some/path/file.jsonl');
+  });
+
+  // ------------------------------------------------------------------
+  // stopped guard：stop() 後 in-flight _resolveSubagent 應被捨棄
+  // ------------------------------------------------------------------
+
+  test('stop() 後 in-flight _resolveSubagent 不觸發 onNewSubagent', async () => {
+    const subagentFile = join(tempDir, SUBAGENT_FILENAME);
+    await writeFile(subagentFile, '{"type":"session_meta"}\n');
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+      onNewSubagent: (agentId, path, description) =>
+        onNewSubagentCalls.push({ agentId, path, description }),
+    });
+
+    det.handleSpawnAgent('call-stop', 'software-engineer', 'task');
+    det.handleSpawnAgentOutput('call-stop', { agent_id: SUBAGENT_UUID });
+    // stop() 立即呼叫（in-flight 尚未完成）
+    det.stop();
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // onNewSubagent 不應被觸發（stopped guard 攔截）
+    expect(onNewSubagentCalls).toHaveLength(0);
   });
 });

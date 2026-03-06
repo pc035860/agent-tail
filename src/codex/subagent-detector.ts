@@ -77,6 +77,7 @@ export class CodexSubagentDetector {
   private pendingSpawns: Map<string, PendingSpawn> = new Map();
   private registeredAgentPaths: Map<string, string> = new Map();
   private config: CodexSubagentDetectorConfig;
+  private stopped = false;
 
   constructor(
     _existingAgentIds: string[],
@@ -84,6 +85,13 @@ export class CodexSubagentDetector {
   ) {
     this.config = config;
     // existingAgentIds reserved for future deduplication use
+  }
+
+  /**
+   * 預先登錄已存在的 subagent（供 handleSubagentResume 查詢）
+   */
+  registerExistingAgent(agentId: string, path: string): void {
+    this.registeredAgentPaths.set(agentId, path);
   }
 
   handleSpawnAgent(callId: string, agentType: string, message: string): void {
@@ -138,6 +146,9 @@ export class CodexSubagentDetector {
       agentId
     );
 
+    // Guard：stop() 後捨棄結果，避免向舊 watcher 注入資料
+    if (this.stopped) return;
+
     if (!foundPath) {
       this.config.output.warn(
         `Codex subagent file not found after retries: ${agentId}`
@@ -181,6 +192,7 @@ export class CodexSubagentDetector {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const pending of this.pendingSpawns.values()) {
       clearTimeout(pending.timer);
     }
