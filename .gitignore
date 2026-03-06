@@ -1,4 +1,5 @@
 
 node_modules
 
-specs/handover
+specs/handover/*
+specs/auto-implement/*
