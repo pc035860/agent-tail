@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "042ea65c0abd",
+  "session_id": "cd2112a2-bb22-4e61-886b-be5288894a33",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T08:39:48.61085Z",
+  "branch": "feat/codex-subagents",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/terminal/pane-naming.test.ts",
+    "src/codex/subagent-detector.ts",
+    "src/terminal/pane-manager.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1594e79321ab",
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 25061,
+    "cache_read_tokens": 45853,
+    "output_tokens": 321,
+    "api_call_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T08:39:48.602697Z",
+    "agent_lines": 240,
+    "human_added": 2938,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3178,
+    "agent_percentage": 7.551919446192574
+  }
+}
