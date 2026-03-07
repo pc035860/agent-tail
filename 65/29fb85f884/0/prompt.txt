@@ -3,3 +3,7 @@
 ---
 
 /patch-claudemd
+
+---
+
+/commit --auto
