@@ -3,6 +3,7 @@ import { Glob } from 'bun';
 import {
   makeAgentLabel,
   type OutputHandler,
+  type RetryConfig,
   type WatcherHandler,
 } from '../core/detector-interfaces.ts';
 
@@ -55,16 +56,24 @@ interface PendingSpawn {
 // File finder with retry
 // ============================================================
 
+const SUBAGENT_FILE_RETRY: RetryConfig = {
+  maxRetries: 30,
+  retryDelay: 300,
+  initialDelay: 0,
+};
+
 async function findSubagentFile(
   dateDir: string,
-  agentId: string
+  agentId: string,
+  retry: RetryConfig = SUBAGENT_FILE_RETRY
 ): Promise<string | null> {
   const glob = new Glob(`rollout-*-${agentId}.jsonl`);
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < retry.maxRetries; i++) {
     for await (const file of glob.scan(dateDir)) {
       return join(dateDir, file);
     }
-    if (i < 29) await new Promise((r) => setTimeout(r, 300));
+    if (i < retry.maxRetries - 1)
+      await new Promise((r) => setTimeout(r, retry.retryDelay));
   }
   return null;
 }

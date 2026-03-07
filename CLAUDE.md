@@ -141,6 +141,9 @@ src/
 - **Stateless parser in interactive mode**: Codex parser 無狀態，`startCodexInteractiveWatch` 所有 session 共用 `sharedParser`（Claude 每 session 需獨立 parser 防止狀態污染）。
 - **registerExistingAgent() required for resume**: 啟動時已知的 subagent 必須呼叫 `detector.registerExistingAgent(agentId, path)` 預填路徑，否則 `resume_agent` 事件的 `handleSubagentResume` 找不到路徑，`onSubagentEnter` 不會觸發。
 - **stopped flag prevents cross-session contamination**: `CodexSubagentDetector.stop()` 設定 `stopped = true`，`_resolveSubagent` 在每個 await 點後檢查，防止舊 detector 的 in-flight resolve 污染新 session 的 watcher。
+- **`handleSpawnAgentOutput` skips pre-registered agents**: 啟動時透過 `registerExistingAgent` 預填的 agentId，在歷史行重播時 `handleSpawnAgentOutput` 會跳過（避免對已知 subagent 重複 resolve + 重複 `onNewSubagent`）。
+- **Codex pane output filter needs shortId→fullId mapping**: Codex label 用短 ID（`019cc375-8a57`），但 `PaneManager` 用完整 UUID 作 key。`shouldOutput` 需透過 `shortIdToFullId` Map 反查。此映射在 `switchToSession` 時 `clear()`，並由 `prefillExistingSubagents` 和 `openPaneForSubagent` 填充。
+- **Use `RetryConfig` for retry loops**: `src/core/detector-interfaces.ts` 定義了 `RetryConfig` 介面（maxRetries, retryDelay, initialDelay）。Codex 的 `SUBAGENT_FILE_RETRY` 和 Claude 的 `EARLY_DETECTION_RETRY` / `FALLBACK_DETECTION_RETRY` 都應使用此介面，避免 magic numbers。
 
 **Gotchas:**
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
@@ -153,6 +156,7 @@ src/
 - **`handleAgentProgress` only triggers for resume**: Unknown agentIds are ignored (registration is handled by `onNewSubagent` via early/fallback paths), and only known agentIds trigger `onSubagentEnter`. This prevents duplicate pane opens and registration race issues.
 - **`readLastCodexAssistantMessage` signature**: Takes `(filePath, parser: LineParser)` — not `verbose` bool like the Claude version. Parser is injected to avoid circular imports.
 - **`createInteractiveSessionManager(displayController)`**: Module-level helper in `src/index.ts` shared by both `startClaudeInteractiveWatch` and `startCodexInteractiveWatch`. Do not duplicate this into each function.
+- **`prefillExistingSubagents(detector, files)`**: Helper in `startCodexMultiWatch` that combines `registerExistingAgent` + `registerShortId` into one loop. Used in both init and `switchToSession` — do not inline back into separate loops.
 
 ## Code Quality
 

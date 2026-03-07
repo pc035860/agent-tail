@@ -1188,9 +1188,21 @@ async function startCodexMultiWatch(
   // 此映射讓 shouldOutput 能從短 ID 反查完整 UUID
   const shortIdToFullId = new Map<string, string>();
   function registerShortId(agentId: string): void {
-    const label = makeCodexAgentLabel(agentId);
-    const shortId = extractAgentIdFromLabel(label);
+    const parts = agentId.split('-');
+    const shortId = `${parts[0]}-${(parts[4] ?? '').slice(0, 4)}`;
     shortIdToFullId.set(shortId, agentId);
+  }
+
+  /** 預填既有 subagent 路徑到 detector，並同步短 ID 映射（若有 pane） */
+  function prefillExistingSubagents(
+    det: CodexSubagentDetector,
+    files: SessionFile[]
+  ): void {
+    for (const f of files) {
+      const uuid = extractUUIDFromPath(f.path);
+      if (pm) registerShortId(uuid);
+      det.registerExistingAgent(uuid, f.path);
+    }
   }
 
   // pane 模式下，有 pane 的 subagent 不在主 session 輸出（避免重複）
@@ -1261,11 +1273,7 @@ async function startCodexMultiWatch(
   });
 
   // 預填既有 subagent 路徑，讓 resume_agent 事件能找到路徑（用於 --pane onSubagentEnter）
-  for (const f of existingSubFiles) {
-    const uuid = extractUUIDFromPath(f.path);
-    if (pm) registerShortId(uuid);
-    detector.registerExistingAgent(uuid, f.path);
-  }
+  prefillExistingSubagents(detector, existingSubFiles);
 
   // 8. 組合 line handler：detection + output
   // makeOnLine() 使用 closure，switchToSession 更新 detectionHandler 後自動生效
@@ -1326,11 +1334,7 @@ async function startCodexMultiWatch(
     });
 
     // 預填既有 subagent 路徑 + 短 ID 映射
-    for (const f of newSubFiles) {
-      const uuid = extractUUIDFromPath(f.path);
-      if (pm) registerShortId(uuid);
-      newDetector.registerExistingAgent(uuid, f.path);
-    }
+    prefillExistingSubagents(newDetector, newSubFiles);
 
     multiWatcher = newMultiWatcher;
     detector = newDetector;
