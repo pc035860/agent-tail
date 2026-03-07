@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "042ea65c0abd",
+  "strategy": "manual-commit",
+  "branch": "feat/codex-subagents",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "src/codex/subagent-detector.ts",
+    "src/terminal/pane-manager.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/04/2ea65c0abd/0/metadata.json",
+      "transcript": "/04/2ea65c0abd/0/full.jsonl",
+      "content_hash": "/04/2ea65c0abd/0/content_hash.txt",
+      "prompt": "/04/2ea65c0abd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 96263,
+    "cache_read_tokens": 2938767,
+    "output_tokens": 24705,
+    "api_call_count": 39
+  }
+}
