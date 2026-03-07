@@ -8,3 +8,11 @@ OK 了
 ---
 
 /review-loop gemini
+
+---
+
+/commit --quick
+
+---
+
+/commit --auto
