@@ -26,3 +26,7 @@
 ---
 
 claude 跟 codex 都不需要 prefix，也就是不顯示 uuid 或 agentid
+
+---
+
+/commit --auto
