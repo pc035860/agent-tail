@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "6529fb85f884",
+  "strategy": "manual-commit",
+  "branch": "feat/codex-subagents",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "CLAUDE.md",
+    "src/codex/subagent-detector.ts",
+    "src/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/65/29fb85f884/0/metadata.json",
+      "transcript": "/65/29fb85f884/0/full.jsonl",
+      "content_hash": "/65/29fb85f884/0/content_hash.txt",
+      "prompt": "/65/29fb85f884/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 66382,
+    "cache_read_tokens": 1202854,
+    "output_tokens": 11906,
+    "api_call_count": 24
+  }
+}
