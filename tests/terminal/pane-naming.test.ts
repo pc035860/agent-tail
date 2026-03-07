@@ -64,7 +64,7 @@ describe('PaneManager pane naming', () => {
 
     expect(controller.renamedPanes).toHaveLength(1);
     expect(controller.renamedPanes[0]!.paneId).toBe('%1');
-    expect(controller.renamedPanes[0]!.title).toBe('abc1234: memory search');
+    expect(controller.renamedPanes[0]!.title).toBe('memory search');
   });
 
   test('does not call renamePane when no description provided', async () => {
@@ -100,10 +100,8 @@ describe('PaneManager pane naming', () => {
     await manager.openPane('abc1234', '/path/to/agent-abc1234.jsonl', longDesc);
 
     expect(controller.renamedPanes).toHaveLength(1);
-    // "abc1234: " is 9 chars, so description part should be truncated
-    // Total title should not exceed a reasonable length
     const title = controller.renamedPanes[0]!.title;
-    expect(title.length).toBeLessThanOrEqual(60); // agentId: + 50 chars
+    expect(title.length).toBeLessThanOrEqual(50);
   });
 
   test('sanitizes description: strips control characters', async () => {

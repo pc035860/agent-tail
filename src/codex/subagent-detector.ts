@@ -145,17 +145,20 @@ export class CodexSubagentDetector {
     }
 
     // Fire async, but don't await in sync handler
-    this._resolveSubagent(callId, pending, agentId).catch((err) => {
-      this.config.output.error(
-        `Codex: Failed to resolve subagent ${agentId} - ${err instanceof Error ? err.message : String(err)}`
-      );
-    });
+    this._resolveSubagent(callId, pending, agentId, output.nickname).catch(
+      (err) => {
+        this.config.output.error(
+          `Codex: Failed to resolve subagent ${agentId} - ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    );
   }
 
   private async _resolveSubagent(
     callId: string,
     pending: PendingSpawn,
-    agentId: string
+    agentId: string,
+    nickname?: string
   ): Promise<void> {
     const foundPath = await findSubagentFile(
       this.config.sessionDateDir,
@@ -188,8 +191,9 @@ export class CodexSubagentDetector {
     // Guard：addFile 是 async，完成後再確認一次，防止 onNewSubagent 對已切換的 session 觸發
     if (this.stopped) return;
 
-    const description =
-      pending.agentType && pending.message
+    const description = nickname
+      ? `${nickname} (${pending.agentType || 'agent'})`
+      : pending.agentType && pending.message
         ? `${pending.agentType}: ${pending.message.slice(0, 50)}`
         : undefined;
     this.config.onNewSubagent?.(agentId, foundPath, description);

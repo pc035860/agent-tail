@@ -13,17 +13,16 @@ const MAX_DESCRIPTION_LENGTH = 50;
  * 清理並格式化 pane title
  * - 移除 control characters 和 tmux # 特殊序列
  * - 截斷超長描述
- * - 格式: "agentId: description"
  */
-function sanitizePaneTitle(agentId: string, description: string): string {
-  const sanitized = description
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f]/g, ' ') // control chars -> space
-    .replace(/#/g, '') // tmux interprets #() sequences
-    .trim()
-    .slice(0, MAX_DESCRIPTION_LENGTH);
-
-  return `${agentId}: ${sanitized}`;
+function sanitizePaneTitle(description: string): string {
+  return (
+    description
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x1f\x7f]/g, ' ') // control chars -> space
+      .replace(/#/g, '') // tmux interprets #() sequences
+      .trim()
+      .slice(0, MAX_DESCRIPTION_LENGTH)
+  );
 }
 
 /** applyLayout debounce 延遲（ms） */
@@ -79,7 +78,7 @@ export class PaneManager {
 
         // Best-effort pane naming (before pendingClose check)
         if (description && this.controller.renamePane) {
-          const title = sanitizePaneTitle(agentId, description);
+          const title = sanitizePaneTitle(description);
           try {
             await this.controller.renamePane(pane.id, title);
           } catch {
