@@ -128,6 +128,13 @@ export class CodexSubagentDetector {
       return;
     }
 
+    // Skip already-registered agents (pre-filled at startup via registerExistingAgent)
+    if (this.registeredAgentPaths.has(agentId)) {
+      clearTimeout(pending.timer);
+      this.pendingSpawns.delete(callId);
+      return;
+    }
+
     // Fire async, but don't await in sync handler
     this._resolveSubagent(callId, pending, agentId).catch((err) => {
       this.config.output.error(

@@ -8,9 +8,10 @@ import {
   CodexSubagentDetector,
   type CodexSubagentDetectorConfig,
 } from '../../src/codex/subagent-detector';
-import type {
-  OutputHandler,
-  WatcherHandler,
+import {
+  extractAgentIdFromLabel,
+  type OutputHandler,
+  type WatcherHandler,
 } from '../../src/core/detector-interfaces';
 import type { WatchedFile } from '../../src/core/multi-file-watcher';
 
@@ -83,6 +84,15 @@ describe('makeCodexAgentLabel', () => {
     const label1 = makeCodexAgentLabel(VALID_UUID);
     const label2 = makeCodexAgentLabel(VALID_UUID_2);
     expect(label1).not.toBe(label2);
+  });
+
+  test('shortId 可透過 extractAgentIdFromLabel 反查（映射 round-trip）', () => {
+    const label = makeCodexAgentLabel(VALID_UUID);
+    const shortId = extractAgentIdFromLabel(label);
+    // 建立 shortId → fullUUID 映射後，可還原完整 UUID
+    const mapping = new Map<string, string>();
+    mapping.set(shortId, VALID_UUID);
+    expect(mapping.get(shortId)).toBe(VALID_UUID);
   });
 });
 
@@ -443,6 +453,55 @@ describe('CodexSubagentDetector - resume (Phase 2)', () => {
     expect(enterCalls).toHaveLength(1);
     expect(enterCalls[0]!.agentId).toBe(SUBAGENT_UUID);
     expect(enterCalls[0]!.path).toBe('/some/path/file.jsonl');
+  });
+
+  // ------------------------------------------------------------------
+  // handleSpawnAgentOutput: 已 registerExistingAgent 的 agentId → 跳過 resolve
+  // ------------------------------------------------------------------
+
+  test('handleSpawnAgentOutput: 已 registerExistingAgent → 不觸發 onNewSubagent', async () => {
+    const subagentFile = join(tempDir, SUBAGENT_FILENAME);
+    await writeFile(subagentFile, '{"type":"session_meta"}\n');
+
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+      onNewSubagent: (agentId, path, description) =>
+        onNewSubagentCalls.push({ agentId, path, description }),
+    });
+
+    // 模擬啟動時預填既有 subagent
+    det.registerExistingAgent(SUBAGENT_UUID, subagentFile);
+
+    // 歷史行重播：spawn + output
+    det.handleSpawnAgent('call-1', 'software-engineer', 'Do task');
+    det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
+
+    // 等待足夠時間（若 _resolveSubagent 被觸發，300ms 內會完成）
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // onNewSubagent 不應被觸發（已跳過）
+    expect(onNewSubagentCalls).toHaveLength(0);
+    // watcher 也不應有新增檔案（已在初始化時加入）
+    expect(watcher.addedFiles).toHaveLength(0);
+  });
+
+  test('handleSpawnAgentOutput: 已 registerExistingAgent → 清理 pending spawn', () => {
+    const det = new CodexSubagentDetector([], {
+      sessionDateDir: tempDir,
+      output,
+      watcher,
+      enabled: true,
+    });
+
+    det.registerExistingAgent(SUBAGENT_UUID, '/some/path.jsonl');
+    det.handleSpawnAgent('call-1', 'engineer', 'task');
+    det.handleSpawnAgentOutput('call-1', { agent_id: SUBAGENT_UUID });
+
+    // stop() 不應拋出（pending spawn 已被清理）
+    expect(() => det.stop()).not.toThrow();
   });
 
   // ------------------------------------------------------------------

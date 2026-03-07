@@ -1184,16 +1184,28 @@ async function startCodexMultiWatch(
 
   const pm = paneManager;
 
+  // Codex label 用短 ID（如 019cc375-8a57），但 PaneManager 用完整 UUID 作 key
+  // 此映射讓 shouldOutput 能從短 ID 反查完整 UUID
+  const shortIdToFullId = new Map<string, string>();
+  function registerShortId(agentId: string): void {
+    const label = makeCodexAgentLabel(agentId);
+    const shortId = extractAgentIdFromLabel(label);
+    shortIdToFullId.set(shortId, agentId);
+  }
+
   // pane 模式下，有 pane 的 subagent 不在主 session 輸出（避免重複）
   const shouldOutput = pm
     ? (label: string) => {
         if (label === MAIN_LABEL) return true;
-        return !pm.hasPaneForAgent(extractAgentIdFromLabel(label));
+        const shortId = extractAgentIdFromLabel(label);
+        const fullId = shortIdToFullId.get(shortId) ?? shortId;
+        return !pm.hasPaneForAgent(fullId);
       }
     : undefined;
 
   const openPaneForSubagent = pm
     ? (agentId: string, subagentPath: string, description?: string) => {
+        registerShortId(agentId);
         log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
         pm.openPane(agentId, subagentPath, description).catch(
           (err: unknown) => {
@@ -1250,7 +1262,9 @@ async function startCodexMultiWatch(
 
   // 預填既有 subagent 路徑，讓 resume_agent 事件能找到路徑（用於 --pane onSubagentEnter）
   for (const f of existingSubFiles) {
-    detector.registerExistingAgent(extractUUIDFromPath(f.path), f.path);
+    const uuid = extractUUIDFromPath(f.path);
+    if (pm) registerShortId(uuid);
+    detector.registerExistingAgent(uuid, f.path);
   }
 
   // 8. 組合 line handler：detection + output
@@ -1270,6 +1284,7 @@ async function startCodexMultiWatch(
 
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
     paneManager?.closeAll(); // 關閉現有 pane
+    shortIdToFullId.clear();
     detector.stop();
     multiWatcher.stop();
 
@@ -1310,9 +1325,11 @@ async function startCodexMultiWatch(
       onSubagentDone,
     });
 
-    // 預填既有 subagent 路徑
+    // 預填既有 subagent 路徑 + 短 ID 映射
     for (const f of newSubFiles) {
-      newDetector.registerExistingAgent(extractUUIDFromPath(f.path), f.path);
+      const uuid = extractUUIDFromPath(f.path);
+      if (pm) registerShortId(uuid);
+      newDetector.registerExistingAgent(uuid, f.path);
     }
 
     multiWatcher = newMultiWatcher;
