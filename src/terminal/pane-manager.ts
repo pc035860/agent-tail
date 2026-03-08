@@ -72,8 +72,8 @@ export class PaneManager {
     if (this.pendingAgentIds.has(agentId)) return;
     if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
 
-    this.logger?.(`[pane] Opening pane for ${agentId}...`);
     this.pendingAgentIds.add(agentId);
+    this.logger?.(`[pane] Opening pane for ${agentId}...`);
     try {
       const cmd = this.commandBuilder(agentId, subagentPath);
       const pane = await this.controller.createPane(cmd, agentId);
