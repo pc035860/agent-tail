@@ -18,14 +18,16 @@ export interface CliOptions {
   sleepInterval: number;
   /** Number of initial lines to show per file (default: all) */
   lines?: number;
-  /** Claude only: tail subagent log (true = latest, string = specific ID) */
+  /** Claude/Codex: tail subagent log (true = latest, string = specific ID) */
   subagent?: string | true;
-  /** Claude only: interactive mode for switching between main session and subagents */
+  /** Claude/Codex: interactive mode for switching between main session and subagents (Codex: Phase 3) */
   interactive: boolean;
-  /** Claude only: include subagent content in output (non-interactive mode) */
+  /** Claude/Codex: include subagent content in output (non-interactive mode) */
   withSubagents: boolean;
-  /** Claude only: auto-switch to latest main session in project */
+  /** Auto-switch to latest main session in project */
   autoSwitch: boolean;
+  /** Claude/Codex: auto-open tmux pane for each new subagent (Codex: Phase 2) */
+  pane: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
 }
@@ -79,4 +81,6 @@ export interface ParsedLine {
   sourceLabel?: string;
   /** 是否為 Task tool_use（用於早期 Subagent 偵測） */
   isTaskToolUse?: boolean;
+  /** Task tool_use 的 description 欄位（用於 pane 命名） */
+  taskDescription?: string;
 }

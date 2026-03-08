@@ -1,56 +1,26 @@
 import { Glob } from 'bun';
 import { watch, type FSWatcher } from 'node:fs';
-import { join } from 'node:path';
-import type { WatchedFile } from '../core/multi-file-watcher.ts';
+import { basename, dirname, join } from 'node:path';
+import { makeAgentLabel } from '../core/detector-interfaces.ts';
+import type {
+  OutputHandler,
+  SessionHandler,
+  WatcherHandler,
+  RetryConfig,
+} from '../core/detector-interfaces.ts';
 
-// ============================================================
-// Interfaces
-// ============================================================
-
-/**
- * 輸出處理器介面 - 抽象化不同模式的輸出方式
- */
-export interface OutputHandler {
-  /** 訊息輸出 */
-  info(message: string): void;
-  /** 警告輸出（如 early detection） */
-  warn(message: string): void;
-  /** 錯誤輸出 */
-  error(message: string): void;
-  /** 輕量級訊息（如 file not found after retries） */
-  debug(message: string): void;
-}
-
-/**
- * Session 管理器介面 - 抽象化 Interactive 模式的特殊需求
- */
-export interface SessionHandler {
-  /** 新增 session（Interactive 模式需要） */
-  addSession?(agentId: string, label: string, path: string): void;
-  /** 標記 session 完成（Interactive 模式需要） */
-  markSessionDone?(agentId: string): void;
-  /** 更新 UI（Interactive 模式需要） */
-  updateUI?(): void;
-}
-
-/**
- * Watcher 介面 - 抽象化 MultiFileWatcher 的 addFile 操作
- */
-export interface WatcherHandler {
-  addFile(file: WatchedFile): Promise<void>;
-}
-
-/**
- * 重試配置
- */
-export interface RetryConfig {
-  /** 最大重試次數 */
-  maxRetries: number;
-  /** 重試間隔（ms） */
-  retryDelay: number;
-  /** 初始延遲（ms） */
-  initialDelay: number;
-}
+// Re-export for backward compatibility (consumers can still import from this file)
+export type {
+  OutputHandler,
+  SessionHandler,
+  WatcherHandler,
+  RetryConfig,
+} from '../core/detector-interfaces.ts';
+export {
+  MAIN_LABEL,
+  makeAgentLabel,
+  extractAgentIdFromLabel,
+} from '../core/detector-interfaces.ts';
 
 /**
  * SubagentDetector 配置
@@ -68,6 +38,18 @@ export interface SubagentDetectorConfig {
   enabled: boolean;
   /** 是否啟用目錄監控（預設 true） */
   watchDir?: boolean;
+  /** 新 subagent 偵測時的回呼（用於 pane 自動開啟等） */
+  onNewSubagent?: (
+    agentId: string,
+    subagentPath: string,
+    description?: string
+  ) => void;
+  /** Subagent 進入時的回呼（含 resume，每次進入都觸發，用於 pane 開啟） */
+  onSubagentEnter?: (agentId: string, subagentPath: string) => void;
+  /** Subagent 完成時的回呼（用於 pane 自動關閉等） */
+  onSubagentDone?: (agentId: string) => void;
+  /** 檢查 agentId 是否有對應的 pane（用於判斷是否需要關閉） */
+  hasPane?: (agentId: string) => boolean;
 }
 
 // ============================================================
@@ -87,6 +69,21 @@ export const FALLBACK_DETECTION_RETRY: RetryConfig = {
   retryDelay: 100,
   initialDelay: 100,
 };
+
+/** 建立 subagent 檔案路徑 */
+export function buildSubagentPath(
+  subagentsDir: string,
+  agentId: string
+): string {
+  return join(subagentsDir, `agent-${agentId}.jsonl`);
+}
+
+/** 從 session 檔案路徑推導 subagents 目錄 */
+export function getSubagentsDir(sessionFilePath: string): string {
+  const projectDir = dirname(sessionFilePath);
+  const sessionId = basename(sessionFilePath, '.jsonl');
+  return join(projectDir, sessionId, 'subagents');
+}
 
 // ============================================================
 // Utility Functions
@@ -192,7 +189,7 @@ export async function tryAddSubagentFile(
       if (await file.exists()) {
         await watcher.addFile({
           path: subagentPath,
-          label: `[${agentId}]`,
+          label: makeAgentLabel(agentId),
         });
         return true;
       } else if (retriesLeft > 0) {
@@ -229,6 +226,9 @@ export class SubagentDetector {
   private isWatching = false;
   // 追蹤所有 pending 的 setTimeout 句柄，用於 stop() 時清除
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  // FIFO queue: Task tool_use descriptions, matched to agents in registration order.
+  // May mismatch with parallel Task launches (known limitation, wrong label only).
+  private pendingDescriptions: string[] = [];
 
   constructor(initialAgentIds: Set<string>, config: SubagentDetectorConfig) {
     this.knownAgentIds = new Set(initialAgentIds);
@@ -258,6 +258,7 @@ export class SubagentDetector {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    this.pendingDescriptions = [];
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -297,6 +298,22 @@ export class SubagentDetector {
   }
 
   /**
+   * 處理 agent_progress 事件（subagent 進入或 resume 時）
+   * 只在 resume（已知 agentId）時觸發 onSubagentEnter
+   * 新 agentId 的 pane 開啟由 onNewSubagent 負責，避免重複觸發
+   */
+  handleAgentProgress(agentId: string): void {
+    if (!this.config.enabled) return;
+    if (!isValidAgentId(agentId)) return;
+
+    // 新 agentId 仍由 early/fallback 路徑完成註冊，避免提前標記 known 造成漏註冊
+    if (!this.knownAgentIds.has(agentId)) return;
+
+    const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
+    this.config.onSubagentEnter?.(agentId, subagentPath);
+  }
+
+  /**
    * 處理 fallback detection（toolUseResult 觸發）
    * @param agentId - 從 toolUseResult 提取的 agentId
    */
@@ -307,11 +324,54 @@ export class SubagentDetector {
       return;
     }
 
-    this.registerNewAgent(
-      agentId,
-      FALLBACK_DETECTION_RETRY,
-      `New subagent detected: ${agentId}`
-    );
+    // 檢查是否已經監控中
+    const isAlreadyMonitored = this.knownAgentIds.has(agentId);
+
+    if (isAlreadyMonitored) {
+      // 已經監控中，表示之前透過 early detection 發現過
+      // 輸出完成訊息，觸發 onSubagentDone（關閉 pane）
+      this.config.output.warn(`Subagent completed: ${agentId}`);
+    } else {
+      // 首次發現且已完成：不開 pane，只註冊監控
+      this.knownAgentIds.add(agentId);
+
+      // Consume pending description to prevent queue drift
+      // (this agent's Task tool_use pushed a description, but no pane will open)
+      this.pendingDescriptions.shift();
+
+      const subagentPath = buildSubagentPath(this.config.subagentsDir, agentId);
+
+      // Session 處理（Interactive 模式）
+      this.config.session?.addSession?.(
+        agentId,
+        makeAgentLabel(agentId),
+        subagentPath
+      );
+
+      if (this.config.enabled) {
+        this.config.output.warn(
+          `New subagent detected (completed): ${agentId}`
+        );
+
+        // 非阻塞式新增檔案監控（但不觸發 onNewSubagent，因為已完成）
+        // 只在 directory watch 已啟動時才建立 timer，避免孤立 timer 洩漏
+        if (this.isWatching) {
+          const timer = setTimeout(() => {
+            this.pendingTimers.delete(timer);
+            if (!this.isWatching) return;
+
+            tryAddSubagentFile(
+              subagentPath,
+              agentId,
+              this.config.watcher,
+              this.config.output,
+              FALLBACK_DETECTION_RETRY
+            );
+          }, FALLBACK_DETECTION_RETRY.initialDelay);
+          this.pendingTimers.add(timer);
+        }
+      }
+    }
 
     // toolUseResult 表示 subagent 已完成
     if (this.config.session?.markSessionDone) {
@@ -319,6 +379,20 @@ export class SubagentDetector {
       this.config.output.debug(`Subagent completed: ${agentId}`);
     }
     this.config.session?.updateUI?.();
+
+    // 只有已監控的（有開 pane 的）才需要觸發 onSubagentDone
+    if (isAlreadyMonitored && this.config.hasPane?.(agentId)) {
+      this.config.onSubagentDone?.(agentId);
+    }
+  }
+
+  /**
+   * Push a Task description to the FIFO queue.
+   * Called when a Task tool_use with description is detected in the main session.
+   * The description will be matched to the next newly registered agent.
+   */
+  pushDescription(description: string): void {
+    this.pendingDescriptions.push(description);
   }
 
   /**
@@ -420,10 +494,18 @@ export class SubagentDetector {
     );
 
     // Session 處理（Interactive 模式）
-    this.config.session?.addSession?.(agentId, `[${agentId}]`, subagentPath);
+    this.config.session?.addSession?.(
+      agentId,
+      makeAgentLabel(agentId),
+      subagentPath
+    );
 
     if (this.config.enabled) {
       this.config.output.warn(message);
+
+      // 觸發 onNewSubagent 回呼（pane 自動開啟等用途）
+      const description = this.pendingDescriptions.shift();
+      this.config.onNewSubagent?.(agentId, subagentPath, description);
 
       // 非阻塞式新增檔案監控
       const timer = setTimeout(() => {

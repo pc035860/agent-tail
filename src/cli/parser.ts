@@ -39,7 +39,7 @@ function createProgram(): Command {
     )
     .option(
       '-i, --interactive',
-      'Claude only: interactive mode for switching between sessions (Tab to switch)'
+      'Claude/Codex: interactive mode for switching between sessions (Tab to switch)'
     )
     .option('--no-interactive', 'Disable interactive mode (default)')
     .option(
@@ -54,9 +54,11 @@ function createProgram(): Command {
     .option('--no-auto-switch', 'Disable auto-switch (default)')
     .option(
       '-a, --all',
-      'Claude only: show all content (verbose + with-subagents + auto-switch)',
+      'Claude/Codex: show all content (verbose + with-subagents + auto-switch)',
       false
-    );
+    )
+    .option('--pane', 'Claude/Codex: auto-open tmux pane for each new subagent')
+    .option('--no-pane', 'Disable pane auto-open (default)');
 
   return program;
 }
@@ -84,18 +86,22 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // subagent 選項僅對 claude 有效
-  if (opts.subagent !== undefined && agentTypeArg !== 'claude') {
+  // subagent 選項對 claude 和 codex 有效
+  if (
+    opts.subagent !== undefined &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex'
+  ) {
     console.error(
-      'Error: --subagent option is only available for "claude" agent type.'
+      'Error: --subagent option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
 
-  // --all preset 選項僅對 claude 有效（需要在展開前驗證）
-  if (opts.all && agentTypeArg !== 'claude') {
+  // --all preset 選項對 claude 和 codex 有效（需要在展開前驗證）
+  if (opts.all && agentTypeArg !== 'claude' && agentTypeArg !== 'codex') {
     console.error(
-      'Error: --all option is only available for "claude" agent type.'
+      'Error: --all option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
@@ -110,13 +116,18 @@ export function parseArgs(args: string[]): CliOptions {
   // 將 undefined 轉換為 false（對於非 preset 選項）
   const finalVerbose = opts.verbose ?? false;
   const finalInteractive = opts.interactive ?? false;
-  const finalWithSubagents = opts.withSubagents ?? false;
+  let finalWithSubagents = opts.withSubagents ?? false;
   const finalAutoSwitch = opts.autoSwitch ?? false;
+  const finalPane = opts.pane ?? false;
 
-  // interactive 選項僅對 claude 有效
-  if (finalInteractive && agentTypeArg !== 'claude') {
+  // interactive 選項對 claude 和 codex 有效
+  if (
+    finalInteractive &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex'
+  ) {
     console.error(
-      'Error: --interactive option is only available for "claude" agent type.'
+      'Error: --interactive option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
@@ -137,10 +148,51 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // withSubagents 選項僅對 claude 有效
-  if (finalWithSubagents && agentTypeArg !== 'claude') {
+  // pane 選項對 claude 和 codex 有效
+  if (finalPane && agentTypeArg !== 'claude' && agentTypeArg !== 'codex') {
     console.error(
-      'Error: --with-subagents option is only available for "claude" agent type.'
+      'Error: --pane option is only available for "claude" and "codex" agent types.'
+    );
+    process.exit(1);
+  }
+
+  // pane 和 interactive 互斥
+  if (finalPane && finalInteractive) {
+    console.error(
+      'Error: --pane and --interactive options cannot be used together.'
+    );
+    process.exit(1);
+  }
+
+  // pane 和 subagent 互斥（pane 在多檔案監控模式，subagent 在單檔案模式）
+  if (finalPane && opts.subagent !== undefined) {
+    console.error(
+      'Error: --pane and --subagent options cannot be used together.'
+    );
+    process.exit(1);
+  }
+
+  // pane 需要 follow 模式
+  if (finalPane && !opts.follow) {
+    console.error(
+      'Error: --pane requires --follow mode (cannot use with --no-follow).'
+    );
+    process.exit(1);
+  }
+
+  // pane 自動啟用 withSubagents（subagent 偵測必須啟用才能開 pane）
+  if (finalPane && !finalWithSubagents) {
+    finalWithSubagents = true;
+  }
+
+  // withSubagents 選項對 claude 和 codex 有效
+  if (
+    finalWithSubagents &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex'
+  ) {
+    console.error(
+      'Error: --with-subagents option is only available for "claude" and "codex" agent types.'
     );
     process.exit(1);
   }
@@ -175,6 +227,7 @@ export function parseArgs(args: string[]): CliOptions {
     interactive: finalInteractive,
     withSubagents: finalWithSubagents,
     autoSwitch: finalAutoSwitch,
+    pane: finalPane,
     sessionId: sessionIdArg,
   };
 }

@@ -1,13 +1,63 @@
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
 import { ClaudeAgent } from '../agents/claude/claude-agent.ts';
 import type { LineParser } from '../agents/agent.interface.ts';
 import type { Formatter } from '../formatters/formatter.interface.ts';
-import type { SessionFile } from '../core/types.ts';
-import type { SubagentDetector } from './subagent-detector.ts';
+import type { ParsedLine, SessionFile } from '../core/types.ts';
+import {
+  type SubagentDetector,
+  MAIN_LABEL,
+  buildSubagentPath,
+} from './subagent-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
+
+/**
+ * 從 subagent JSONL 檔案讀取最後一條 assistant 訊息的所有 ParsedLine parts
+ * 用於在 pane 關閉前回顯 subagent 的最終報告
+ */
+export async function readLastAssistantMessage(
+  filePath: string,
+  verbose: boolean
+): Promise<ParsedLine[]> {
+  try {
+    const file = Bun.file(filePath);
+    if (!(await file.exists())) return [];
+
+    const content = await file.text();
+    const lines = content.split('\n').filter(Boolean);
+
+    // 從尾部往前找最後一條 type === 'assistant' 的行
+    let lastAssistantLine: string | null = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!;
+      try {
+        const data = JSON.parse(line);
+        if (data.type === 'assistant') {
+          lastAssistantLine = line;
+          break;
+        }
+      } catch {
+        // 略過無效 JSON
+      }
+    }
+
+    if (!lastAssistantLine) return [];
+
+    // 用新的 parser 實例解析（避免狀態污染）
+    const parser = new ClaudeAgent({ verbose }).parser;
+    const parts: ParsedLine[] = [];
+    let parsed = parser.parse(lastAssistantLine);
+    while (parsed) {
+      parts.push(parsed);
+      parsed = parser.parse(lastAssistantLine);
+    }
+
+    return parts;
+  } catch {
+    return [];
+  }
+}
 
 /**
  * 掃描 subagents 目錄，取得現有 subagent 檔案並按 birthtime 升序排序
@@ -16,25 +66,26 @@ export async function buildSubagentFiles(
   subagentsDir: string,
   initialAgentIds: Set<string>
 ): Promise<Array<{ agentId: string; path: string; birthtime: Date }>> {
-  const result: Array<{ agentId: string; path: string; birthtime: Date }> = [];
+  // 平行化 stat 呼叫，直接用 stat() 取代 exists() + stat() 的雙重 syscall
+  const results = await Promise.all(
+    [...initialAgentIds].map(async (agentId) => {
+      const subagentPath = buildSubagentPath(subagentsDir, agentId);
+      try {
+        const stats = await stat(subagentPath);
+        return { agentId, path: subagentPath, birthtime: stats.birthtime };
+      } catch {
+        // 檔案不存在（ENOENT）或無法存取，跳過
+        return null;
+      }
+    })
+  );
 
-  for (const agentId of initialAgentIds) {
-    const subagentPath = join(subagentsDir, `agent-${agentId}.jsonl`);
-    const subagentFile = Bun.file(subagentPath);
-    if (await subagentFile.exists()) {
-      const stats = await stat(subagentPath);
-      result.push({
-        agentId,
-        path: subagentPath,
-        birthtime: stats.birthtime,
-      });
-    }
-  }
-
-  // 按建立時間升序排序（最舊的先加入）
-  result.sort((a, b) => a.birthtime.getTime() - b.birthtime.getTime());
-
-  return result;
+  // 過濾掉不存在的檔案，按建立時間升序排序（最舊的先加入）
+  return results
+    .filter(
+      (r): r is { agentId: string; path: string; birthtime: Date } => r !== null
+    )
+    .sort((a, b) => a.birthtime.getTime() - b.birthtime.getTime());
 }
 
 /**
@@ -46,6 +97,8 @@ export interface OnLineHandlerConfig {
   detector: SubagentDetector;
   onOutput: (formatted: string, label: string) => void;
   verbose: boolean;
+  /** 過濾函數：回傳 true 表示應該輸出，false 表示跳過（Phase 2.3） */
+  shouldOutput?: (label: string) => boolean;
 }
 
 /**
@@ -55,6 +108,26 @@ export function createOnLineHandler(
   config: OnLineHandlerConfig
 ): (line: string, label: string) => void {
   return (line: string, label: string) => {
+    // agent_progress：subagent 進入或 resume，每次進入都觸發 pane 開啟
+    // 前置字串檢查避免每行都 JSON.parse（熱路徑優化）
+    if (label === MAIN_LABEL && line.includes('"agent_progress"')) {
+      try {
+        const data = JSON.parse(line) as {
+          type?: string;
+          data?: { type?: string; agentId?: string };
+        };
+        if (
+          data.type === 'progress' &&
+          data.data?.type === 'agent_progress' &&
+          data.data?.agentId
+        ) {
+          config.detector.handleAgentProgress(data.data.agentId);
+        }
+      } catch {
+        // 非 JSON 或無關格式，略過
+      }
+    }
+
     let parser = config.parsers.get(label);
     if (!parser) {
       const newAgent = new ClaudeAgent({ verbose: config.verbose });
@@ -65,15 +138,26 @@ export function createOnLineHandler(
     let parsed = parser.parse(line);
     while (parsed) {
       parsed.sourceLabel = label;
+
+      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
+      if (config.shouldOutput && !config.shouldOutput(label)) {
+        parsed = parser.parse(line);
+        continue;
+      }
+
       config.onOutput(config.formatter.format(parsed), label);
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-      if (label === '[MAIN]' && parsed.isTaskToolUse) {
+      if (label === MAIN_LABEL && parsed.isTaskToolUse) {
+        // Push description before early detection so it's queued when scan triggers
+        if (parsed.taskDescription) {
+          config.detector.pushDescription(parsed.taskDescription);
+        }
         config.detector.handleEarlyDetection();
       }
 
       // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
-      if (label === '[MAIN]') {
+      if (label === MAIN_LABEL) {
         const raw = parsed.raw as {
           toolUseResult?: {
             agentId?: string;
