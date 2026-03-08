@@ -5,7 +5,13 @@
   "branch": "main",
   "checkpoints_count": 5,
   "files_touched": [
-    ".claude/settings.json"
+    ".claude/settings.json",
+    ".entire/.gitignore",
+    ".entire/settings.json",
+    ".husky/commit-msg",
+    ".husky/post-commit",
+    ".husky/pre-push",
+    ".husky/prepare-commit-msg"
   ],
   "sessions": [
     {
@@ -19,13 +25,19 @@
       "transcript": "/33/ae8bedfa10/1/full.jsonl",
       "content_hash": "/33/ae8bedfa10/1/content_hash.txt",
       "prompt": "/33/ae8bedfa10/1/prompt.txt"
+    },
+    {
+      "metadata": "/33/ae8bedfa10/2/metadata.json",
+      "transcript": "/33/ae8bedfa10/2/full.jsonl",
+      "content_hash": "/33/ae8bedfa10/2/content_hash.txt",
+      "prompt": "/33/ae8bedfa10/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 79,
-    "cache_creation_tokens": 141117,
-    "cache_read_tokens": 3397518,
-    "output_tokens": 29258,
-    "api_call_count": 51
+    "input_tokens": 88,
+    "cache_creation_tokens": 168320,
+    "cache_read_tokens": 3586141,
+    "output_tokens": 30240,
+    "api_call_count": 57
   }
 }
