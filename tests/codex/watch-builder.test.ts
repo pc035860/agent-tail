@@ -10,8 +10,14 @@ import {
   extractUUIDFromPath,
   readLastCodexAssistantMessage,
 } from '../../src/codex/watch-builder';
-import type { CodexSubagentDetector } from '../../src/codex/subagent-detector';
-import { MAIN_LABEL } from '../../src/core/detector-interfaces';
+import {
+  type CodexSubagentDetector,
+  makeCodexAgentLabel,
+} from '../../src/codex/subagent-detector';
+import {
+  MAIN_LABEL,
+  extractAgentIdFromLabel,
+} from '../../src/core/detector-interfaces';
 import { CodexAgent } from '../../src/agents/codex/codex-agent';
 
 // ============================================================
@@ -524,5 +530,97 @@ describe('readLastCodexAssistantMessage (Phase 2 RED)', () => {
     const result = await readLastCodexAssistantMessage(filePath, parser);
 
     expect(result).toHaveLength(0);
+  });
+});
+
+// ============================================================
+// Tests: shouldOutput with suppressedForPane (Codex shortId mapping)
+// ============================================================
+
+describe('shouldOutput with suppressedForPane (Codex shortId mapping)', () => {
+  const FULL_UUID = '019cc375-5af5-7ed1-9ff8-8a5757d815d1';
+  // parts[0] + parts[4].slice(0,4) = '019cc375' + '8a57'
+  const SHORT_ID = '019cc375-8a57';
+
+  function makeCodexShouldOutput(
+    pm: { hasPaneForAgent: (id: string) => boolean },
+    suppressedForPane: Set<string>,
+    shortIdToFullId: Map<string, string>
+  ) {
+    return (label: string) => {
+      if (label === MAIN_LABEL) return true;
+      const shortId = extractAgentIdFromLabel(label);
+      const fullId = shortIdToFullId.get(shortId) ?? shortId;
+      if (suppressedForPane.has(fullId)) return false;
+      return !pm.hasPaneForAgent(fullId);
+    };
+  }
+
+  test('main label 永遠輸出', () => {
+    const fn = makeCodexShouldOutput(
+      { hasPaneForAgent: () => true },
+      new Set([FULL_UUID]),
+      new Map([[SHORT_ID, FULL_UUID]])
+    );
+    expect(fn(MAIN_LABEL)).toBe(true);
+  });
+
+  test('Codex shortId 映射正確抑制 existing subagent', () => {
+    const shortIdToFullId = new Map([[SHORT_ID, FULL_UUID]]);
+    const suppressed = new Set([FULL_UUID]);
+
+    const fn = makeCodexShouldOutput(
+      { hasPaneForAgent: () => false },
+      suppressed,
+      shortIdToFullId
+    );
+    expect(fn(makeCodexAgentLabel(FULL_UUID))).toBe(false);
+  });
+
+  test('新 subagent 不在 suppress set 中，正常輸出', () => {
+    const shortIdToFullId = new Map<string, string>();
+    const suppressed = new Set<string>();
+
+    const fn = makeCodexShouldOutput(
+      { hasPaneForAgent: () => false },
+      suppressed,
+      shortIdToFullId
+    );
+    expect(fn(makeCodexAgentLabel(FULL_UUID))).toBe(true);
+  });
+
+  test('有 pane 的 subagent 不輸出（不在 suppress set）', () => {
+    const shortIdToFullId = new Map([[SHORT_ID, FULL_UUID]]);
+    const suppressed = new Set<string>();
+
+    const fn = makeCodexShouldOutput(
+      { hasPaneForAgent: (id) => id === FULL_UUID },
+      suppressed,
+      shortIdToFullId
+    );
+    expect(fn(makeCodexAgentLabel(FULL_UUID))).toBe(false);
+  });
+
+  test('clear 後重填 suppressedForPane，新 session 的舊 subagent 被清除', () => {
+    const UUID_OLD = '019cc375-5af5-7ed1-9ff8-8a5757d815d1';
+    const UUID_NEW = '019dd000-aaaa-7ed1-9ff8-8a5757d815d2';
+    const SHORT_NEW = '019dd000-8a57';
+    const shortIdToFullId = new Map([
+      [SHORT_ID, UUID_OLD],
+      [SHORT_NEW, UUID_NEW],
+    ]);
+    const suppressed = new Set([UUID_OLD]);
+
+    // 模擬 switchToSession：clear + 重填
+    suppressed.clear();
+    suppressed.add(UUID_NEW);
+
+    const fn = makeCodexShouldOutput(
+      { hasPaneForAgent: () => false },
+      suppressed,
+      shortIdToFullId
+    );
+    expect(fn(makeCodexAgentLabel(UUID_OLD))).toBe(true); // 舊的已清除
+    expect(fn(makeCodexAgentLabel(UUID_NEW))).toBe(false); // 新的被抑制
   });
 });

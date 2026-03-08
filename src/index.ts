@@ -382,10 +382,15 @@ async function startClaudeMultiWatch(
     ? (agentId: string) => pm.hasPaneForAgent(agentId)
     : undefined;
 
+  // pane 模式下，進入時既有 subagent 加入 suppress set，避免歷史內容污染 main pane
+  const suppressedForPane = pm ? new Set(existingAgentIds) : new Set<string>();
+
   const shouldOutput = pm
     ? (label: string) => {
         if (label === MAIN_LABEL) return true;
-        return !pm.hasPaneForAgent(extractAgentIdFromLabel(label));
+        const agentId = extractAgentIdFromLabel(label);
+        if (suppressedForPane.has(agentId)) return false;
+        return !pm.hasPaneForAgent(agentId);
       }
     : undefined;
 
@@ -446,6 +451,12 @@ async function startClaudeMultiWatch(
           chalk.gray(`Found ${newExistingAgentIds.size} subagent(s)`)
         );
       }
+    }
+
+    // 更新 suppress set：清空後填入新 session 的既有 subagent
+    if (pm) {
+      suppressedForPane.clear();
+      for (const agentId of newExistingAgentIds) suppressedForPane.add(agentId);
     }
 
     // 輸出切換訊息
@@ -1191,24 +1202,29 @@ async function startCodexMultiWatch(
     shortIdToFullId.set(shortId, agentId);
   }
 
-  /** 預填既有 subagent 路徑到 detector，並同步短 ID 映射（若有 pane） */
+  // pane 模式下：既有 subagent 加入 suppress set（完整 UUID v7），避免歷史內容污染 main pane
+  const suppressedForPane = new Set<string>();
+
+  /** 預填既有 subagent 路徑到 detector，同步短 ID 映射，並填充 suppressedForPane（若有 pane） */
   function prefillExistingSubagents(
     det: CodexSubagentDetector,
     files: SessionFile[]
   ): void {
     for (const f of files) {
       const uuid = extractUUIDFromPath(f.path);
-      if (pm) registerShortId(uuid);
+      if (pm) {
+        registerShortId(uuid);
+        suppressedForPane.add(uuid);
+      }
       det.registerExistingAgent(uuid, f.path);
     }
   }
-
-  // pane 模式下，有 pane 的 subagent 不在主 session 輸出（避免重複）
   const shouldOutput = pm
     ? (label: string) => {
         if (label === MAIN_LABEL) return true;
         const shortId = extractAgentIdFromLabel(label);
         const fullId = shortIdToFullId.get(shortId) ?? shortId;
+        if (suppressedForPane.has(fullId)) return false;
         return !pm.hasPaneForAgent(fullId);
       }
     : undefined;
@@ -1266,6 +1282,7 @@ async function startCodexMultiWatch(
   });
 
   // 預填既有 subagent 路徑，讓 resume_agent 事件能找到路徑（用於 --pane onSubagentEnter）
+  // 同時填充 suppressedForPane（由 prefillExistingSubagents 內部處理）
   prefillExistingSubagents(detector, existingSubFiles);
 
   // 8. 組合 line handler：detection + output
@@ -1286,6 +1303,7 @@ async function startCodexMultiWatch(
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
     paneManager?.closeAll(); // 關閉現有 pane
     shortIdToFullId.clear();
+    if (pm) suppressedForPane.clear(); // 與 prefillExistingSubagents 配對清空
     detector.stop();
     multiWatcher.stop();
 

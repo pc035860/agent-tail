@@ -14,6 +14,11 @@ import {
   SUPER_FOLLOW_POLL_MS,
   type OnLineHandlerConfig,
 } from '../../src/claude/watch-builder';
+import {
+  MAIN_LABEL,
+  makeAgentLabel,
+  extractAgentIdFromLabel,
+} from '../../src/core/detector-interfaces';
 
 // ============================================================
 // Mock Helpers
@@ -255,6 +260,68 @@ describe('createOnLineHandler', () => {
     expect(detector.pushDescriptionCalls).toHaveLength(0);
     // Early detection should still fire
     expect(detector.earlyDetectionCalls).toBe(1);
+  });
+
+  test('shouldOutput：suppressed agentId 不輸出', () => {
+    const suppressedForPane = new Set(['abc1234']);
+    const pm = { hasPaneForAgent: (_id: string) => false };
+
+    const shouldOutput = (label: string) => {
+      if (label === MAIN_LABEL) return true;
+      const agentId = extractAgentIdFromLabel(label);
+      if (suppressedForPane.has(agentId)) return false;
+      return !pm.hasPaneForAgent(agentId);
+    };
+
+    expect(shouldOutput(MAIN_LABEL)).toBe(true);
+    expect(shouldOutput(makeAgentLabel('abc1234'))).toBe(false);
+  });
+
+  test('shouldOutput：有 pane 的 agentId 不輸出（不在 suppress set）', () => {
+    const suppressedForPane = new Set<string>();
+    const pm = { hasPaneForAgent: (id: string) => id === 'abc1234' };
+
+    const shouldOutput = (label: string) => {
+      if (label === MAIN_LABEL) return true;
+      const agentId = extractAgentIdFromLabel(label);
+      if (suppressedForPane.has(agentId)) return false;
+      return !pm.hasPaneForAgent(agentId);
+    };
+
+    expect(shouldOutput(makeAgentLabel('abc1234'))).toBe(false);
+  });
+
+  test('shouldOutput：無 pane 且未 suppress 的 agentId 正常輸出', () => {
+    const suppressedForPane = new Set<string>();
+    const pm = { hasPaneForAgent: (_id: string) => false };
+
+    const shouldOutput = (label: string) => {
+      if (label === MAIN_LABEL) return true;
+      const agentId = extractAgentIdFromLabel(label);
+      if (suppressedForPane.has(agentId)) return false;
+      return !pm.hasPaneForAgent(agentId);
+    };
+
+    expect(shouldOutput(makeAgentLabel('newagent'))).toBe(true);
+  });
+
+  test('shouldOutput：clear 後重填，舊 suppress 消除、新 suppress 生效', () => {
+    const suppressedForPane = new Set(['old-agent']);
+    const pm = { hasPaneForAgent: (_id: string) => false };
+
+    const shouldOutput = (label: string) => {
+      if (label === MAIN_LABEL) return true;
+      const agentId = extractAgentIdFromLabel(label);
+      if (suppressedForPane.has(agentId)) return false;
+      return !pm.hasPaneForAgent(agentId);
+    };
+
+    // 模擬 switchToSession：clear + 重填
+    suppressedForPane.clear();
+    suppressedForPane.add('new-agent');
+
+    expect(shouldOutput(makeAgentLabel('old-agent'))).toBe(true); // 舊的已清除
+    expect(shouldOutput(makeAgentLabel('new-agent'))).toBe(false); // 新的被抑制
   });
 
   test('label [MAIN] with isTaskToolUse triggers handleEarlyDetection', () => {
