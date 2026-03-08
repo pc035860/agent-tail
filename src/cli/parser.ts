@@ -25,7 +25,7 @@ function createProgram(): Command {
     .option('--no-quiet', 'Show informational messages (default)')
     .option(
       '--subagent [id]',
-      'Claude only: tail subagent log (latest if no ID)'
+      'Claude/Codex: tail subagent log (latest if no ID)'
     )
     .option(
       '-s, --sleep-interval <ms>',
@@ -44,7 +44,7 @@ function createProgram(): Command {
     .option('--no-interactive', 'Disable interactive mode (default)')
     .option(
       '--with-subagents',
-      'Claude only: include subagent content in output'
+      'Claude/Codex: include subagent content in output'
     )
     .option('--no-with-subagents', 'Exclude subagent content (default)')
     .option(

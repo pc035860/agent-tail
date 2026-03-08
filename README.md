@@ -119,18 +119,20 @@ Don't follow new changes, just show what's already logged:
 bun start claude --no-follow
 ```
 
-## Claude Code Features
+## Subagent Features (Claude & Codex)
 
-Claude Code has additional features for monitoring subagents (background tasks spawned by the main session).
+Claude Code and Codex support monitoring subagents (background tasks spawned by the main session).
 
 ### Watch Subagents
 
 ```bash
 # Watch the latest subagent
 bun start claude --subagent
+bun start codex --subagent
 
 # Watch a specific subagent by ID
 bun start claude --subagent abc123
+bun start codex --subagent 019cc375-5af5-7ed1-9ff8-8a5757d815d1
 ```
 
 ### Interactive Mode
@@ -140,12 +142,13 @@ Switch between main session and subagents in real-time:
 ```bash
 # Start interactive mode
 bun start claude -i
+bun start codex -i
 
 # Press Tab to cycle through sessions
 # Status line shows current session and available sessions
 ```
 
-> **Note:** Interactive mode requires `--follow` (default) and cannot be used with `--subagent`.
+> **Note:** Interactive mode requires `--follow` (default) and cannot be used with `--subagent` or `--pane`.
 
 ### Include Subagent Output
 
@@ -154,6 +157,7 @@ Show both main session and subagent outputs together (sorted by time):
 ```bash
 # Include all subagent content in output
 bun start claude --with-subagents
+bun start codex --with-subagents
 ```
 
 ### Auto-Switch Mode
@@ -162,7 +166,9 @@ Automatically switch to the latest main session when new sessions start in the s
 
 ```bash
 # Start auto-switch mode
-bun start claude --auto-switch
+bun start claude --auto-switch    # project-based
+bun start codex --auto-switch     # cwd-based (with cache)
+bun start gemini --auto-switch    # .project_root based
 
 # The session will automatically switch when:
 # - A new main session starts in the same project
@@ -170,6 +176,18 @@ bun start claude --auto-switch
 ```
 
 > **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined.
+
+### Tmux Pane Mode
+
+Automatically open a tmux pane for each new subagent, showing its output in a separate split:
+
+```bash
+# Auto-open tmux pane per subagent
+bun start claude --pane
+bun start codex --pane
+```
+
+> **Note:** Requires tmux environment. Cannot be combined with `--interactive` or `--subagent`. Automatically enables `--with-subagents`. Maximum 6 concurrent panes.
 
 ### Preset Override
 
@@ -180,7 +198,7 @@ The `--all` preset can be customized with negation flags:
 bun start claude --all --no-verbose
 
 # Enable all features except auto-switch
-bun start claude -a --no-auto-switch
+bun start codex -a --no-auto-switch
 
 # Enable all features except subagents
 bun start claude --all --no-with-subagents
@@ -201,14 +219,16 @@ Negation flags override the preset, giving you fine-grained control while keepin
 | `--no-quiet` | | Show informational messages (default) |
 | `--sleep-interval <ms>` | `-s` | Set file polling interval (100-60000ms, default: 500) |
 | `--lines <number>` | `-n` | Number of initial lines to show per file (default: all) |
-| `--subagent [id]` | | Claude only: tail subagent log (latest if no ID) |
-| `--interactive` | `-i` | Claude only: interactive mode with Tab to switch sessions |
+| `--subagent [id]` | | Claude/Codex: tail subagent log (latest if no ID) |
+| `--interactive` | `-i` | Claude/Codex: interactive mode with Tab to switch sessions |
 | `--no-interactive` | | Disable interactive mode (default) |
-| `--with-subagents` | | Claude only: include subagent content in output |
+| `--with-subagents` | | Claude/Codex: include subagent content in output |
 | `--no-with-subagents` | | Exclude subagent content (default) |
-| `--auto-switch` | | Claude only: auto-switch to latest main session in project |
+| `--auto-switch` | | Auto-switch to latest session in project (Claude/Gemini/Codex) |
 | `--no-auto-switch` | | Disable auto-switch (default) |
-| `--all` | `-a` | Claude only: show all content (verbose + subagents + auto-switch) |
+| `--all` | `-a` | Claude/Codex: show all content (verbose + subagents + auto-switch) |
+| `--pane` | | Claude/Codex: auto-open tmux pane for each new subagent |
+| `--no-pane` | | Disable pane auto-open (default) |
 
 **Positional Arguments:**
 | Argument | Description |
