@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "e6c04d300366",
+  "session_id": "22edeca1-4b6b-461a-9423-a7608e835321",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-08T17:29:36.470298Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/index.ts",
+    "tests/claude/watch-builder.test.ts",
+    "tests/codex/watch-builder.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0e534d135112",
+  "token_usage": {
+    "input_tokens": 63,
+    "cache_creation_tokens": 85384,
+    "cache_read_tokens": 3668424,
+    "output_tokens": 26006,
+    "api_call_count": 53
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-08T17:29:36.115179Z",
+    "agent_lines": 190,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 190,
+    "agent_percentage": 100
+  }
+}

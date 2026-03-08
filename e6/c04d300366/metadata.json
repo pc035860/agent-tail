@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "e6c04d300366",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/index.ts",
+    "tests/claude/watch-builder.test.ts",
+    "tests/codex/watch-builder.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e6/c04d300366/0/metadata.json",
+      "transcript": "/e6/c04d300366/0/full.jsonl",
+      "content_hash": "/e6/c04d300366/0/content_hash.txt",
+      "prompt": "/e6/c04d300366/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 63,
+    "cache_creation_tokens": 85384,
+    "cache_read_tokens": 3668424,
+    "output_tokens": 26006,
+    "api_call_count": 53
+  }
+}
