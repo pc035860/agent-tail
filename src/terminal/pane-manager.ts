@@ -37,6 +37,7 @@ const LAYOUT_DEBOUNCE_MS = 50;
 export class PaneManager {
   private controller: TerminalController;
   private commandBuilder: (agentId: string, subagentPath: string) => string;
+  private logger?: (msg: string) => void;
   private panes: Map<string, PaneInfo> = new Map(); // agentId -> PaneInfo
   /** 正在開啟中的 agentId（防止併發超開） */
   private pendingAgentIds: Set<string> = new Set();
@@ -47,10 +48,12 @@ export class PaneManager {
 
   constructor(
     controller: TerminalController,
-    commandBuilder: (agentId: string, subagentPath: string) => string
+    commandBuilder: (agentId: string, subagentPath: string) => string,
+    logger?: (msg: string) => void
   ) {
     this.controller = controller;
     this.commandBuilder = commandBuilder;
+    this.logger = logger;
   }
 
   /**
@@ -69,6 +72,7 @@ export class PaneManager {
     if (this.pendingAgentIds.has(agentId)) return;
     if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) return;
 
+    this.logger?.(`[pane] Opening pane for ${agentId}...`);
     this.pendingAgentIds.add(agentId);
     try {
       const cmd = this.commandBuilder(agentId, subagentPath);
@@ -99,9 +103,10 @@ export class PaneManager {
         // createPane 失敗，清除待關閉狀態（沒有 pane 就不需要關閉）
         this.pendingCloseAgentIds.delete(agentId);
       }
-    } catch {
-      // 非預期錯誤（如 commandBuilder throw），清理所有相關狀態
+    } catch (e) {
+      // 非預期錯誤（如 commandBuilder throw），清理所有相關狀態後向外拋出
       this.pendingCloseAgentIds.delete(agentId);
+      throw e;
     } finally {
       this.pendingAgentIds.delete(agentId);
     }
@@ -167,6 +172,8 @@ export class PaneManager {
 
     const pane = this.panes.get(agentId);
     if (!pane) return;
+
+    this.logger?.(`[pane] Closing pane for ${agentId}...`);
 
     // 立刻移除，防止並行呼叫重複觸發 closePane
     this.panes.delete(agentId);

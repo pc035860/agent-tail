@@ -321,13 +321,17 @@ async function startClaudeMultiWatch(
   if (options.pane) {
     const controller = createTerminalController();
     if (controller.isAvailable()) {
-      paneManager = new PaneManager(controller, (agentId, _subagentPath) => {
-        // 使用當前執行方式重建指令（支援 bun run、npx、全域安裝等）
-        // 用雙引號包覆路徑，防止空格造成 shell 指令斷裂
-        const runtime = `"${process.argv[0]}"`;
-        const script = `"${process.argv[1]}"`;
-        return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
-      });
+      paneManager = new PaneManager(
+        controller,
+        (agentId, _subagentPath) => {
+          // 使用當前執行方式重建指令（支援 bun run、npx、全域安裝等）
+          // 用雙引號包覆路徑，防止空格造成 shell 指令斷裂
+          const runtime = `"${process.argv[0]}"`;
+          const script = `"${process.argv[1]}"`;
+          return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
+        },
+        (msg) => log(options.quiet, chalk.gray(msg))
+      );
     } else {
       log(
         options.quiet,
@@ -340,7 +344,6 @@ async function startClaudeMultiWatch(
   const pm = paneManager; // 閉包捕獲，不受外部重賦值影響
   const openPaneForSubagent = pm
     ? (agentId: string, subagentPath: string, description?: string) => {
-        log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
         pm.openPane(agentId, subagentPath, description).catch((err) => {
           log(
             options.quiet,
@@ -369,16 +372,7 @@ async function startClaudeMultiWatch(
           } catch {
             // 讀取失敗不影響 pane 關閉
           } finally {
-            log(
-              options.quiet,
-              chalk.gray(`[pane] Closing pane for ${agentId}...`)
-            );
-            await pm.closePaneByAgentId(agentId).catch((err) => {
-              log(
-                options.quiet,
-                chalk.yellow(`[pane] Failed to close pane: ${err}`)
-              );
-            });
+            await pm.closePaneByAgentId(agentId);
           }
         })().catch(() => {});
       }
@@ -1169,11 +1163,15 @@ async function startCodexMultiWatch(
   if (options.pane) {
     const controller = createTerminalController();
     if (controller.isAvailable()) {
-      paneManager = new PaneManager(controller, (agentId, _subagentPath) => {
-        const runtime = `"${process.argv[0]}"`;
-        const script = `"${process.argv[1]}"`;
-        return `${runtime} ${script} codex --subagent ${agentId} -q --no-pane`;
-      });
+      paneManager = new PaneManager(
+        controller,
+        (agentId, _subagentPath) => {
+          const runtime = `"${process.argv[0]}"`;
+          const script = `"${process.argv[1]}"`;
+          return `${runtime} ${script} codex --subagent ${agentId} -q --no-pane`;
+        },
+        (msg) => log(options.quiet, chalk.gray(msg))
+      );
     } else {
       log(
         options.quiet,
@@ -1218,7 +1216,6 @@ async function startCodexMultiWatch(
   const openPaneForSubagent = pm
     ? (agentId: string, subagentPath: string, description?: string) => {
         registerShortId(agentId);
-        log(options.quiet, chalk.gray(`[pane] Opening pane for ${agentId}...`));
         pm.openPane(agentId, subagentPath, description).catch(
           (err: unknown) => {
             log(
@@ -1249,11 +1246,7 @@ async function startCodexMultiWatch(
               }
             }
           } finally {
-            log(
-              options.quiet,
-              chalk.gray(`[pane] Closing pane for ${agentId}...`)
-            );
-            await pm.closePaneByAgentId(agentId).catch(() => {});
+            await pm.closePaneByAgentId(agentId);
           }
         })().catch(() => {});
       }
