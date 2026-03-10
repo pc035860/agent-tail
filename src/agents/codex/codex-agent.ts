@@ -11,7 +11,7 @@ import type {
 } from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
-import { CodexSessionCache } from './session-cache.ts';
+import { CodexSessionCache, readMainSessionMeta } from './session-cache.ts';
 import {
   buildCodexSubagentFiles,
   extractCodexSubagentIds,
@@ -67,6 +67,10 @@ class CodexSessionFinder implements SessionFinder {
         const pattern = options.project.toLowerCase();
         if (!file.toLowerCase().includes(pattern)) continue;
       }
+
+      // 排除 subagent session
+      const meta = await readMainSessionMeta(file);
+      if (!meta) continue;
 
       try {
         const stats = await stat(file);
@@ -192,22 +196,12 @@ class CodexSessionFinder implements SessionFinder {
    * 解析 session_meta 取得 cwd
    */
   async getProjectInfo(sessionPath: string): Promise<ProjectInfo | null> {
-    try {
-      const content = await Bun.file(sessionPath).text();
-      const firstLine = content.split('\n')[0];
-      if (!firstLine) return null;
-
-      const meta = JSON.parse(firstLine);
-      if (meta.type === 'session_meta' && meta.payload?.cwd) {
-        return {
-          projectDir: meta.payload.cwd,
-          displayName: meta.payload.cwd,
-        };
-      }
-    } catch {
-      // 忽略解析錯誤
-    }
-    return null;
+    const meta = await readMainSessionMeta(sessionPath);
+    if (!meta) return null;
+    return {
+      projectDir: meta.cwd,
+      displayName: meta.cwd,
+    };
   }
 
   /**

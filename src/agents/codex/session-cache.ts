@@ -22,7 +22,43 @@ interface CacheFile {
   sessions: CachedSession[];
 }
 
-const CACHE_VERSION = 1;
+/** session_meta 的 payload 結構 */
+interface SessionMetaPayload {
+  cwd?: string;
+  source?: unknown;
+}
+
+/**
+ * 讀取 Codex JSONL 首行的 session_meta
+ * 回傳 cwd（主 session）或 null（非 session_meta、subagent、或讀取失敗）
+ */
+export async function readMainSessionMeta(
+  filePath: string
+): Promise<{ cwd: string } | null> {
+  try {
+    const content = await Bun.file(filePath).text();
+    const firstLine = content.split('\n')[0];
+    if (!firstLine) return null;
+
+    const meta = JSON.parse(firstLine);
+    if (meta.type !== 'session_meta') return null;
+
+    const payload = meta.payload as SessionMetaPayload | undefined;
+    if (!payload?.cwd) return null;
+
+    // 排除 subagent（source 為物件且含 subagent 屬性）
+    const source = payload.source;
+    if (typeof source === 'object' && source !== null && 'subagent' in source) {
+      return null;
+    }
+
+    return { cwd: payload.cwd };
+  } catch {
+    return null;
+  }
+}
+
+const CACHE_VERSION = 2;
 const CACHE_FILE_NAME = '.agent-tail-cache.json';
 
 /** 快取刷新間隔（毫秒）- 用於偵測新的 session */
@@ -144,23 +180,18 @@ export class CodexSessionCache {
       const filename = basename(file);
       if (!filename.startsWith('rollout-')) continue;
 
-      try {
-        // 只讀取第一行（session_meta）
-        const content = await Bun.file(file).text();
-        const firstLine = content.split('\n')[0];
-        if (!firstLine) continue;
-
-        const meta = JSON.parse(firstLine);
-        if (meta.type === 'session_meta' && meta.payload?.cwd) {
+      const meta = await readMainSessionMeta(file);
+      if (meta) {
+        try {
           const stats = await stat(file);
           sessions.push({
             path: file,
             mtime: stats.mtime.getTime(),
-            cwd: meta.payload.cwd,
+            cwd: meta.cwd,
           });
+        } catch {
+          // 忽略無法 stat 的檔案
         }
-      } catch {
-        // 忽略無法解析的檔案
       }
     }
 
@@ -253,18 +284,13 @@ export class CodexSessionCache {
         }
         if (alreadyCached) continue;
 
-        // 只讀取第一行（session_meta）
-        const content = await Bun.file(file).text();
-        const firstLine = content.split('\n')[0];
-        if (!firstLine) continue;
-
-        const meta = JSON.parse(firstLine);
-        if (meta.type === 'session_meta' && meta.payload?.cwd) {
+        const meta = await readMainSessionMeta(file);
+        if (meta) {
           const stats = await stat(file);
           const newSession: CachedSession = {
             path: file,
             mtime: stats.mtime.getTime(),
-            cwd: meta.payload.cwd,
+            cwd: meta.cwd,
           };
 
           if (!this.cache.has(newSession.cwd)) {

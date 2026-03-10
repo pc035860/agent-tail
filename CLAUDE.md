@@ -118,7 +118,7 @@ src/
   - Gemini: `~/.gemini/tmp/{hash或name}/chats/session-*.json` (.project_root for project info)
 - FileWatcher supports two modes: JSONL (line-by-line) and JSON (whole-file, for Gemini)
 - **Super Follow** (`createSuperFollowController`): Auto-switch to latest session, configurable per-agent via `findLatestInProject` callback
-- **Codex Session Cache**: Cwd-indexed cache with 2s incremental refresh (scans today's directory only)
+- **Codex Session Cache**: Cwd-indexed cache with 2s incremental refresh (scans today's directory only). Uses `readMainSessionMeta()` to parse first line and filter out subagent sessions.
 - Formatters transform ParsedLine to output string (raw JSON or pretty colored)
 - **Pane auto-open** (`--pane`): Uses `SubagentDetector` hooks → `PaneManager` → `TerminalController` to open tmux panes for subagent create/resume, and closes on `toolUseResult`. Requires tmux environment.
   - `onNewSubagent`: Fired on subagent **create** (via `registerNewAgent`)
@@ -149,6 +149,7 @@ src/
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
 - **`Bun.file(dir).exists()` returns false for directories**. Use `stat(dir)` instead.
 - **Codex cache only scans "today"** for incremental refresh. Cross-midnight sessions handled on next startup.
+- **Codex subagent sessions share same `cwd` as main session**: Both live in the same flat date directory with identical `rollout-*.jsonl` naming. The only reliable distinction is `session_meta.payload.source`: main sessions have `source: "mcp"` (string), subagents have `source: { subagent: { thread_spawn: { parent_thread_id, depth, ... } } }` (object). `readMainSessionMeta()` in `session-cache.ts` is the canonical helper for this check — use it instead of inline first-line parsing. Bump `CACHE_VERSION` when changing cache filtering logic to invalidate stale disk caches.
 - **Subagent ID length varies**: Claude Code subagent filenames use 7-40 hex chars (`agent-[0-9a-f]{7,40}.jsonl`), not fixed 7. Regex must accommodate this.
 - **`--pane` mutual exclusions**: Cannot combine with `--interactive` or `--subagent`. Requires `--follow` mode. Auto-enables `--with-subagents`.
 - **PaneManager command builder** uses `process.argv[0]` and `process.argv[1]` to reconstruct the CLI command, supporting bun run, npx, and global install scenarios.
