@@ -1,0 +1,13 @@
+Codex 我們最近做了 subagent 的支援。因為 Codex 的 subagent 是平面的，也就是它沒有層級之分，所以如果我們 Codex 那邊有開啟 Auto Switch 的話，它會被我們的 Auto Switch 捕捉到，導致 Codex 跳到 subagent 那邊去。
+
+平常我們其實只需要看主介面，不需要看 subagent，所以可能要把 subagent 從 Auto Switch 裡面排除掉。
+
+/explore
+
+---
+
+Add to TaskList:\
+- run simplify skill\
+- run review-loop(codex)\
+- run patch-claudemd\
+- commit (--auto message)
