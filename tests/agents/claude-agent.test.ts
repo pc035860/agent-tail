@@ -139,6 +139,33 @@ describe('ClaudeAgent parser', () => {
       expect(results[0]!.isTaskToolUse).toBe(true);
     });
 
+    test('Agent tool_use should have isTaskToolUse: true', () => {
+      const line = JSON.stringify({
+        type: 'assistant',
+        timestamp: '2024-01-01T00:00:00Z',
+        message: {
+          model: 'claude-sonnet-4-20250514',
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Agent',
+              input: {
+                prompt: 'Search for related files',
+                subagent_type: 'general-purpose',
+              },
+            },
+          ],
+        },
+      });
+
+      const results = collectAllParsedLines(parser, line);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.type).toBe('function_call');
+      expect(results[0]!.toolName).toBe('Agent');
+      expect(results[0]!.isTaskToolUse).toBe(true);
+    });
+
     test('non-Task tool_use should not have isTaskToolUse: true', () => {
       const line = JSON.stringify({
         type: 'assistant',

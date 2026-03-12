@@ -113,6 +113,33 @@ describe('ClaudeAgent parser taskDescription', () => {
     expect(results[0]!.taskDescription).toBeUndefined();
   });
 
+  test('Agent tool_use with description extracts taskDescription', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      timestamp: '2024-01-01T00:00:00Z',
+      message: {
+        model: 'claude-sonnet-4-20250514',
+        content: [
+          {
+            type: 'tool_use',
+            name: 'Agent',
+            input: {
+              description: 'code exploration',
+              prompt: 'Explore the codebase',
+              subagent_type: 'Explore',
+            },
+          },
+        ],
+      },
+    });
+
+    const results = collectAllParsedLines(parser, line);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.isTaskToolUse).toBe(true);
+    expect(results[0]!.taskDescription).toBe('code exploration');
+  });
+
   test('non-Task tool_use has no taskDescription', () => {
     const line = JSON.stringify({
       type: 'assistant',

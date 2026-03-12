@@ -15,6 +15,21 @@ export interface FormatToolOptions {
 }
 
 /**
+ * Subagent spawn tool 名稱（Claude Code renamed Task → Agent）
+ */
+export const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'Task',
+  'Agent',
+]);
+
+/**
+ * 判斷 tool 是否為 subagent spawn tool
+ */
+export function isSubagentTool(name: string): boolean {
+  return SUBAGENT_TOOL_NAMES.has(name);
+}
+
+/**
  * Tool 類別（用於顏色區分）
  */
 export type ToolCategory =
@@ -49,6 +64,7 @@ export function getToolCategory(toolName: string): ToolCategory {
     case 'websearch':
       return 'web';
     case 'task':
+    case 'agent':
       return 'task';
     default:
       return 'other';
@@ -68,7 +84,8 @@ export function formatToolUse(
   if (!input) return `[TOOL: ${name}]`;
 
   switch (name) {
-    case 'Task': {
+    case 'Task':
+    case 'Agent': {
       const prompt = input.prompt as string | undefined;
       if (prompt) {
         const summary = truncate(prompt, {
@@ -76,9 +93,9 @@ export function formatToolUse(
           headLength: 50,
           tailLength: 50,
         });
-        return `[TOOL: Task] ${summary}`;
+        return `[TOOL: ${name}] ${summary}`;
       }
-      return `[TOOL: Task]`;
+      return `[TOOL: ${name}]`;
     }
 
     case 'Grep': {
@@ -139,8 +156,12 @@ export function formatToolUse(
       return `[TOOL: WebSearch] "${query || ''}"`;
     }
 
-    case 'TodoWrite': {
-      return `[TOOL: TodoWrite]`;
+    case 'TodoWrite':
+    case 'TaskCreate':
+    case 'TaskUpdate':
+    case 'TaskList':
+    case 'TaskGet': {
+      return `[TOOL: ${name}]`;
     }
 
     // Codex 工具

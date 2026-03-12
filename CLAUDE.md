@@ -124,7 +124,7 @@ src/
   - `onNewSubagent`: Fired on subagent **create** (via `registerNewAgent`)
   - `onSubagentEnter`: Fired on subagent **resume** (via `handleAgentProgress` when agentId already known)
   - Both callbacks point to same `openPaneForSubagent` function; `PaneManager.openPane` guards against duplicate panes
-- **Pane naming**: Task `description` is extracted from `tool_use` input, queued in `SubagentDetector` (FIFO), and matched to new agents. `PaneManager` sanitizes and applies via `tmux select-pane -T` (2.6+, best-effort). Known limitation: parallel Tasks may mismatch descriptions.
+- **Pane naming**: Task/Agent `description` is extracted from `tool_use` input, queued in `SubagentDetector` (FIFO), and matched to new agents. `PaneManager` sanitizes and applies via `tmux select-pane -T` (2.6+, best-effort). Known limitation: parallel Tasks may mismatch descriptions.
 
 **Adding Super Follow to a New Agent:**
 1. Implement `getProjectInfo(sessionPath)` - Return `{ projectDir, displayName }` for the session
@@ -155,6 +155,7 @@ src/
 - **PaneManager command builder** uses `process.argv[0]` and `process.argv[1]` to reconstruct the CLI command, supporting bun run, npx, and global install scenarios.
 - **SubagentDetector description queue**: FIFO `pendingDescriptions` must be consumed in both `registerNewAgent` (early detection) and `handleFallbackDetection` (completed path) to prevent queue drift. The queue is cleared in `stop()`.
 - **`handleAgentProgress` only triggers for resume**: Unknown agentIds are ignored (registration is handled by `onNewSubagent` via early/fallback paths), and only known agentIds trigger `onSubagentEnter`. This prevents duplicate pane opens and registration race issues.
+- **Claude Code tool rename backward compat**: `Task` → `Agent` (subagent spawn) and `TodoWrite` → `TaskCreate/TaskUpdate/TaskList/TaskGet` (task management). Use `isSubagentTool(name)` from `format-tool.ts` (backed by `SUBAGENT_TOOL_NAMES` Set) — do not inline `=== 'Task' || === 'Agent'`. `formatToolUse` and `getToolCategory` handle both old and new names.
 - **`readLastCodexAssistantMessage` signature**: Takes `(filePath, parser: LineParser)` — not `verbose` bool like the Claude version. Parser is injected to avoid circular imports.
 - **`createInteractiveSessionManager(displayController)`**: Module-level helper in `src/index.ts` shared by both `startClaudeInteractiveWatch` and `startCodexInteractiveWatch`. Do not duplicate this into each function.
 - **`prefillExistingSubagents(detector, files)`**: Helper in `startCodexMultiWatch` that combines `registerExistingAgent` + `registerShortId` into one loop. Used in both init and `switchToSession` — do not inline back into separate loops.

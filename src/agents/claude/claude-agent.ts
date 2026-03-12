@@ -14,7 +14,7 @@ import {
   formatMultiline,
   truncateByLines,
 } from '../../utils/text.ts';
-import { formatToolUse } from '../../utils/format-tool.ts';
+import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
 
 /**
  * Claude Code Session Finder
@@ -500,7 +500,7 @@ class ClaudeLineParser implements LineParser {
     }
 
     if (part.type === 'tool_use' && part.name) {
-      const isTask = part.name === 'Task';
+      const isTask = isSubagentTool(part.name);
       const taskDescription =
         isTask && typeof part.input?.description === 'string'
           ? part.input.description

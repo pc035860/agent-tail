@@ -1,5 +1,9 @@
 import { describe, test, expect } from 'bun:test';
-import { formatToolUse, getToolCategory } from '../../src/utils/format-tool';
+import {
+  formatToolUse,
+  getToolCategory,
+  isSubagentTool,
+} from '../../src/utils/format-tool';
 
 describe('formatToolUse', () => {
   describe('without input', () => {
@@ -37,6 +41,37 @@ describe('formatToolUse', () => {
 
     test('handles missing prompt', () => {
       expect(formatToolUse('Task', {})).toBe('[TOOL: Task]');
+    });
+  });
+
+  describe('Agent tool (renamed Task)', () => {
+    test('shows truncated prompt', () => {
+      const result = formatToolUse('Agent', { prompt: 'Search for files' });
+      expect(result).toBe('[TOOL: Agent] Search for files');
+    });
+
+    test('truncates long prompt', () => {
+      const longPrompt = 'a'.repeat(200);
+      const result = formatToolUse('Agent', { prompt: longPrompt });
+
+      expect(result).toContain('[TOOL: Agent]');
+      expect(result).toContain('...');
+      expect(result.length).toBeLessThan(longPrompt.length + 20);
+    });
+
+    test('does not truncate in verbose mode', () => {
+      const longPrompt = 'a'.repeat(200);
+      const result = formatToolUse(
+        'Agent',
+        { prompt: longPrompt },
+        { verbose: true }
+      );
+
+      expect(result).toBe(`[TOOL: Agent] ${longPrompt}`);
+    });
+
+    test('handles missing prompt', () => {
+      expect(formatToolUse('Agent', {})).toBe('[TOOL: Agent]');
     });
   });
 
@@ -144,6 +179,28 @@ describe('formatToolUse', () => {
       expect(formatToolUse('TodoWrite', { todos: [] })).toBe(
         '[TOOL: TodoWrite]'
       );
+    });
+  });
+
+  describe('Task management tools (TodoWrite → Task*)', () => {
+    test('TaskCreate returns simple format', () => {
+      expect(formatToolUse('TaskCreate', { task: 'do something' })).toBe(
+        '[TOOL: TaskCreate]'
+      );
+    });
+
+    test('TaskUpdate returns simple format', () => {
+      expect(formatToolUse('TaskUpdate', { id: '1', status: 'done' })).toBe(
+        '[TOOL: TaskUpdate]'
+      );
+    });
+
+    test('TaskList returns simple format', () => {
+      expect(formatToolUse('TaskList', {})).toBe('[TOOL: TaskList]');
+    });
+
+    test('TaskGet returns simple format', () => {
+      expect(formatToolUse('TaskGet', { id: '1' })).toBe('[TOOL: TaskGet]');
     });
   });
 
@@ -287,6 +344,7 @@ describe('getToolCategory', () => {
 
   test('identifies task tools', () => {
     expect(getToolCategory('Task')).toBe('task');
+    expect(getToolCategory('Agent')).toBe('task');
   });
 
   test('returns other for unknown tools', () => {
@@ -298,5 +356,19 @@ describe('getToolCategory', () => {
     expect(getToolCategory('BASH')).toBe('shell');
     expect(getToolCategory('bash')).toBe('shell');
     expect(getToolCategory('READ')).toBe('file');
+  });
+});
+
+describe('isSubagentTool', () => {
+  test('returns true for Task and Agent', () => {
+    expect(isSubagentTool('Task')).toBe(true);
+    expect(isSubagentTool('Agent')).toBe(true);
+  });
+
+  test('returns false for other tools', () => {
+    expect(isSubagentTool('Bash')).toBe(false);
+    expect(isSubagentTool('Read')).toBe(false);
+    expect(isSubagentTool('TodoWrite')).toBe(false);
+    expect(isSubagentTool('TaskCreate')).toBe(false);
   });
 });
