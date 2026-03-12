@@ -1,0 +1,7 @@
+Add to TaskList:\
+- run simplify skill\
+- run review-loop(codex)\
+- run patch-claudemd\
+- commit (--auto message)
+
+start

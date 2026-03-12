@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "e312c55a3281",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "src/agents/claude/claude-agent.ts",
+    "src/core/types.ts",
+    "src/utils/format-tool.ts",
+    "tests/agents/claude-agent-description.test.ts",
+    "tests/agents/claude-agent.test.ts",
+    "tests/utils/format-tool.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e3/12c55a3281/0/metadata.json",
+      "transcript": "/e3/12c55a3281/0/full.jsonl",
+      "content_hash": "/e3/12c55a3281/0/content_hash.txt",
+      "prompt": "/e3/12c55a3281/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 810,
+    "cache_creation_tokens": 65279,
+    "cache_read_tokens": 3033365,
+    "output_tokens": 14728,
+    "api_call_count": 49
+  }
+}
