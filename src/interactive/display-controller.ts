@@ -182,7 +182,8 @@ export class DisplayController {
       const actualIndex = startIndex + i;
       const isActive = actualIndex === activeIndex;
       const label = session.label.replace(/\[|\]/g, '');
-      const displayLabel = session.id === 'main' ? 'MAIN' : label;
+      const displayLabel =
+        session.displayName || (session.id === 'main' ? 'MAIN' : label);
       const bufferCount = session.buffer.length;
       const doneMarker = session.isDone ? chalk.green('✓') : '';
 
@@ -260,8 +261,11 @@ export class DisplayController {
   showSwitchMessage(session: WatcherSession, historyContent: string[]): void {
     // 顯示分隔線（包含完成狀態）
     const doneStatus = session.isDone ? chalk.green(' ✓ (completed)') : '';
+    const switchLabel = session.displayName
+      ? `${session.label} "${session.displayName}"`
+      : session.label;
     const separator =
-      chalk.gray(`\n─── Switched to ${session.label}`) +
+      chalk.gray(`\n─── Switched to ${switchLabel}`) +
       doneStatus +
       chalk.gray(` ───`);
     this.write(separator);

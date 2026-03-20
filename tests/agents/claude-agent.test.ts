@@ -373,6 +373,57 @@ describe('ClaudeAgent parser', () => {
       expect(results2).toHaveLength(1);
     });
   });
+
+  describe('custom-title', () => {
+    test('should parse custom-title event correctly', () => {
+      const line = JSON.stringify({
+        type: 'custom-title',
+        customTitle: 'my session name',
+        sessionId: 'abc-123',
+      });
+
+      const results = collectAllParsedLines(parser, line);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.type).toBe('custom-title');
+      expect(results[0]!.isCustomTitle).toBe(true);
+      expect(results[0]!.customTitleValue).toBe('my session name');
+      expect(results[0]!.formatted).toContain('my session name');
+    });
+
+    test('should return null for empty customTitle', () => {
+      const line = JSON.stringify({
+        type: 'custom-title',
+        customTitle: '',
+        sessionId: 'abc-123',
+      });
+
+      const results = collectAllParsedLines(parser, line);
+      expect(results).toHaveLength(0);
+    });
+
+    test('should return null for missing customTitle', () => {
+      const line = JSON.stringify({
+        type: 'custom-title',
+        sessionId: 'abc-123',
+      });
+
+      const results = collectAllParsedLines(parser, line);
+      expect(results).toHaveLength(0);
+    });
+
+    test('should not cause infinite loop', () => {
+      const line = JSON.stringify({
+        type: 'custom-title',
+        customTitle: 'test',
+        sessionId: 'abc-123',
+      });
+
+      // collectAllParsedLines throws on infinite loop
+      const results = collectAllParsedLines(parser, line);
+      expect(results).toHaveLength(1);
+    });
+  });
 });
 
 /**

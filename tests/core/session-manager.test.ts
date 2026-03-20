@@ -97,4 +97,42 @@ describe('SessionManager', () => {
       expect(ids).toEqual(['agent-2', 'agent-1']);
     });
   });
+
+  describe('displayName', () => {
+    test('addSession stores displayName', () => {
+      sessionManager.addSession(
+        'main',
+        '[MAIN]',
+        '/path/main.jsonl',
+        'My Session'
+      );
+
+      const sessions = sessionManager.getAllSessions();
+      expect(sessions[0]?.displayName).toBe('My Session');
+    });
+
+    test('addSession without displayName leaves it undefined', () => {
+      sessionManager.addSession('main', '[MAIN]', '/path/main.jsonl');
+
+      const sessions = sessionManager.getAllSessions();
+      expect(sessions[0]?.displayName).toBeUndefined();
+    });
+
+    test('updateSessionDisplayName updates existing session', () => {
+      sessionManager.addSession('main', '[MAIN]', '/path/main.jsonl');
+      sessionManager.updateSessionDisplayName('main', 'Updated Title');
+
+      const sessions = sessionManager.getAllSessions();
+      expect(sessions[0]?.displayName).toBe('Updated Title');
+    });
+
+    test('updateSessionDisplayName is no-op for non-existent session', () => {
+      sessionManager.addSession('main', '[MAIN]', '/path/main.jsonl');
+      // Should not throw
+      sessionManager.updateSessionDisplayName('nonexistent', 'Title');
+
+      const sessions = sessionManager.getAllSessions();
+      expect(sessions[0]?.displayName).toBeUndefined();
+    });
+  });
 });

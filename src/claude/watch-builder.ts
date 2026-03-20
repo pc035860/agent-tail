@@ -99,6 +99,8 @@ export interface OnLineHandlerConfig {
   verbose: boolean;
   /** 過濾函數：回傳 true 表示應該輸出，false 表示跳過（Phase 2.3） */
   shouldOutput?: (label: string) => boolean;
+  /** Callback when a custom-title event is detected on MAIN session */
+  onTitleUpdate?: (title: string) => void;
 }
 
 /**
@@ -146,6 +148,15 @@ export function createOnLineHandler(
       }
 
       config.onOutput(config.formatter.format(parsed), label);
+
+      // Real-time custom-title update
+      if (
+        label === MAIN_LABEL &&
+        parsed.isCustomTitle &&
+        parsed.customTitleValue
+      ) {
+        config.onTitleUpdate?.(parsed.customTitleValue);
+      }
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
       if (label === MAIN_LABEL && parsed.isTaskToolUse) {

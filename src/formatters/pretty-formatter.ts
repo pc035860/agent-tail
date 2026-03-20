@@ -75,6 +75,8 @@ export class PrettyFormatter implements Formatter {
         return chalk.magenta('FUNC');
       case 'tool_result':
         return chalk.green('DONE');
+      case 'custom-title':
+        return chalk.cyan.bold('TITL');
       case 'output':
         return chalk.cyan('OUT ');
       case 'reasoning':

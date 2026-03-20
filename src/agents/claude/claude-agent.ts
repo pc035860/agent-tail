@@ -15,6 +15,10 @@ import {
   truncateByLines,
 } from '../../utils/text.ts';
 import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
+import { readCustomTitle } from '../../claude/custom-title.ts';
+
+/** JSONL event type for Claude /rename command */
+const CUSTOM_TITLE_TYPE = 'custom-title';
 
 /**
  * Claude Code Session Finder
@@ -69,10 +73,12 @@ class ClaudeSessionFinder implements SessionFinder {
     const latest = files[0];
     if (!latest) return null;
 
+    const customTitle = await readCustomTitle(latest.path);
     return {
       path: latest.path,
       mtime: latest.mtime,
       agentType: 'claude',
+      ...(customTitle ? { customTitle } : {}),
     };
   }
 
@@ -157,12 +163,16 @@ class ClaudeSessionFinder implements SessionFinder {
         const mainPath = this.getMainSessionFromSubagent(subagentResult.path);
         if (mainPath) {
           try {
-            const mainStats = await stat(mainPath);
+            const [mainStats, mainTitle] = await Promise.all([
+              stat(mainPath),
+              readCustomTitle(mainPath),
+            ]);
             return {
               main: {
                 path: mainPath,
                 mtime: mainStats.mtime,
                 agentType: 'claude',
+                ...(mainTitle ? { customTitle: mainTitle } : {}),
               },
               subagent: subagentResult,
             };
@@ -276,10 +286,12 @@ class ClaudeSessionFinder implements SessionFinder {
     const best = candidates[0];
     if (!best) return null;
 
+    const customTitle = await readCustomTitle(best.path);
     return {
       path: best.path,
       mtime: best.mtime,
       agentType: 'claude',
+      ...(customTitle ? { customTitle } : {}),
     };
   }
 
@@ -398,6 +410,20 @@ class ClaudeLineParser implements LineParser {
       const data = JSON.parse(line);
       const type = data.type || 'unknown';
       const timestamp = data.timestamp || '';
+
+      // custom-title event（Claude /rename command）
+      if (type === CUSTOM_TITLE_TYPE) {
+        const customTitle = data.customTitle as string;
+        if (!customTitle) return null;
+        return {
+          type: CUSTOM_TITLE_TYPE,
+          timestamp,
+          raw: data,
+          formatted: `Session renamed: "${customTitle}"`,
+          isCustomTitle: true,
+          customTitleValue: customTitle,
+        };
+      }
 
       // assistant message 需要特殊處理（可能包含多個 tool_use）
       if (type === 'assistant') {

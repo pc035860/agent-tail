@@ -10,6 +10,7 @@ export interface WatcherSession {
   buffer: string[]; // 輸出緩衝
   isDone: boolean; // 是否已結束
   createdAt: number; // 建立時間戳記（毫秒）
+  displayName?: string; // 自訂顯示名稱（優先於 label），如 Claude custom-title
 }
 
 /**
@@ -51,7 +52,12 @@ export class SessionManager {
    * - main session 永遠在 index 0
    * - 其他 session 插入到 index 1（新的在左邊）
    */
-  addSession(id: string, label: string, path: string): WatcherSession {
+  addSession(
+    id: string,
+    label: string,
+    path: string,
+    displayName?: string
+  ): WatcherSession {
     // 檢查是否已存在
     const existing = this.sessions.find((s) => s.id === id);
     if (existing) {
@@ -65,6 +71,7 @@ export class SessionManager {
       buffer: [],
       isDone: false,
       createdAt: Date.now(),
+      displayName,
     };
 
     // 排序邏輯：
@@ -200,6 +207,16 @@ export class SessionManager {
     const session = this.sessions.find((s) => s.id === id);
     if (session) {
       session.buffer = [];
+    }
+  }
+
+  /**
+   * 更新 session 的 displayName（例如 Claude custom-title 變更時）
+   */
+  updateSessionDisplayName(id: string, displayName: string): void {
+    const session = this.sessions.find((s) => s.id === id);
+    if (session) {
+      session.displayName = displayName;
     }
   }
 

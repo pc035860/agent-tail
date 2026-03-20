@@ -46,6 +46,8 @@ export interface SessionFile {
   path: string;
   mtime: Date;
   agentType: AgentType;
+  /** Claude Code custom session title (from /rename command) */
+  customTitle?: string;
 }
 
 /**
@@ -83,4 +85,8 @@ export interface ParsedLine {
   isTaskToolUse?: boolean;
   /** Task (or Agent) tool_use 的 description 欄位（用於 pane 命名） */
   taskDescription?: string;
+  /** Whether this is a custom-title event (Claude only) */
+  isCustomTitle?: boolean;
+  /** The custom title value from the event */
+  customTitleValue?: string;
 }

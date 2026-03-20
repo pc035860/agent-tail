@@ -79,6 +79,7 @@ src/
 ├── claude/                   # Claude-specific modules
 │   ├── subagent-detector.ts  # Detect and monitor subagent sessions (with directory watch)
 │   ├── auto-switch.ts        # Find latest session in project for auto-switch mode
+│   ├── custom-title.ts       # readCustomTitle(): extract last custom-title from JSONL
 │   ├── output-handlers.ts    # Output handler implementations (console, display controller)
 │   ├── session-handlers.ts   # Session event handling
 │   └── watch-builder.ts      # Shared utilities (buildSubagentFiles, createSuperFollowController, agent_progress parsing)
@@ -125,6 +126,7 @@ src/
   - `onSubagentEnter`: Fired on subagent **resume** (via `handleAgentProgress` when agentId already known)
   - Both callbacks point to same `openPaneForSubagent` function; `PaneManager.openPane` guards against duplicate panes
 - **Pane naming**: Task/Agent `description` is extracted from `tool_use` input, queued in `SubagentDetector` (FIFO), and matched to new agents. `PaneManager` sanitizes and applies via `tmux select-pane -T` (2.6+, best-effort). Known limitation: parallel Tasks may mismatch descriptions.
+- **Custom-title support**: Claude Code `/rename` writes `{"type":"custom-title","customTitle":"..."}` to session JSONL. `readCustomTitle()` in `src/claude/custom-title.ts` scans from end (last entry wins). `SessionFile.customTitle` is populated by `ClaudeSessionFinder`. `WatcherSession.displayName` drives interactive mode status line display. `onTitleUpdate` callback in `OnLineHandlerConfig` enables real-time status line refresh in interactive mode.
 
 **Adding Super Follow to a New Agent:**
 1. Implement `getProjectInfo(sessionPath)` - Return `{ projectDir, displayName }` for the session
@@ -159,6 +161,8 @@ src/
 - **`readLastCodexAssistantMessage` signature**: Takes `(filePath, parser: LineParser)` — not `verbose` bool like the Claude version. Parser is injected to avoid circular imports.
 - **`createInteractiveSessionManager(displayController)`**: Module-level helper in `src/index.ts` shared by both `startClaudeInteractiveWatch` and `startCodexInteractiveWatch`. Do not duplicate this into each function.
 - **`prefillExistingSubagents(detector, files)`**: Helper in `startCodexMultiWatch` that combines `registerExistingAgent` + `registerShortId` into one loop. Used in both init and `switchToSession` — do not inline back into separate loops.
+- **`onTitleUpdate` is for interactive mode only**: In non-interactive multi-watch, the formatter already outputs `TITL Session renamed: "xxx"` via `onOutput`. Adding `onTitleUpdate` there causes duplicate output. Only interactive mode needs `onTitleUpdate` (to update `displayName` + refresh status line).
+- **`findLatestMainSessionInProject` intentionally skips `customTitle`**: Auto-switch polling runs every 500ms. Reading JSONL content for title would be wasteful. Title is read on-demand via `readCustomTitle()` only when a switch actually happens.
 - **PaneManager logging belongs inside PaneManager, not in callbacks**: `onSubagentEnter` fires on every `agent_progress` event (repeatedly). Logging pane state in the callback causes duplicate messages. Instead, pass `logger` to `PaneManager` constructor; `openPane()` and `closePaneByAgentId()` log only when actually acting (after dedup checks). `openPane()` also re-throws errors so callers can surface `Failed to open pane` warnings.
 
 ## Code Quality

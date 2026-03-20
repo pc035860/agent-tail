@@ -55,6 +55,7 @@ import {
   readLastAssistantMessage,
 } from './claude/watch-builder.ts';
 import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
+import { readCustomTitle } from './claude/custom-title.ts';
 import { createTerminalController } from './terminal/controller-factory.ts';
 import { PaneManager } from './terminal/pane-manager.ts';
 
@@ -64,6 +65,16 @@ import { PaneManager } from './terminal/pane-manager.ts';
 function log(quiet: boolean, ...args: unknown[]): void {
   if (!quiet) {
     console.log(...args);
+  }
+}
+
+/**
+ * 顯示 session 資訊（Modified + optional Title）
+ */
+function logSessionMeta(sessionFile: SessionFile, quiet: boolean): void {
+  log(quiet, chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`));
+  if (sessionFile.customTitle) {
+    log(quiet, chalk.cyan(`Title: "${sessionFile.customTitle}"`));
   }
 }
 
@@ -139,10 +150,7 @@ async function main(): Promise<void> {
       sessionFile = result as SessionFile;
       log(options.quiet, chalk.green(`Found: ${sessionFile.path}`));
     }
-    log(
-      options.quiet,
-      chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`)
-    );
+    logSessionMeta(sessionFile, options.quiet);
   } else if (
     (options.agentType === 'claude' || options.agentType === 'codex') &&
     options.subagent !== undefined
@@ -200,10 +208,7 @@ async function main(): Promise<void> {
     }
 
     log(options.quiet, chalk.green(`Found: ${sessionFile.path}`));
-    log(
-      options.quiet,
-      chalk.gray(`Modified: ${sessionFile.mtime.toLocaleString()}`)
-    );
+    logSessionMeta(sessionFile, options.quiet);
   }
 
   if (!sessionFile) {
@@ -460,9 +465,13 @@ async function startClaudeMultiWatch(
     }
 
     // 輸出切換訊息
+    const switchTitle = await readCustomTitle(nextSessionFile.path);
+    const switchTitleSuffix = switchTitle ? ` "${switchTitle}"` : '';
     log(
       options.quiet,
-      chalk.gray(`--- Switched to session ${newSessionId} ---`)
+      chalk.gray(
+        `--- Switched to session ${newSessionId}${switchTitleSuffix} ---`
+      )
     );
     log(options.quiet, chalk.gray('---'));
 
@@ -693,7 +702,16 @@ async function startClaudeInteractiveWatch(
     const subagentsDir = getSubagentsDir(targetSessionFile.path);
 
     sessionManager = createInteractiveSessionManager(displayController);
-    sessionManager.addSession('main', MAIN_LABEL, targetSessionFile.path);
+    const mainTitle =
+      targetSessionFile.customTitle ??
+      (await readCustomTitle(targetSessionFile.path)) ??
+      undefined;
+    sessionManager.addSession(
+      'main',
+      MAIN_LABEL,
+      targetSessionFile.path,
+      mainTitle
+    );
 
     // 掃描現有的 subagent（優先使用目錄掃描，確保找到所有檔案）
     const dirAgentIds = await scanForNewSubagents(subagentsDir, new Set());
@@ -767,6 +785,13 @@ async function startClaudeInteractiveWatch(
         onOutput: (formatted, label) =>
           sessionManager.handleOutput(label, formatted),
         verbose: options.verbose,
+        onTitleUpdate: (title) => {
+          sessionManager.updateSessionDisplayName('main', title);
+          displayController.updateStatusLine(
+            sessionManager.getAllSessions(),
+            sessionManager.getActiveIndex()
+          );
+        },
       }),
       onError: (error) => {
         displayController.write(chalk.red(`Error: ${error.message}`));
@@ -843,8 +868,12 @@ async function startClaudeInteractiveWatch(
     await startWatcher();
 
     const nextSessionId = basename(nextSessionFile.path, '.jsonl');
+    const switchTitle = await readCustomTitle(nextSessionFile.path);
+    const switchTitleSuffix = switchTitle ? ` "${switchTitle}"` : '';
     displayController.write(
-      chalk.gray(`Switched to latest session: ${nextSessionId}`)
+      chalk.gray(
+        `Switched to latest session: ${nextSessionId}${switchTitleSuffix}`
+      )
     );
   };
 
