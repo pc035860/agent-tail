@@ -1,0 +1,423 @@
+plan for cursor support: session log available at ~/.cursor/projects/<workspace-slug>/agent-transcripts/
+
+- 使用 agent Explore (haiku, run in foreground) 來做廣泛的程式碼探索與資料蒐集\
+- IMPORTANT: run subagents in parallel\
+- First, use the TaskList tool to plan tasks in the user's best interest. Organize parallelization effectively for optimal results.
+
+---
+
+<task-notification>
+<task-id>a9345d0350a15a4d4</task-id>
+<tool-use-id>toolu_018SHirFjAeURb8P8oukKo3L</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/fb2b82a8-a33a-4ab2-873c-4429adde06a2/tasks/a9345d0350a15a4d4.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review for Cursor" completed</summary>
+<result>I now have a thorough understanding of the codebase. Let me compile my findings.
+
+---
+
+## Code Quality Review Findings
+
+### File: `/Users/pc035860/code/agent-tail/src/agents/cursor/cursor-agent.ts`
+
+---
+
+**[Low] Finding 1 -- Redundant null check after length guard (Lines 73-77, 197-201)**
+
+```typescript
+if (files.length === 0) return null;    // line 73
+files.sort(...);
+const latest = files[0];
+if (!latest) return null;               // line 77 — unreachable
+```
+
+The `if (!latest)` check on line 77 is unreachable -- if `files.length === 0` was already handled, `files[0]` is guaranteed to exist. The same pattern appears in `findLatestInProject` (lines 197-201).
+
+However, this is a pre-existing pattern used in all four agent implementations (`claude-agent.ts:68-74`, `gemini-agent.ts:49-55`, `codex-agent.ts:83-89`). TypeScript's strict array indexing makes `files[0]` return `T | undefined`, so the check satisfies the type checker. **This is a codebase-wide convention, not a Cursor-specific issue.** No action needed on this file alone; if addressed, it should be a codebase-wide refactor (e.g., using a helper function).
+
+---
+
+**[Medium] Finding 2 -- `findLatest` and `findBySessionId` contain near-duplicate scan logic (Lines 41-84, 91-154)**
+
+Both methods share the same glob scan, subagent exclusion, project filter, and stat collection loop. The only differences are: `findLatest` sorts by mtime alone, while `findBySessionId` adds priority-based matching. This is the same pattern seen across Claude, Gemini, and Codex agents -- it is a codebase-wide duplication, not a regression introduced by Cursor. 
+
+That said, the Cursor implementation copies the pattern faithfully and adds `workspacePathCache` in both methods independently (lines 46 and 99). A private method like `_scanSessions(options, matchFn?)` could unify them. Worth considering as a future cross-agent refactor.
+
+---
+
+**[Low] Finding 3 -- `timestamp: ''` hardcoded in parser output (Line 324)**
+
+```typescript
+return {
+  type: role,
+  timestamp: '',   // Cursor JSONL has no timestamps
+  raw: data,
+  formatted: formatMultiline(preview),
+};
+```
+
+The comment on line 324 explains WHY (Cursor logs lack timestamps), which is good. The `PrettyFormatter.formatTime` already handles empty strings by returning `[--:--:--]` (line 51 of `pretty-formatter.ts`). This is acceptable, but if Cursor ever adds timestamps to its format, this will need updating. No action needed now.
+
+---
+
+**[Low] Finding 4 -- `stripUserQueryTags` and `stripAttachedFilesTags` are Cursor-specific but module-scoped (Lines 274-286)**
+
+These two helper functions are defined at module scope (not inside the class). This is fine for encapsulation within the module since the file only exports `CursorAgent`. However, if other parsers eventually need XML tag stripping, these should be moved to `src/utils/text.ts`. For now this is acceptable.
+
+---
+
+**[Low] Finding 5 -- The `setBaseDir` method breaks encapsulation for testing (Lines 37-39)**
+
+```typescript
+setBaseDir(dir: string): void {
+  this._baseDir = dir;
+}
+```
+
+This test-only method is exposed on the production class. The same pattern exists in `CodexSessionFinder` (line 41-44 of `codex-agent.ts`). Neither `ClaudeSessionFinder` nor `GeminiSessionFinder` have this method -- they use `private baseDir` without a setter. A cleaner approach would be to accept `baseDir` as an optional constructor parameter:
+
+```typescript
+constructor(baseDir?: string) {
+  this._baseDir = baseDir ?? join(homedir(), '.cursor', 'projects');
+}
+```
+
+This eliminates the mutable setter while supporting test injection. Same recommendation applies to `CodexSessionFinder`.
+
+---
+
+**[Medium] Finding 6 -- `_readWorkspacePath` has no JSON parse error differentiation (Lines 224-237)**
+
+```typescript
+private async _readWorkspacePath(workspaceDir: string): Promise<string | null> {
+  try {
+    const content = await readFile(join(workspaceDir, '.workspace-trusted'), 'utf-8');
+    const data = JSON.parse(content);
+    return data.workspacePath || null;
+  } catch {
+    return null;
+  }
+}
+```
+
+The blanket `catch` swallows both "file not found" (expected) and "malformed JSON" (unexpected). A malformed `.workspace-trusted` file would silently degrade. Consider at minimum logging a warning in verbose/debug mode for JSON parse failures. This is a low-risk issue since the fallback (using the slug as display name) is reasonable.
+
+---
+
+### File: `/Users/pc035860/code/agent-tail/src/cli/parser.ts`
+
+**[Medium] Finding 7 -- Agent type validation uses repeated string comparisons instead of the `AgentType` union (Lines 78-84)**
+
+```typescript
+if (
+  agentTypeArg !== 'codex' &&
+  agentTypeArg !== 'claude' &&
+  agentTypeArg !== 'gemini' &&
+  agentTypeArg !== 'cursor'
+) {
+```
+
+The `AgentType` type is defined in `src/core/types.ts` line 4 as `'codex' | 'claude' | 'gemini' | 'cursor'`. There is no `VALID_AGENT_TYPES` constant array anywhere in the codebase (confirmed by grep). Every time a new agent is added, this string list must be updated in the validation block AND in the error message on line 85.
+
+**Recommendation:** Define a canonical array in `src/core/types.ts` and derive the type from it:
+
+```typescript
+export const AGENT_TYPES = ['codex', 'claude', 'gemini', 'cursor'] as const;
+export type AgentType = (typeof AGENT_TYPES)[number];
+```
+
+Then in `parser.ts`:
+
+```typescript
+import { AGENT_TYPES } from '../core/types.ts';
+
+if (!AGENT_TYPES.includes(agentTypeArg as AgentType)) {
+  console.error(
+    `Error: Invalid agent type "${agentTypeArg}". Use ${AGENT_TYPES.map(t => `"${t}"`).join(', ')}.`
+  );
+  process.exit(1);
+}
+```
+
+This eliminates the stringly-typed validation and auto-generates the error message. The same pattern could then be used for the `'claude' | 'codex'` checks on lines 92-94, 103, 126-128, 153, 190-194 by defining a `SUBAGENT_CAPABLE_AGENTS` constant.
+
+---
+
+### File: `/Users/pc035860/code/agent-tail/src/index.ts`
+
+**[Low] Finding 8 -- Agent selection uses nested ternary chain (Lines 86-93)**
+
+```typescript
+const agent: Agent =
+  options.agentType === 'codex'
+    ? new CodexAgent({ verbose: options.verbose })
+    : options.agentType === 'gemini'
+      ? new GeminiAgent({ verbose: options.verbose })
+      : options.agentType === 'cursor'
+        ? new CursorAgent({ verbose: options.verbose })
+        : new ClaudeAgent({ verbose: options.verbose });
+```
+
+This nested ternary grows with each new agent. A `Record<AgentType, () => Agent>` factory map or a simple function would be cleaner and exhaustive-check friendly:
+
+```typescript
+function createAgent(type: AgentType, opts: ParserOptions): Agent {
+  const agents: Record<AgentType, () => Agent> = {
+    codex: () => new CodexAgent(opts),
+    claude: () => new ClaudeAgent(opts),
+    gemini: () => new GeminiAgent(opts),
+    cursor: () => new CursorAgent(opts),
+  };
+  return agents[type]();
+}
+```
+
+This also guarantees a compile-time error if a new `AgentType` variant is added without a corresponding factory entry. Low priority since the current code works, but worthwhile given the project is actively adding agents.
+
+---
+
+### Summary by Severity
+
+| Severity | # | Description |
+|----------|---|-------------|
+| **Medium** | 3 | Finding 2 (scan logic duplication), Finding 6 (silent JSON error), Finding 7 (stringly-typed validation) |
+| **Low** | 5 | Finding 1 (redundant null check), Finding 3 (hardcoded timestamp), Finding 4 (module-scope helpers), Finding 5 (test setter), Finding 8 (nested ternary) |
+
+**No Critical or High severity issues found.** The Cursor agent implementation is clean and follows established codebase conventions. The most impactful improvement would be **Finding 7** (introducing `AGENT_TYPES` as a canonical array), as it eliminates a common source of maintenance errors when adding new agents and would benefit all existing validation code in `parser.ts`.</result>
+<usage><total_tokens>53238</total_tokens><tool_uses>19</tool_uses><duration_ms>83795</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/fb2b82a8-a33a-4ab2-873c-4429adde06a2/tasks/a9345d0350a15a4d4.output
+
+---
+
+<task-notification>
+<task-id>a22d96e1c88de6386</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/fb2b82a8-a33a-4ab2-873c-4429adde06a2/tasks/a22d96e1c88de6386.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review for Cursor" completed</summary>
+<result>Now I have everything I need for a thorough efficiency review. Here is my analysis.
+
+---
+
+## Cursor Agent 效率審查報告
+
+**檔案**: `/Users/pc035860/code/agent-tail/src/agents/cursor/cursor-agent.ts`
+
+---
+
+### Finding 1 — `findLatest()`: 序列化 stat() 呼叫，缺乏平行處理
+
+**嚴重度**: Medium
+
+**位置**: 第 48-71 行
+
+`for await` 迴圈中每個 `stat()` 呼叫都是序列化執行。以 134 個 workspace 目錄、每個目錄可能多個 session 來看，可能有數百個檔案，每個 `stat()` 都等待前一個完成。
+
+然而，這其實是所有現有 agent（Claude 第 42 行、Gemini 第 34 行、Codex 第 57 行）共用的模式。`Bun.Glob.scan()` 本身就是 async iterator，每次 yield 一個檔案路徑，`stat()` 的序列化是 `for await` 的必然結果。
+
+**改善方向**（如果效能成為瓶頸）: 可以先收集所有路徑到陣列，再用 `Promise.all` 批次 `stat()`。但目前與其他 agent 一致，不構成 regression。
+
+```typescript
+// 潛在的平行化方案（參考用）
+const paths: string[] = [];
+for await (const file of glob.scan({ ... })) {
+  if (file.includes('/subagents/')) continue;
+  paths.push(file);
+}
+const results = await Promise.all(
+  paths.map(async (p) => {
+    try { return { path: p, mtime: (await stat(p)).mtime }; }
+    catch { return null; }
+  })
+);
+```
+
+**注意**: `_matchProject()` 包含 `await readFile()`，這在迴圈中也是序列化的。如果有 project filter，每個 workspace slug 第一次遇到時需要讀檔，之後靠 cache。這部分難以用 `Promise.all` 因為 cache 依賴前次結果。
+
+---
+
+### Finding 2 — `findLatest()`: 收集全量排序而非維護 max 值
+
+**嚴重度**: Low
+
+**位置**: 第 43 行、第 75 行
+
+`findLatest()` 只需要 mtime 最大的那一個檔案，但程式碼收集所有檔案到陣列再排序（O(n log n)）。可以改用 O(n) 的 max-tracking：
+
+```typescript
+let latest: { path: string; mtime: Date } | null = null;
+// ...在迴圈內：
+if (!latest || stats.mtime > latest.mtime) {
+  latest = { path: file, mtime: stats.mtime };
+}
+```
+
+`findLatestInProject()`（第 181 行、第 199 行）也有同樣的問題。
+
+這個模式在 Gemini 和 Claude 也存在，但 Cursor 因為 134 個 workspace 目錄而檔案量最大，改善效益最明顯。
+
+---
+
+### Finding 3 — `findBySessionId()`: 精確匹配應 early-exit
+
+**嚴重度**: Medium
+
+**位置**: 第 121-129 行
+
+當 `priority === 3`（精確匹配）時，不需要繼續掃描剩餘檔案。UUID 是唯一的，精確匹配後直接 return：
+
+```typescript
+if (normalizedId === searchTerm) {
+  // 精確匹配，直接返回，不需要繼續掃描
+  try {
+    const stats = await stat(file);
+    return { path: file, mtime: stats.mtime, agentType: 'cursor' };
+  } catch {
+    continue; // stat 失敗則繼續找
+  }
+}
+```
+
+對比 Codex 和 Gemini 的 `findBySessionId()` 也沒有做 early-exit，但差別在於 Cursor 的 UUID session ID 保證唯一，其他 agent 的 ID 格式可能不保證唯一（Codex 有 timestamp 匹配、Gemini 有 short UUID），所以這裡 Cursor 有明確的改善空間。
+
+---
+
+### Finding 4 — `_matchProject()` cache 範圍僅限單次方法呼叫
+
+**嚴重度**: Low
+
+**位置**: 第 46 行、第 99 行
+
+`workspacePathCache` 在每次呼叫 `findLatest()` 或 `findBySessionId()` 時都是新建的 `Map`。如果使用者多次呼叫（例如 auto-switch 模式下反覆掃描），每次都重新讀取 `.workspace-trusted` 檔案。
+
+**改善方向**: 將 cache 提升為實例屬性，加上 TTL 或手動失效機制：
+
+```typescript
+class CursorSessionFinder implements SessionFinder {
+  private _workspacePathCache = new Map<string, string | null>();
+  // 或加上 TTL: Map<string, { value: string | null; ts: number }>
+}
+```
+
+在 `findLatestInProject()`（auto-switch 的熱路徑，每 500ms 執行一次）中不需要這個 cache，因為那時已經鎖定了 workspace。但對 `findLatest()` 而言，如果被反覆呼叫，實例級 cache 有意義。
+
+---
+
+### Finding 5 — `findLatestInProject()`: glob pattern `*/*.jsonl` 可能匹配 subagent
+
+**嚴重度**: Low
+
+**位置**: 第 180 行、第 187 行
+
+```
+glob pattern: */*.jsonl
+目錄結構: {UUID}/{UUID}.jsonl
+subagent:   {UUID}/subagents/{subagent-UUID}.jsonl
+```
+
+`*/*.jsonl` 只匹配一層深度，所以 `subagents/` 下的檔案不會被匹配。這是正確的。然而第 187 行的 `file.includes('/subagents/')` 檢查就變成了 dead code — 永遠不會為 true。
+
+雖然無害（防禦性程式碼），但可以移除以避免混淆。
+
+---
+
+### Finding 6 — `CursorLineParser.parse()`: `contentToString()` 對簡單字串的額外開銷
+
+**嚴重度**: Low
+
+**位置**: 第 308 行
+
+```typescript
+let text = contentToString(content);
+```
+
+查看 `contentToString()`（`src/utils/text.ts` 第 70-102 行），它的第一行就是 `if (typeof content === 'string') return content;`，所以對簡單字串場景幾乎零開銷。只有當 `content` 是陣列時才會遍歷。
+
+不過，Cursor 的 JSONL 格式是 `content: [{ type: "text", text: "..." }]`（陣列），所以每次 parse 都會走陣列路徑。這包含 `.map()` + `.filter(Boolean)` + `.join(' ')`。如果 content 陣列通常只有一個元素，可以加 fast path：
+
+```typescript
+// fast path for single-element text array
+if (Array.isArray(content) && content.length === 1 && typeof content[0]?.text === 'string') {
+  text = content[0].text;
+} else {
+  text = contentToString(content);
+}
+```
+
+但實際影響微乎其微，parser 每行只呼叫一次。
+
+---
+
+### Finding 7 — `stripAttachedFilesTags()` regex 可能回溯問題
+
+**嚴重度**: Low
+
+**位置**: 第 285 行
+
+```typescript
+function stripAttachedFilesTags(text: string): string {
+  return text.replace(/<attached_files>[\s\S]*?<\/attached_files>/g, '').trim();
+}
+```
+
+`[\s\S]*?` 是 lazy quantifier，在大多數引擎中表現良好。但如果 text 中有 `<attached_files>` 開標籤卻沒有閉標籤，regex 會掃描整個剩餘字串才決定不匹配。對於正常的 Cursor 日誌不是問題，但對惡意或損壞的輸入，可以考慮限制匹配長度。
+
+實際風險極低，parser 已經在 try-catch 中。
+
+---
+
+### Finding 8 — `stripUserQueryTags()` + `stripAttachedFilesTags()` 呼叫 `trim()` 三次
+
+**嚴重度**: Low（Nit）
+
+**位置**: 第 274-278 行、第 284-286 行、第 318 行
+
+```typescript
+// stripUserQueryTags 末尾
+.trim();
+// stripAttachedFilesTags 末尾
+.trim();
+// parse() 中
+if (!text.trim()) return null;
+```
+
+三次 `trim()` 呼叫是冗餘的。`stripUserQueryTags` 已經 trim，`stripAttachedFilesTags` 又 trim，接著 `text.trim()` 再次 trim。可以只在最後 trim 一次。但對效能影響可忽略。
+
+---
+
+### Finding 9 — `findBySessionId()` 和 `findLatest()` 之間的 glob 重複掃描
+
+**嚴重度**: Low（架構觀察）
+
+**位置**: 第 42 行、第 95 行
+
+兩個方法使用相同的 glob pattern `*/agent-transcripts/*/*.jsonl` 獨立掃描。如果呼叫端先 `findLatest()` 再 `findBySessionId()`，檔案系統被掃描兩次。這與 Claude 和 Gemini 的模式一致，且通常只會呼叫其中一個，所以不是實際問題。
+
+---
+
+### Finding 10 — TOCTOU: stat() 在 try-catch 中，模式正確
+
+**嚴重度**: 無（正面發現）
+
+所有 `stat()` 呼叫都在 try-catch 中，沒有先 `exists()` 再 `stat()` 的 TOCTOU 模式。這是正確的做法，與其他 agent 一致。
+
+---
+
+### 總結（按優先序排列）
+
+| # | 嚴重度 | 位置 | 問題 | 建議 |
+|---|--------|------|------|------|
+| 3 | Medium | L121-129 | `findBySessionId` 精確匹配無 early-exit | UUID 唯一，精確匹配直接 return |
+| 1 | Medium | L48-71 | 序列 stat()，134 個 workspace 可能慢 | 與其他 agent 一致，但 Cursor 量最大，可考慮批次 stat |
+| 2 | Low | L43, L75, L181, L199 | 只需 max 卻全量排序 | `findLatest` / `findLatestInProject` 改用 max-tracking |
+| 4 | Low | L46, L99 | workspace cache 每次方法呼叫重建 | 提升為實例屬性 |
+| 5 | Low | L187 | `findLatestInProject` 中 subagent 檢查是 dead code | glob `*/*.jsonl` 不會匹配二層，可移除 |
+| 8 | Low | L274-318 | strip 函式 + parse 重複 trim() 三次 | 只在最終 trim 一次 |
+| 6 | Low | L308 | `contentToString` 對單元素陣列無 fast path | 微乎其微，可選優化 |
+| 7 | Low | L285 | regex `[\s\S]*?` 對無閉標籤輸入掃描全文 | 風險極低，可忽略 |
+
+**最值得改的兩項**是 Finding 3（early-exit）和 Finding 2（max-tracking），改動小且效益明確。Finding 1（批次 stat）改動較大但效益最高，建議在實際量測確認瓶頸後再做。</result>
+<usage><total_tokens>44343</total_tokens><tool_uses>9</tool_uses><duration_ms>87881</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/fb2b82a8-a33a-4ab2-873c-4429adde06a2/tasks/a22d96e1c88de6386.output
