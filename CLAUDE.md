@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-agent-tail is a CLI tool for tailing AI agent session logs (Codex, Claude Code, Gemini CLI) in real-time. Built with Bun runtime.
+agent-tail is a CLI tool for tailing AI agent session logs (Codex, Claude Code, Gemini CLI & Cursor) in real-time. Built with Bun runtime.
 
 ## Commands
 
 ```bash
 # Run the CLI
-bun run src/index.ts <agent-type>  # agent-type: codex | claude | gemini
+bun run src/index.ts <agent-type>  # agent-type: codex | claude | gemini | cursor
 
 # Or via npm script
 bun start                          # requires agent-type argument
@@ -50,10 +50,16 @@ agent-tail codex -i                # interactive mode (Tab to switch sessions)
 agent-tail codex -a                # show all content (verbose + subagents + auto-switch)
 agent-tail codex --pane            # auto-open tmux pane for each new subagent
 
+# Cursor-specific options (MVP: basic tailing + auto-switch)
+agent-tail cursor                  # tail latest Cursor session
+agent-tail cursor -p myproject     # filter by project (fuzzy match on workspace slug)
+agent-tail cursor --auto-switch    # auto-switch to latest session in workspace
+
 # Super Follow (auto-switch to latest session in project)
 agent-tail claude --auto-switch    # Claude: project-based
 agent-tail gemini --auto-switch    # Gemini: .project_root based
 agent-tail codex --auto-switch     # Codex: cwd-based (with cache)
+agent-tail cursor --auto-switch    # Cursor: workspace-slug based
 ```
 
 ## Architecture
@@ -75,6 +81,7 @@ src/
 │   │   ├── codex-agent.ts    # CodexSessionFinder with getProjectInfo, findLatestInProject
 │   │   └── session-cache.ts  # Cwd-indexed cache with incremental refresh
 │   ├── claude/claude-agent.ts
+│   ├── cursor/cursor-agent.ts  # CursorSessionFinder + CursorLineParser (stateless, no timestamps)
 │   └── gemini/gemini-agent.ts # GeminiSessionFinder with .project_root support
 ├── claude/                   # Claude-specific modules
 │   ├── subagent-detector.ts  # Detect and monitor subagent sessions (with directory watch)
@@ -116,6 +123,7 @@ src/
 - SessionFinder locates session files in agent-specific directories:
   - Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (all projects mixed, cwd in session_meta)
   - Claude: `~/.claude/projects/{encoded-path}/{UUID}.jsonl` (per-project directory)
+  - Cursor: `~/.cursor/projects/{workspace-slug}/agent-transcripts/{UUID}/{UUID}.jsonl` (per-workspace, has subagents/ but MVP skips them)
   - Gemini: `~/.gemini/tmp/{hash或name}/chats/session-*.json` (.project_root for project info)
 - FileWatcher supports two modes: JSONL (line-by-line) and JSON (whole-file, for Gemini)
 - **Super Follow** (`createSuperFollowController`): Auto-switch to latest session, configurable per-agent via `findLatestInProject` callback
@@ -146,6 +154,14 @@ src/
 - **`handleSpawnAgentOutput` skips pre-registered agents**: 啟動時透過 `registerExistingAgent` 預填的 agentId，在歷史行重播時 `handleSpawnAgentOutput` 會跳過（避免對已知 subagent 重複 resolve + 重複 `onNewSubagent`）。
 - **Codex pane output filter needs shortId→fullId mapping**: Codex label 用短 ID（`019cc375-8a57`），但 `PaneManager` 用完整 UUID 作 key。`shouldOutput` 需透過 `shortIdToFullId` Map 反查。此映射在 `switchToSession` 時 `clear()`，並由 `prefillExistingSubagents` 和 `openPaneForSubagent` 填充。
 - **Use `RetryConfig` for retry loops**: `src/core/detector-interfaces.ts` 定義了 `RetryConfig` 介面（maxRetries, retryDelay, initialDelay）。Codex 的 `SUBAGENT_FILE_RETRY` 和 Claude 的 `EARLY_DETECTION_RETRY` / `FALLBACK_DETECTION_RETRY` 都應使用此介面，避免 magic numbers。
+
+**Cursor Agent (MVP):**
+- **No timestamps**: Cursor JSONL entries have no timestamp field. Parser returns `''`, formatter shows `[--:--:--]`.
+- **Workspace slug is NOT reversible**: `-` in slug could be path separator, literal hyphen, or underscore. Only `.workspace-trusted` (present in ~10% of dirs) has authoritative `workspacePath`. Project filter (`-p`) checks both slug and workspacePath.
+- **Stateless parser**: Like Codex, no need to recreate on session switch. Uses `contentToString()` from `src/utils/text.ts` to handle content arrays.
+- **Tag stripping order matters**: Must run `stripAttachedFilesTags` before `stripUserQueryTags` — attached_files block can precede user_query, and user_query regex uses `^` anchor.
+- **Subagents exist but not supported in MVP**: Directory structure `{UUID}/subagents/{UUID}.jsonl` is identical to Claude. Future subagent support can follow Claude's pattern.
+- **`findLatestInProject` glob `*/*.jsonl`**: Only matches one level deep, so subagent files in `subagents/` subdirectory are naturally excluded — no explicit `/subagents/` check needed.
 
 **Gotchas:**
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.

@@ -12,6 +12,7 @@ import type { Agent, LineParser } from './agents/agent.interface.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
 import { GeminiAgent } from './agents/gemini/gemini-agent.ts';
+import { CursorAgent } from './agents/cursor/cursor-agent.ts';
 import type { Formatter } from './formatters/formatter.interface.ts';
 import { RawFormatter } from './formatters/raw-formatter.ts';
 import { PrettyFormatter } from './formatters/pretty-formatter.ts';
@@ -87,7 +88,9 @@ async function main(): Promise<void> {
       ? new CodexAgent({ verbose: options.verbose })
       : options.agentType === 'gemini'
         ? new GeminiAgent({ verbose: options.verbose })
-        : new ClaudeAgent({ verbose: options.verbose });
+        : options.agentType === 'cursor'
+          ? new CursorAgent({ verbose: options.verbose })
+          : new ClaudeAgent({ verbose: options.verbose });
 
   // 選擇 Formatter
   const formatter: Formatter = options.raw

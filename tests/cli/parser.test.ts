@@ -26,6 +26,11 @@ describe('parseArgs', () => {
       const options = parseArgs(['node', 'agent-tail', 'gemini']);
       expect(options.agentType).toBe('gemini');
     });
+
+    test('parses cursor agent type', () => {
+      const options = parseArgs(['node', 'agent-tail', 'cursor']);
+      expect(options.agentType).toBe('cursor');
+    });
   });
 
   describe('subagent option', () => {
