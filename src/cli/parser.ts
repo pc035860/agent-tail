@@ -25,7 +25,7 @@ function createProgram(): Command {
     .option('--no-quiet', 'Show informational messages (default)')
     .option(
       '--subagent [id]',
-      'Claude/Codex: tail subagent log (latest if no ID)'
+      'Claude/Codex/Cursor: tail subagent log (latest if no ID)'
     )
     .option(
       '-s, --sleep-interval <ms>',
@@ -39,12 +39,12 @@ function createProgram(): Command {
     )
     .option(
       '-i, --interactive',
-      'Claude/Codex: interactive mode for switching between sessions (Tab to switch)'
+      'Claude/Codex/Cursor: interactive mode for switching between sessions (Tab to switch)'
     )
     .option('--no-interactive', 'Disable interactive mode (default)')
     .option(
       '--with-subagents',
-      'Claude/Codex: include subagent content in output'
+      'Claude/Codex/Cursor: include subagent content in output'
     )
     .option('--no-with-subagents', 'Exclude subagent content (default)')
     .option(
@@ -54,10 +54,13 @@ function createProgram(): Command {
     .option('--no-auto-switch', 'Disable auto-switch (default)')
     .option(
       '-a, --all',
-      'Claude/Codex: show all content (verbose + with-subagents + auto-switch)',
+      'Claude/Codex/Cursor: show all content (verbose + with-subagents + auto-switch)',
       false
     )
-    .option('--pane', 'Claude/Codex: auto-open tmux pane for each new subagent')
+    .option(
+      '--pane',
+      'Claude/Codex/Cursor: auto-open tmux pane for each new subagent'
+    )
     .option('--no-pane', 'Disable pane auto-open (default)');
 
   return program;
@@ -87,22 +90,28 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // subagent 選項對 claude 和 codex 有效
+  // subagent 選項對 claude、codex、cursor 有效
   if (
     opts.subagent !== undefined &&
     agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex'
+    agentTypeArg !== 'codex' &&
+    agentTypeArg !== 'cursor'
   ) {
     console.error(
-      'Error: --subagent option is only available for "claude" and "codex" agent types.'
+      'Error: --subagent option is only available for "claude", "codex", and "cursor" agent types.'
     );
     process.exit(1);
   }
 
-  // --all preset 選項對 claude 和 codex 有效（需要在展開前驗證）
-  if (opts.all && agentTypeArg !== 'claude' && agentTypeArg !== 'codex') {
+  // --all preset 選項對 claude、codex、cursor 有效（需要在展開前驗證）
+  if (
+    opts.all &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex' &&
+    agentTypeArg !== 'cursor'
+  ) {
     console.error(
-      'Error: --all option is only available for "claude" and "codex" agent types.'
+      'Error: --all option is only available for "claude", "codex", and "cursor" agent types.'
     );
     process.exit(1);
   }
@@ -149,10 +158,15 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // pane 選項對 claude 和 codex 有效
-  if (finalPane && agentTypeArg !== 'claude' && agentTypeArg !== 'codex') {
+  // pane 選項對 claude、codex、cursor 有效
+  if (
+    finalPane &&
+    agentTypeArg !== 'claude' &&
+    agentTypeArg !== 'codex' &&
+    agentTypeArg !== 'cursor'
+  ) {
     console.error(
-      'Error: --pane option is only available for "claude" and "codex" agent types.'
+      'Error: --pane option is only available for "claude", "codex", and "cursor" agent types.'
     );
     process.exit(1);
   }
@@ -186,14 +200,15 @@ export function parseArgs(args: string[]): CliOptions {
     finalWithSubagents = true;
   }
 
-  // withSubagents 選項對 claude 和 codex 有效
+  // withSubagents 選項對 claude、codex、cursor 有效
   if (
     finalWithSubagents &&
     agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex'
+    agentTypeArg !== 'codex' &&
+    agentTypeArg !== 'cursor'
   ) {
     console.error(
-      'Error: --with-subagents option is only available for "claude" and "codex" agent types.'
+      'Error: --with-subagents option is only available for "claude", "codex", and "cursor" agent types.'
     );
     process.exit(1);
   }
