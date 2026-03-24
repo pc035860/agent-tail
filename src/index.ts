@@ -262,6 +262,9 @@ async function main(): Promise<void> {
   ) {
     // Codex 多檔案監控（主 session + subagents）
     await startCodexMultiWatch(sessionFile, formatter, options);
+  } else if (options.agentType === 'cursor' && options.interactive) {
+    // Cursor 互動模式
+    await startCursorInteractiveWatch(sessionFile, formatter, options);
   } else if (
     options.agentType === 'cursor' &&
     options.subagent === undefined &&
@@ -1439,6 +1442,215 @@ async function startCodexMultiWatch(
   if (!options.follow) process.exit(0);
   superFollow.start();
   log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
+}
+
+/**
+ * Cursor 互動模式（SessionManager + DisplayController）
+ * 與 Codex 模式相同：共用無狀態 parser，無 JSONL 事件偵測
+ * 純目錄監控偵測 subagent
+ */
+async function startCursorInteractiveWatch(
+  sessionFile: SessionFile,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // TTY check → fallback to multi-watch
+  if (!process.stdin.isTTY) {
+    console.warn(
+      chalk.yellow(
+        'Warning: Interactive mode not available in non-TTY environment.\n' +
+          'Switching to standard multi-watch mode.'
+      )
+    );
+    await startCursorMultiWatch(sessionFile, formatter, options);
+    return;
+  }
+
+  const cursorAgent = new CursorAgent({ verbose: options.verbose });
+  const projectInfo = cursorAgent.finder.getProjectInfo
+    ? await cursorAgent.finder.getProjectInfo(sessionFile.path)
+    : null;
+
+  const displayController = new DisplayController({
+    persistentStatusLine: true,
+    historyLines: 50,
+  });
+
+  let sessionManager!: SessionManager;
+  let multiWatcher: MultiFileWatcher | null = null;
+  let detector: CursorSubagentDetector | null = null;
+  let currentSessionFile = sessionFile;
+
+  // Cursor parser 無狀態，所有 session 共用（同 Codex）
+  const sharedParser = cursorAgent.parser;
+
+  // ========== buildInteractiveState ==========
+  const buildInteractiveState = async (
+    targetSessionFile: SessionFile,
+    showIntro: boolean
+  ): Promise<void> => {
+    const subagentsDirLocal = getCursorSubagentsDir(targetSessionFile.path);
+
+    sessionManager = createInteractiveSessionManager(displayController);
+    sessionManager.addSession('main', MAIN_LABEL, targetSessionFile.path);
+
+    // 掃描既有 subagent
+    const existingIds = await scanCursorSubagents(subagentsDirLocal, new Set());
+    const existingSubFiles = await buildCursorSubagentFiles(
+      subagentsDirLocal,
+      existingIds
+    );
+
+    for (const { agentId, path } of existingSubFiles) {
+      const label = makeCursorAgentLabel(agentId);
+      sessionManager.addSession(agentId, label, path);
+    }
+
+    if (showIntro) {
+      if (existingIds.length > 0) {
+        log(
+          options.quiet,
+          chalk.gray(`Found ${existingIds.length} subagent(s)`)
+        );
+      }
+      log(
+        options.quiet,
+        chalk.gray('Interactive mode: Press Tab to switch, q to quit')
+      );
+      log(options.quiet, chalk.gray('---'));
+    }
+
+    const watcher = new MultiFileWatcher();
+    multiWatcher = watcher;
+
+    // 注意：不傳 session 給 detector，避免 double registration
+    // CursorSubagentDetector.registerExistingAgent 和 registerNewAgent 內部都會呼叫 session?.addSession
+    // 如果同時傳 session 又在 onNewSubagent 呼叫 sessionManager.addSession 會造成重複
+    detector = new CursorSubagentDetector(subagentsDirLocal, {
+      output: new DisplayControllerOutputHandler(displayController),
+      watcher: { addFile: (f) => watcher.addFile(f) },
+      enabled: true, // interactive 必定 follow
+      onNewSubagent: (agentId: string, path: string) => {
+        const label = makeCursorAgentLabel(agentId);
+        sessionManager.addSession(agentId, label, path);
+        displayController.updateStatusLine(
+          sessionManager.getAllSessions(),
+          sessionManager.getActiveIndex()
+        );
+      },
+    });
+
+    // 預填既有 subagent（只更新 detector 的 knownAgentIds）
+    for (const { agentId, path } of existingSubFiles) {
+      detector.registerExistingAgent(agentId, path);
+    }
+
+    detector.startDirectoryWatch();
+  };
+
+  // ========== startWatcher ==========
+  const startWatcher = async (): Promise<void> => {
+    if (!multiWatcher) return;
+
+    const files = sessionManager.getWatchedFiles();
+
+    await multiWatcher.start(files, {
+      follow: true, // interactive 必定 follow
+      pollInterval: options.sleepInterval,
+      initialLines: options.lines,
+      onLine: (line: string, label: string) => {
+        // Cursor 無 JSONL 事件，不需要 detectionHandler
+        const parsed = sharedParser.parse(line);
+        if (!parsed) return;
+        parsed.sourceLabel = label;
+        sessionManager.handleOutput(label, formatter.format(parsed));
+      },
+      onError: (error) => {
+        displayController.write(chalk.red(`Error: ${error.message}`));
+      },
+    });
+  };
+
+  // ========== Keyboard Handling ==========
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+
+    process.stdin.on('data', (key: string) => {
+      if (key === '\u0003') {
+        cleanup();
+        process.exit(0);
+      }
+      if (key === 'q' || key === 'Q') {
+        cleanup();
+        process.exit(0);
+      }
+      if (key === '\t') sessionManager.switchNext();
+      if (key === '\u001b[Z') sessionManager.switchPrev(); // Shift+Tab
+      if (key === 'n' || key === 'N') sessionManager.switchNext();
+      if (key === 'p' || key === 'P') sessionManager.switchPrev();
+    });
+  }
+
+  // ========== Session Switch (Super-Follow) ==========
+  const switchToSession = async (nextFile: SessionFile): Promise<void> => {
+    detector?.stop();
+    multiWatcher?.stop();
+
+    currentSessionFile = nextFile;
+    await buildInteractiveState(nextFile, false);
+
+    displayController.updateStatusLine(
+      sessionManager.getAllSessions(),
+      sessionManager.getActiveIndex()
+    );
+
+    await startWatcher();
+
+    const nextSessionId = basename(dirname(nextFile.path));
+    displayController.write(
+      chalk.gray(`Switched to latest session: ${nextSessionId}`)
+    );
+  };
+
+  const superFollow = projectInfo
+    ? createSuperFollowController({
+        projectDir: projectInfo.projectDir,
+        getCurrentPath: () => currentSessionFile.path,
+        onSwitch: switchToSession,
+        autoSwitch: options.autoSwitch,
+        findLatestInProject: (dir) =>
+          cursorAgent.finder.findLatestInProject!(dir),
+      })
+    : { start: () => {}, stop: () => {} };
+
+  // ========== Initialization ==========
+  await buildInteractiveState(currentSessionFile, true);
+  displayController.init();
+  displayController.updateStatusLine(
+    sessionManager.getAllSessions(),
+    sessionManager.getActiveIndex()
+  );
+  await startWatcher();
+
+  const cleanup = (): void => {
+    superFollow.stop();
+    displayController.destroy();
+    detector?.stop();
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    multiWatcher?.stop();
+  };
+
+  process.on('SIGINT', () => {
+    cleanup();
+    process.exit(0);
+  });
+
+  superFollow.start();
+  displayController.write(
+    chalk.gray('Watching for changes... (Tab to switch, q to quit)')
+  );
 }
 
 /**

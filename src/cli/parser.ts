@@ -130,14 +130,15 @@ export function parseArgs(args: string[]): CliOptions {
   const finalAutoSwitch = opts.autoSwitch ?? false;
   const finalPane = opts.pane ?? false;
 
-  // interactive 選項對 claude 和 codex 有效
+  // interactive 選項對 claude、codex、cursor 有效
   if (
     finalInteractive &&
     agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex'
+    agentTypeArg !== 'codex' &&
+    agentTypeArg !== 'cursor'
   ) {
     console.error(
-      'Error: --interactive option is only available for "claude" and "codex" agent types.'
+      'Error: --interactive option is only available for "claude", "codex", and "cursor" agent types.'
     );
     process.exit(1);
   }
