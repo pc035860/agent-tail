@@ -1739,8 +1739,22 @@ async function startCursorMultiWatch(
   }
 
   const pm = paneManager;
+  // Cursor 沒有 subagent 完成事件，pane 不會自動關閉
+  // 使用 FIFO eviction 策略：達到上限時關閉最舊的 pane
+  const paneAgentOrder: string[] = [];
+  const CURSOR_MAX_PANES = 6;
+
   const openPaneForSubagent = pm
     ? (agentId: string, subagentPath: string) => {
+        // Evict oldest pane if at capacity
+        if (
+          pm.activePaneCount >= CURSOR_MAX_PANES &&
+          paneAgentOrder.length > 0
+        ) {
+          const oldestId = paneAgentOrder.shift()!;
+          pm.closePaneByAgentId(oldestId).catch(() => {});
+        }
+        paneAgentOrder.push(agentId);
         pm.openPane(agentId, subagentPath).catch((err) => {
           log(
             options.quiet,

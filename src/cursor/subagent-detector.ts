@@ -244,8 +244,11 @@ export class CursorSubagentDetector {
       }
     }
 
+    // 回滾 knownAgentIds，讓下次掃描能重新偵測
+    // Cursor 沒有 JSONL 事件提供第二次機會（不像 Claude 的 fallback detection）
+    this.knownAgentIds.delete(agentId);
     this.config.output.debug(
-      `Subagent file not found after retries: ${agentId}`
+      `Subagent file not found after retries, will retry on next scan: ${agentId}`
     );
   }
 }
