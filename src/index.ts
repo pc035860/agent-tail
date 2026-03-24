@@ -64,6 +64,7 @@ import {
   getCursorSubagentsDir,
   scanCursorSubagents,
   buildCursorSubagentFiles,
+  buildCursorSubagentPath,
   makeCursorAgentLabel,
 } from './cursor/watch-builder.ts';
 
@@ -1810,7 +1811,10 @@ async function startCursorMultiWatch(
       registerShortId(agentId);
       suppressedForPane.add(agentId);
     }
-    detector.registerExistingAgent(agentId, `${subagentsDir}/${agentId}.jsonl`);
+    detector.registerExistingAgent(
+      agentId,
+      buildCursorSubagentPath(subagentsDir, agentId)
+    );
   }
 
   detector.startDirectoryWatch();
@@ -1890,7 +1894,7 @@ async function startCursorMultiWatch(
       }
       newDetector.registerExistingAgent(
         agentId,
-        `${newSubagentsDir}/${agentId}.jsonl`
+        buildCursorSubagentPath(newSubagentsDir, agentId)
       );
     }
 
