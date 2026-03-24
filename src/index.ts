@@ -1819,6 +1819,15 @@ async function startCursorMultiWatch(
 
   detector.startDirectoryWatch();
 
+  // Cursor onLine handler（共用，避免 switchToSession 中重複）
+  const cursorOnLine = (line: string, label: string) => {
+    if (shouldOutput && !shouldOutput(label)) return;
+    const parsed = parser.parse(line);
+    if (!parsed) return;
+    parsed.sourceLabel = label;
+    console.log(formatter.format(parsed));
+  };
+
   // ========== Non-Interactive Super-Follow ==========
   let currentSessionPath = sessionFile.path;
 
@@ -1862,10 +1871,6 @@ async function startCursorMultiWatch(
       paneAgentOrder.length = 0;
       suppressedForPane.clear();
       shortIdToFullId.clear();
-      for (const agentId of newExistingAgentIds) {
-        suppressedForPane.add(agentId);
-        registerShortId(agentId);
-      }
     }
 
     const newSessionId = basename(dirname(nextSessionFile.path));
@@ -1887,6 +1892,7 @@ async function startCursorMultiWatch(
       },
     });
 
+    // 預填既有 subagent（一次迴圈處理 shortId 映射 + suppress + detector）
     for (const agentId of newExistingAgentIds) {
       if (pm) {
         registerShortId(agentId);
@@ -1908,13 +1914,7 @@ async function startCursorMultiWatch(
       follow: options.follow,
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
-      onLine: (line: string, label: string) => {
-        if (shouldOutput && !shouldOutput(label)) return;
-        const parsed = parser.parse(line);
-        if (!parsed) return;
-        parsed.sourceLabel = label;
-        console.log(formatter.format(parsed));
-      },
+      onLine: cursorOnLine,
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
       },
@@ -1952,13 +1952,7 @@ async function startCursorMultiWatch(
     follow: options.follow,
     pollInterval: options.sleepInterval,
     initialLines: options.lines,
-    onLine: (line: string, label: string) => {
-      if (shouldOutput && !shouldOutput(label)) return;
-      const parsed = parser.parse(line);
-      if (!parsed) return;
-      parsed.sourceLabel = label;
-      console.log(formatter.format(parsed));
-    },
+    onLine: cursorOnLine,
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
     },

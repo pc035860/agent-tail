@@ -2,23 +2,10 @@ import { Glob } from 'bun';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { makeAgentLabel } from '../core/detector-interfaces.ts';
-// SessionFile type is used in the return type documentation but not directly in signatures
-
-// ============================================================
-// Constants
-// ============================================================
 
 /** Cursor subagent ID 驗證：UUID 格式 */
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** 從檔名提取 UUID 的 regex */
-const UUID_FILENAME_REGEX =
-  /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
-
-// ============================================================
-// Utility Functions
-// ============================================================
 
 /**
  * 從 session 檔案路徑推導 subagents 目錄
@@ -47,28 +34,14 @@ export function isValidCursorSubagentId(id: string): boolean {
 }
 
 /**
- * 從 Cursor subagent 檔案路徑提取 UUID
- */
-export function extractCursorUUIDFromPath(filePath: string): string {
-  return basename(filePath, '.jsonl');
-}
-
-/**
  * 建立 Cursor subagent 標籤（使用 UUID 前 8 字元）
  */
 export function makeCursorAgentLabel(agentId: string): string {
   return makeAgentLabel(agentId.slice(0, 8));
 }
 
-// ============================================================
-// Scan & Build Functions
-// ============================================================
-
 /**
  * 掃描 subagents 目錄，找出尚未被監控的新 subagent 檔案
- * @param subagentsDir subagents 目錄路徑
- * @param knownAgentIds 已知的 agentId 集合
- * @returns 新發現的 agentId 陣列
  */
 export async function scanCursorSubagents(
   subagentsDir: string,
@@ -79,12 +52,9 @@ export async function scanCursorSubagents(
   try {
     const glob = new Glob('*.jsonl');
     for await (const file of glob.scan({ cwd: subagentsDir })) {
-      const match = file.match(UUID_FILENAME_REGEX);
-      if (match && match[1]) {
-        const agentId = match[1];
-        if (!knownAgentIds.has(agentId)) {
-          newAgentIds.push(agentId);
-        }
+      const agentId = basename(file, '.jsonl');
+      if (isValidCursorSubagentId(agentId) && !knownAgentIds.has(agentId)) {
+        newAgentIds.push(agentId);
       }
     }
   } catch {
@@ -95,17 +65,12 @@ export async function scanCursorSubagents(
 }
 
 /**
- * 建立 subagent 檔案列表（含 stat 資訊）
- * @param subagentsDir subagents 目錄路徑
- * @param agentIds 已知的 agentId 陣列
- * @returns SessionFile 陣列，按 birthtime 排序（舊到新）
+ * 建立 subagent 檔案列表（含 stat 資訊），按 mtime 排序（舊到新）
  */
 export async function buildCursorSubagentFiles(
   subagentsDir: string,
   agentIds: string[]
 ): Promise<Array<{ agentId: string; path: string; mtime: Date }>> {
-  const results: Array<{ agentId: string; path: string; mtime: Date }> = [];
-
   const statPromises = agentIds.map(async (agentId) => {
     const filePath = buildCursorSubagentPath(subagentsDir, agentId);
     try {
@@ -116,12 +81,9 @@ export async function buildCursorSubagentFiles(
     }
   });
 
-  const settled = await Promise.all(statPromises);
-  for (const result of settled) {
-    if (result) results.push(result);
-  }
-
-  // 按 mtime 排序（舊到新）
+  const results = (await Promise.all(statPromises)).filter(
+    (r): r is NonNullable<typeof r> => r !== null
+  );
   results.sort((a, b) => a.mtime.getTime() - b.mtime.getTime());
   return results;
 }

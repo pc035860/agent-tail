@@ -102,17 +102,6 @@ export class CursorSubagentDetector {
     this.parentWatcher = null;
   }
 
-  /**
-   * 取得已知的 agentId 集合
-   */
-  getKnownAgentIds(): Set<string> {
-    return new Set(this.knownAgentIds);
-  }
-
-  // ============================================================
-  // Private Methods
-  // ============================================================
-
   private clearScanTimer(): void {
     if (this.scanTimer) {
       clearTimeout(this.scanTimer);
