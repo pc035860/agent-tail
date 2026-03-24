@@ -232,6 +232,8 @@ export class CursorSubagentDetector {
           return;
         }
       } catch (error) {
+        // watcher.addFile 失敗也需要回滾，讓下次掃描重試
+        this.knownAgentIds.delete(agentId);
         this.config.output.error(
           `Failed to add subagent watcher: ${agentId} - ${error}`
         );

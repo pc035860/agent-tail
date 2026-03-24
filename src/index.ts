@@ -1754,13 +1754,19 @@ async function startCursorMultiWatch(
           const oldestId = paneAgentOrder.shift()!;
           pm.closePaneByAgentId(oldestId).catch(() => {});
         }
-        paneAgentOrder.push(agentId);
-        pm.openPane(agentId, subagentPath).catch((err) => {
-          log(
-            options.quiet,
-            chalk.yellow(`[pane] Failed to open pane: ${err}`)
-          );
-        });
+        pm.openPane(agentId, subagentPath)
+          .then(() => {
+            // 只在 pane 成功開啟後加入 FIFO，避免幽靈 agentId
+            if (pm.hasPaneForAgent(agentId)) {
+              paneAgentOrder.push(agentId);
+            }
+          })
+          .catch((err) => {
+            log(
+              options.quiet,
+              chalk.yellow(`[pane] Failed to open pane: ${err}`)
+            );
+          });
       }
     : undefined;
 
@@ -1846,9 +1852,10 @@ async function startCursorMultiWatch(
       }
     }
 
-    // 更新 suppress set
+    // 更新 suppress set + 清空 pane FIFO 佇列
     if (pm) {
       pm.closeAll();
+      paneAgentOrder.length = 0;
       suppressedForPane.clear();
       shortIdToFullId.clear();
       for (const agentId of newExistingAgentIds) {
