@@ -86,8 +86,8 @@ describe('ClaudeSessionFinder.listSessions', () => {
     expect(result[0]!.shortId).toBe('abcdef12');
   });
 
-  test('sets project from directory name', async () => {
-    const projectDir = join(tempDir, 'my-cool-project');
+  test('decodes project path from directory name', async () => {
+    const projectDir = join(tempDir, '-Users-test-code-my-project');
     await mkdir(projectDir, { recursive: true });
     await writeFile(
       join(projectDir, 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee.jsonl'),
@@ -97,13 +97,15 @@ describe('ClaudeSessionFinder.listSessions', () => {
     const result = await finder.listSessions!({});
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.project).toContain('my-cool-project');
+    // Decoded from encoded path: `-Users-test-code-my-project` → `/Users/test/code/my/project`
+    // (lossy decode — dashes become slashes)
+    expect(result[0]!.project).toContain('/');
+    expect(result[0]!.project).not.toStartWith('-');
   });
 
-  test('does NOT populate customTitle (too expensive)', async () => {
+  test('populates customTitle from session content via tail-read', async () => {
     const projectDir = join(tempDir, 'project1');
     await mkdir(projectDir, { recursive: true });
-    // Write a session with custom-title entry
     const content = JSON.stringify({
       type: 'custom-title',
       customTitle: 'My Title',
@@ -117,7 +119,7 @@ describe('ClaudeSessionFinder.listSessions', () => {
     const result = await finder.listSessions!({});
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.customTitle).toBeUndefined();
+    expect(result[0]!.customTitle).toBe('My Title');
   });
 
   test('respects project filter', async () => {

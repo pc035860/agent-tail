@@ -77,39 +77,6 @@ export function buildFzfArgs(config: {
 }
 
 /**
- * Shell-escape a single argument
- */
-function shellEscape(arg: string): string {
-  return `'${arg.replace(/'/g, "'\\''")}'`;
-}
-
-/**
- * Build the full shell command: `FORCE_COLOR=1 agent-tail <type> --list ... | fzf ...`
- */
-export function buildShellCommand(config: {
-  agentType: AgentType;
-  agentTailPath: string;
-  project?: string;
-  limit?: number;
-}): string {
-  const fzfArgs = buildFzfArgs(config);
-  const { agentType, agentTailPath, project, limit } = config;
-
-  const listParts = [
-    `FORCE_COLOR=1`,
-    shellEscape(agentTailPath),
-    shellEscape(agentType),
-    '--list',
-  ];
-  if (project) listParts.push('-p', shellEscape(project));
-  if (limit) listParts.push('-n', String(limit));
-
-  const fzfParts = ['fzf', ...fzfArgs.map(shellEscape)];
-
-  return `${listParts.join(' ')} | ${fzfParts.join(' ')}`;
-}
-
-/**
  * Parse fzf selection output
  * @returns shortId if selection made, null if user cancelled
  */

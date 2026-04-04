@@ -7,10 +7,14 @@
 import { parseArgs } from '../cli/parser.ts';
 import {
   checkFzfAvailable,
-  buildShellCommand,
+  buildFzfArgs,
   parseSelection,
   resolveAgentTailPath,
 } from './fzf-helpers.ts';
+
+function shellEscape(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
 
 function buildListArgs(
   agentTailPath: string,
@@ -43,7 +47,6 @@ async function main(): Promise<void> {
 
   const options = parseArgs(['node', 'agent-tail', ...rawArgs, '--list']);
   const agentTailPath = resolveAgentTailPath();
-  // Use larger limit for fzf browsing (default 20 is too few for interactive search)
   const listLimit = options.lines ?? 200;
   const listArgs = buildListArgs(agentTailPath, agentType, {
     ...options,
@@ -62,14 +65,33 @@ async function main(): Promise<void> {
     process.exit(await proc.exited);
   }
 
-  // Use shell pipe so fzf gets proper TTY access for keyboard input.
-  // Bun.spawn pipe chaining doesn't pass TTY to fzf correctly.
-  const shellCmd = buildShellCommand({
+  // Step 1: Collect list data first (avoids TTY race condition with fzf)
+  const listProc = Bun.spawn(listArgs, {
+    stdout: 'pipe',
+    stderr: 'inherit',
+    env: { ...process.env, FORCE_COLOR: '1' },
+  });
+  const listOutput = await new Response(listProc.stdout).text();
+  await listProc.exited;
+
+  if (!listOutput.trim()) {
+    const projectInfo = options.project
+      ? ` in project "${options.project}"`
+      : '';
+    console.error(`No ${agentType} sessions found${projectInfo}`);
+    process.exit(0);
+  }
+
+  // Step 2: Pipe collected data to fzf via shell (printf | fzf)
+  // This ensures fzf starts with data already available and gets proper TTY
+  const fzfArgs = buildFzfArgs({
     agentType: options.agentType,
     agentTailPath,
     project: options.project,
-    limit: options.lines,
+    limit: listLimit,
   });
+  const fzfArgsStr = fzfArgs.map(shellEscape).join(' ');
+  const shellCmd = `printf '%s' ${shellEscape(listOutput)} | fzf ${fzfArgsStr}`;
 
   const fzfProc = Bun.spawn(['sh', '-c', shellCmd], {
     stdin: 'inherit',
@@ -91,8 +113,6 @@ async function main(): Promise<void> {
   const shortId = parseSelection(output);
   if (!shortId) process.exit(0);
 
-  // Don't forward -p: shortId is already unique from the project-filtered list,
-  // and Codex's findBySessionId filters on file path (not cwd), which would fail.
   const tailProc = Bun.spawn([agentTailPath, agentType, shortId], {
     stdio: ['inherit', 'inherit', 'inherit'],
   });

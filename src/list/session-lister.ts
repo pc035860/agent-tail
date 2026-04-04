@@ -43,11 +43,15 @@ export function formatSessionList(
       ? AGENT_COLORS[item.agentType](item.agentType)
       : item.agentType;
 
-    return [
+    const columns = [
       item.shortId,
       formatRelativeTime(item.lastActivityTime ?? item.mtime),
       agentStr,
       item.project ?? '',
-    ].join('\t');
+    ];
+    // Append custom title as 5th column when present
+    if (item.customTitle) columns.push(`"${item.customTitle}"`);
+
+    return columns.join('\t');
   });
 }

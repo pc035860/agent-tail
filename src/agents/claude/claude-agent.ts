@@ -17,7 +17,11 @@ import {
 } from '../../utils/text.ts';
 import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
 import { readCustomTitle } from '../../claude/custom-title.ts';
-import { readLastTimestampFromJSONL } from '../../utils/session-time.ts';
+import {
+  readLastTimestampFromJSONL,
+  readCustomTitleFromTail,
+  decodeClaudeProjectPath,
+} from '../../utils/session-time.ts';
 
 /** JSONL event type for Claude /rename command */
 const CUSTOM_TITLE_TYPE = 'custom-title';
@@ -114,11 +118,17 @@ class ClaudeSessionFinder implements SessionFinder {
     const limit = options.limit ?? 20;
     const sliced = files.slice(0, limit);
 
-    // Read last activity timestamp from session content (tail-read, 8KB)
+    // Enrich with tail-read metadata (parallel I/O, 8KB per file)
     await Promise.all(
       sliced.map(async (item) => {
-        item.lastActivityTime =
-          (await readLastTimestampFromJSONL(item.path)) ?? undefined;
+        const [lastTs, title] = await Promise.all([
+          readLastTimestampFromJSONL(item.path),
+          readCustomTitleFromTail(item.path),
+        ]);
+        item.lastActivityTime = lastTs ?? undefined;
+        if (title) item.customTitle = title;
+        // Decode encoded project path to human-readable form
+        if (item.project) item.project = decodeClaudeProjectPath(item.project);
       })
     );
 
