@@ -8,8 +8,8 @@ import { homedir } from 'node:os';
 /** Tail-read size in bytes — 8KB covers most last JSONL lines */
 const TAIL_READ_SIZE = 8192;
 
-/** Head-read size in bytes — 4KB covers the first few JSONL lines */
-const HEAD_READ_SIZE = 4096;
+/** Head-read size in bytes — 16KB covers first few JSONL lines (some can be >5KB with large prompts) */
+const HEAD_READ_SIZE = 16384;
 
 /**
  * Read the `cwd` field from the first few lines of a JSONL session file.

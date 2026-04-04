@@ -1,6 +1,21 @@
+import chalk from 'chalk';
 import type { LineParser } from '../agents/agent.interface.ts';
 import type { Formatter } from '../formatters/formatter.interface.ts';
 import type { ParsedLine } from '../core/types.ts';
+
+/**
+ * Build the summary gap separator.
+ * Uses ═ double-line + ↕ to visually distinguish from agent-tail's
+ * content-level truncation (`... (N lines omitted) ...` in yellow).
+ */
+function formatGapSeparator(skipped: number): string {
+  const msg =
+    skipped > 0 ? ` ↕ ${skipped} messages skipped ` : ' ↕ messages skipped ';
+  const lineLen = Math.max(0, 40 - msg.length);
+  const half = Math.floor(lineLen / 2);
+  const line = '═'.repeat(half);
+  return chalk.dim(`${line}${msg}${line}`);
+}
 
 /** Default number of head lines to show */
 const DEFAULT_HEAD_LINES = 5;
@@ -103,7 +118,7 @@ async function formatSummaryFromJSONL(
     const head = totalParsed.slice(0, headCount);
     const tail = totalParsed.slice(-tailCount);
     const skipped = totalParsed.length - headCount - tailCount;
-    return [...head, `  ... (${skipped} lines omitted) ...`, ...tail];
+    return [...head, formatGapSeparator(skipped), ...tail];
   }
 
   // Large file: parse head and tail separately
@@ -123,7 +138,7 @@ async function formatSummaryFromJSONL(
 
   if (headParsed.length === 0 && tailParsed.length === 0) return [];
 
-  return [...headParsed, '  ...', ...tailParsed];
+  return [...headParsed, formatGapSeparator(0), ...tailParsed];
 }
 
 /** JSON summary (Gemini): read entire file, parse all messages */
@@ -144,5 +159,5 @@ async function formatSummaryFromJSON(
   const head = parsed.slice(0, headCount);
   const tail = parsed.slice(-tailCount);
   const skipped = parsed.length - headCount - tailCount;
-  return [...head, `  ... (${skipped} lines omitted) ...`, ...tail];
+  return [...head, formatGapSeparator(skipped), ...tail];
 }

@@ -94,9 +94,10 @@ describe('formatSummary', () => {
     expect(result[0]).toBe('line 00');
     expect(result[1]).toBe('line 01');
     expect(result[2]).toBe('line 02');
-    // Find the separator
-    const sepIdx = result.findIndex((l) => l.includes('...'));
+    // Find the gap separator (═ double-line style)
+    const sepIdx = result.findIndex((l) => l.includes('↕'));
     expect(sepIdx).toBeGreaterThan(0);
+    expect(result[sepIdx]).toContain('messages skipped');
     // Last line should be the actual last line
     expect(result[result.length - 1]).toBe('line 29');
   });
@@ -127,7 +128,7 @@ describe('formatSummary', () => {
     // Should have head(5) + separator + tail(15) = 21
     expect(result.length).toBeLessThanOrEqual(22);
     expect(result[0]).toBe('line 0');
-    const sepIdx = result.findIndex((l) => l.includes('...'));
+    const sepIdx = result.findIndex((l) => l.includes('↕'));
     expect(sepIdx).toBeGreaterThan(0);
   });
 });
