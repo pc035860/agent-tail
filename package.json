@@ -4,14 +4,24 @@
   "type": "module",
   "license": "MIT",
   "description": "Tail agent session logs (Codex & Claude Code) in real-time",
-  "keywords": ["ai", "agent", "log", "tail", "claude", "codex", "gemini", "cli"],
+  "keywords": [
+    "ai",
+    "agent",
+    "log",
+    "tail",
+    "claude",
+    "codex",
+    "gemini",
+    "cli"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pc035860/agent-tail.git"
   },
   "homepage": "https://github.com/pc035860/agent-tail#readme",
   "bin": {
-    "agent-tail": "./bin/agent-tail"
+    "agent-tail": "./bin/agent-tail",
+    "agent-pick": "./bin/agent-pick"
   },
   "scripts": {
     "start": "bun run src/index.ts",
