@@ -64,3 +64,7 @@ Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent
 ---
 
 /auto-impl
+
+---
+
+continue
