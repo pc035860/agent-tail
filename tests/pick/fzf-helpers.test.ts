@@ -53,7 +53,7 @@ describe('buildFzfArgs', () => {
     expect(previewCmd).toContain('/path/to/agent-tail');
     expect(previewCmd).toContain('claude');
     expect(previewCmd).toContain('{1}');
-    expect(previewCmd).toContain('--no-follow');
+    expect(previewCmd).toContain('--summary');
   });
 
   test('includes --preview-window', () => {

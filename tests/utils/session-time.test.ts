@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import {
   readLastTimestampFromJSONL,
   readLastTimestampFromGeminiJSON,
+  readCwdFromHead,
 } from '../../src/utils/session-time';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -121,6 +122,80 @@ describe('readLastTimestampFromGeminiJSON', () => {
     const result = await readLastTimestampFromGeminiJSON(
       join(tempDir, 'nope.json')
     );
+    expect(result).toBeNull();
+  });
+});
+
+describe('readCwdFromHead', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'cwd-head-'));
+  });
+
+  afterEach(async () => {
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+  });
+
+  test('reads cwd from first line', async () => {
+    const filePath = join(tempDir, 'test.jsonl');
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        type: 'progress',
+        cwd: '/Users/test/code/my-project',
+        timestamp: '2026-01-01T00:00:00Z',
+      })
+    );
+
+    const result = await readCwdFromHead(filePath);
+    expect(result).toBe('/Users/test/code/my-project');
+  });
+
+  test('reads cwd from second line when first has no cwd', async () => {
+    const filePath = join(tempDir, 'test.jsonl');
+    const lines = [
+      JSON.stringify({ type: 'queue-operation', operation: 'start' }),
+      JSON.stringify({
+        type: 'progress',
+        cwd: '/Users/test/git/merp-frontend',
+      }),
+    ];
+    await writeFile(filePath, lines.join('\n'));
+
+    const result = await readCwdFromHead(filePath);
+    expect(result).toBe('/Users/test/git/merp-frontend');
+  });
+
+  test('replaces homedir with ~', async () => {
+    const { homedir } = await import('node:os');
+    const home = homedir();
+    const filePath = join(tempDir, 'test.jsonl');
+    await writeFile(
+      filePath,
+      JSON.stringify({ type: 'progress', cwd: `${home}/code/test-proj` })
+    );
+
+    const result = await readCwdFromHead(filePath);
+    expect(result).toBe('~/code/test-proj');
+  });
+
+  test('returns null for file with no cwd', async () => {
+    const filePath = join(tempDir, 'no-cwd.jsonl');
+    await writeFile(
+      filePath,
+      JSON.stringify({ type: 'user', message: 'hello' })
+    );
+
+    const result = await readCwdFromHead(filePath);
+    expect(result).toBeNull();
+  });
+
+  test('returns null for empty file', async () => {
+    const filePath = join(tempDir, 'empty.jsonl');
+    await writeFile(filePath, '');
+
+    const result = await readCwdFromHead(filePath);
     expect(result).toBeNull();
   });
 });

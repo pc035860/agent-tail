@@ -8,21 +8,44 @@ import { homedir } from 'node:os';
 /** Tail-read size in bytes — 8KB covers most last JSONL lines */
 const TAIL_READ_SIZE = 8192;
 
+/** Head-read size in bytes — 4KB covers the first few JSONL lines */
+const HEAD_READ_SIZE = 4096;
+
 /**
- * Decode Claude's encoded project path to a human-readable path.
- * Claude encodes `/Users/foo/code/bar` as `-Users-foo-code-bar`.
- * We decode it back and replace homedir with `~`.
+ * Read the `cwd` field from the first few lines of a JSONL session file.
+ * Claude sessions have `cwd` in early lines (usually line 1 or 2).
+ * Replaces homedir with `~` for display.
  */
-export function decodeClaudeProjectPath(encoded: string): string {
-  // Encoded format: leading `-` = `/`, internal `-` = `/`
-  // But this is lossy — we can't distinguish `-` that was `/` from literal `-`.
-  // Best effort: replace leading `-` with `/`, then all `-` with `/`
-  const decoded = encoded.replace(/^-/, '/').replace(/-/g, '/');
-  const home = homedir();
-  if (decoded.startsWith(home)) {
-    return '~' + decoded.slice(home.length);
+export async function readCwdFromHead(
+  filePath: string
+): Promise<string | null> {
+  try {
+    const file = Bun.file(filePath);
+    const size = file.size;
+    if (size === 0) return null;
+
+    const head = file.slice(0, Math.min(size, HEAD_READ_SIZE));
+    const text = await head.text();
+    const lines = text.split('\n').filter(Boolean);
+
+    for (const line of lines) {
+      try {
+        const data = JSON.parse(line);
+        if (data.cwd && typeof data.cwd === 'string') {
+          const home = homedir();
+          if (data.cwd.startsWith(home)) {
+            return '~' + data.cwd.slice(home.length);
+          }
+          return data.cwd;
+        }
+      } catch {
+        // Skip malformed JSON
+      }
+    }
+  } catch {
+    // File read error
   }
-  return decoded;
+  return null;
 }
 
 /**

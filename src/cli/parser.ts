@@ -62,7 +62,8 @@ function createProgram(): Command {
       'Claude/Codex/Cursor: auto-open tmux pane for each new subagent'
     )
     .option('--no-pane', 'Disable pane auto-open (default)')
-    .option('-l, --list', 'List recent sessions instead of tailing');
+    .option('-l, --list', 'List recent sessions instead of tailing')
+    .option('--summary', 'Show session summary (first lines + last lines)');
 
   return program;
 }
@@ -87,6 +88,15 @@ export function parseArgs(args: string[]): CliOptions {
   ) {
     console.error(
       `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", or "cursor".`
+    );
+    process.exit(1);
+  }
+
+  // --summary 模式（自動 no-follow，互斥同 --list）
+  const finalSummary = opts.summary ?? false;
+  if (finalSummary && opts.list) {
+    console.error(
+      'Error: --summary and --list options cannot be used together.'
     );
     process.exit(1);
   }
@@ -173,7 +183,7 @@ export function parseArgs(args: string[]): CliOptions {
 
   // 將 undefined 轉換為 false（對於非 preset 選項）
   let finalFollow = opts.follow;
-  if (finalList) finalFollow = false;
+  if (finalList || finalSummary) finalFollow = false;
   const finalVerbose = opts.verbose ?? false;
   const finalInteractive = opts.interactive ?? false;
   let finalWithSubagents = opts.withSubagents ?? false;
@@ -297,5 +307,6 @@ export function parseArgs(args: string[]): CliOptions {
     pane: finalPane,
     sessionId: sessionIdArg,
     list: finalList,
+    summary: finalSummary,
   };
 }

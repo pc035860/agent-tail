@@ -88,6 +88,54 @@ function logSessionMeta(sessionFile: SessionFile, quiet: boolean): void {
 }
 
 /**
+ * --summary 模式：顯示 session 前段 + 後段摘要
+ */
+async function summaryCommand(
+  agent: Agent,
+  options: CliOptions,
+  formatter: Formatter
+): Promise<void> {
+  const { formatSummary } = await import('./list/summary.ts');
+
+  // Find the session (reuse existing logic)
+  let sessionFile: SessionFile | null = null;
+
+  if (options.sessionId) {
+    const finder = agent.finder;
+    if (finder.findBySessionId) {
+      const result = await finder.findBySessionId(options.sessionId, {
+        project: options.project,
+      });
+      if (result && 'main' in result) {
+        sessionFile = result.main;
+      } else {
+        sessionFile = result as SessionFile | null;
+      }
+    }
+  } else {
+    sessionFile = await agent.finder.findLatest({
+      project: options.project,
+    });
+  }
+
+  if (!sessionFile) {
+    console.error(chalk.red(`No ${options.agentType} session found`));
+    process.exit(1);
+  }
+
+  const jsonMode = options.agentType === 'gemini';
+  const lines = await formatSummary(sessionFile.path, agent.parser, formatter, {
+    headLines: 5,
+    tailLines: options.lines ?? 15,
+    jsonMode,
+  });
+
+  for (const line of lines) {
+    console.log(line);
+  }
+}
+
+/**
  * --list 模式：列出 session 並退出
  */
 async function listCommand(agent: Agent, options: CliOptions): Promise<void> {
@@ -148,6 +196,12 @@ async function main(): Promise<void> {
   const formatter: Formatter = options.raw
     ? new RawFormatter()
     : new PrettyFormatter();
+
+  // --summary 模式：顯示 session 前段 + 後段摘要後退出
+  if (options.summary) {
+    await summaryCommand(agent, options, formatter);
+    return;
+  }
 
   // 找到目標 session 檔案
   let sessionFile: SessionFile | null = null;

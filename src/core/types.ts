@@ -30,6 +30,8 @@ export interface CliOptions {
   pane: boolean;
   /** List recent sessions instead of tailing */
   list: boolean;
+  /** Show session summary (first N + last M lines) */
+  summary: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
 }

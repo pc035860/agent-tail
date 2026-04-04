@@ -86,21 +86,25 @@ describe('ClaudeSessionFinder.listSessions', () => {
     expect(result[0]!.shortId).toBe('abcdef12');
   });
 
-  test('decodes project path from directory name', async () => {
+  test('reads project path (cwd) from session content', async () => {
     const projectDir = join(tempDir, '-Users-test-code-my-project');
     await mkdir(projectDir, { recursive: true });
+    // Session with cwd in first line (use /opt path to avoid homedir collision)
+    const content = JSON.stringify({
+      type: 'progress',
+      cwd: '/opt/test-workspace/my-project',
+      timestamp: '2026-01-01T00:00:00Z',
+    });
     await writeFile(
       join(projectDir, 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee.jsonl'),
-      '{}'
+      content
     );
 
     const result = await finder.listSessions!({});
 
     expect(result).toHaveLength(1);
-    // Decoded from encoded path: `-Users-test-code-my-project` → `/Users/test/code/my/project`
-    // (lossy decode — dashes become slashes)
-    expect(result[0]!.project).toContain('/');
-    expect(result[0]!.project).not.toStartWith('-');
+    // Read from session content, not decoded from dir name
+    expect(result[0]!.project).toBe('/opt/test-workspace/my-project');
   });
 
   test('populates customTitle from session content via tail-read', async () => {

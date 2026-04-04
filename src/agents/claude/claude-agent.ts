@@ -20,7 +20,7 @@ import { readCustomTitle } from '../../claude/custom-title.ts';
 import {
   readLastTimestampFromJSONL,
   readCustomTitleFromTail,
-  decodeClaudeProjectPath,
+  readCwdFromHead,
 } from '../../utils/session-time.ts';
 
 /** JSONL event type for Claude /rename command */
@@ -127,8 +127,9 @@ class ClaudeSessionFinder implements SessionFinder {
         ]);
         item.lastActivityTime = lastTs ?? undefined;
         if (title) item.customTitle = title;
-        // Decode encoded project path to human-readable form
-        if (item.project) item.project = decodeClaudeProjectPath(item.project);
+        // Read real cwd from session content (replaces lossy path decode)
+        const cwd = await readCwdFromHead(item.path);
+        if (cwd) item.project = cwd;
       })
     );
 

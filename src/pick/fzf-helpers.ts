@@ -37,15 +37,8 @@ export function buildFzfArgs(config: {
   if (limit) listParts.push('-n', String(limit));
   const listCmd = listParts.map((p) => `"${p}"`).join(' ');
 
-  // Build the preview command (include -p for project-scoped preview)
-  const previewParts = [
-    agentTailPath,
-    agentType,
-    '{1}',
-    '--no-follow',
-    '-n',
-    '20',
-  ];
+  // Preview uses --summary for head+tail view (first 5 + last 15 lines)
+  const previewParts = [agentTailPath, agentType, '{1}', '--summary'];
   if (project) previewParts.push('-p', project);
   const previewCmd = previewParts.join(' ');
 
