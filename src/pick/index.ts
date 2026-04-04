@@ -7,7 +7,7 @@
 import { parseArgs } from '../cli/parser.ts';
 import {
   checkFzfAvailable,
-  buildFzfArgs,
+  buildShellCommand,
   parseSelection,
   resolveAgentTailPath,
 } from './fzf-helpers.ts';
@@ -57,21 +57,17 @@ async function main(): Promise<void> {
     process.exit(await proc.exited);
   }
 
-  const listProc = Bun.spawn(listArgs, {
-    stdout: 'pipe',
-    stderr: 'inherit',
-    env: { ...process.env, FORCE_COLOR: '1' },
-  });
-
-  const fzfArgs = buildFzfArgs({
+  // Use shell pipe so fzf gets proper TTY access for keyboard input.
+  // Bun.spawn pipe chaining doesn't pass TTY to fzf correctly.
+  const shellCmd = buildShellCommand({
     agentType: options.agentType,
     agentTailPath,
     project: options.project,
     limit: options.lines,
   });
 
-  const fzfProc = Bun.spawn(['fzf', ...fzfArgs], {
-    stdin: listProc.stdout,
+  const fzfProc = Bun.spawn(['sh', '-c', shellCmd], {
+    stdin: 'inherit',
     stdout: 'pipe',
     stderr: 'inherit',
   });
