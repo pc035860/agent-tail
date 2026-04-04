@@ -126,6 +126,22 @@ agent-tail claude --list -n 10
 - 與 `--raw`、`--json` 等選項風格一致
 - 不引入 `browse`/`pick` 等新概念
 
+#### ~~Phase 1~~ ✅ 已完成（2026-04-04）
+
+實作內容：
+- `--list` / `-l` CLI 選項，tab-separated 輸出
+- `SessionListItem extends SessionFile` 介面
+- 所有 4 個 agent 的 `listSessions()` 方法
+- `formatRelativeTime()` + `formatSessionList()` 格式化工具
+- `agent-pick` 啟動器（fzf 整合 + graceful fallback）
+- `listCommand()` 在 `index.ts` 的入口接線
+- 112 個新測試（全部通過）
+
+偏離原始規劃：
+- 新增了 `agent-pick` 獨立啟動器（brainstorm 後討論決定用獨立 script 而非內建 TUI）
+- `customTitle` 未在 list 輸出中顯示（效能考量，延後到 Phase 2）
+- 未實作 `--json` 輸出（tab-separated 已足夠供 fzf 使用）
+
 #### Phase 2 — 互動式選擇器（4-6 小時，需求驗證後）
 > 內建簡易選擇器，不依賴外部工具
 
