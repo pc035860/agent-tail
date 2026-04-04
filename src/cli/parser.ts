@@ -61,7 +61,8 @@ function createProgram(): Command {
       '--pane',
       'Claude/Codex/Cursor: auto-open tmux pane for each new subagent'
     )
-    .option('--no-pane', 'Disable pane auto-open (default)');
+    .option('--no-pane', 'Disable pane auto-open (default)')
+    .option('-l, --list', 'List recent sessions instead of tailing');
 
   return program;
 }
@@ -88,6 +89,53 @@ export function parseArgs(args: string[]): CliOptions {
       `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", or "cursor".`
     );
     process.exit(1);
+  }
+
+  // --list 互斥驗證（最廣泛的排除，放在最前面）
+  const finalList = opts.list ?? false;
+  if (finalList) {
+    if (opts.interactive) {
+      console.error(
+        'Error: --list and --interactive options cannot be used together.'
+      );
+      process.exit(1);
+    }
+    if (opts.subagent !== undefined) {
+      console.error(
+        'Error: --list and --subagent options cannot be used together.'
+      );
+      process.exit(1);
+    }
+    if (opts.raw) {
+      console.error('Error: --list and --raw options cannot be used together.');
+      process.exit(1);
+    }
+    if (opts.all) {
+      console.error('Error: --list and --all options cannot be used together.');
+      process.exit(1);
+    }
+    if (sessionIdArg !== undefined) {
+      console.error('Error: --list cannot be used with a session ID argument.');
+      process.exit(1);
+    }
+    if (opts.pane) {
+      console.error(
+        'Error: --list and --pane options cannot be used together.'
+      );
+      process.exit(1);
+    }
+    if (opts.withSubagents) {
+      console.error(
+        'Error: --list and --with-subagents options cannot be used together.'
+      );
+      process.exit(1);
+    }
+    if (opts.autoSwitch) {
+      console.error(
+        'Error: --list and --auto-switch options cannot be used together.'
+      );
+      process.exit(1);
+    }
   }
 
   // subagent 選項對 claude、codex、cursor 有效
@@ -124,6 +172,8 @@ export function parseArgs(args: string[]): CliOptions {
   }
 
   // 將 undefined 轉換為 false（對於非 preset 選項）
+  let finalFollow = opts.follow;
+  if (finalList) finalFollow = false;
   const finalVerbose = opts.verbose ?? false;
   const finalInteractive = opts.interactive ?? false;
   let finalWithSubagents = opts.withSubagents ?? false;
@@ -235,7 +285,7 @@ export function parseArgs(args: string[]): CliOptions {
     agentType: agentTypeArg as AgentType,
     raw: opts.raw,
     project: opts.project,
-    follow: opts.follow,
+    follow: finalFollow,
     verbose: finalVerbose,
     quiet: opts.quiet ?? false,
     sleepInterval: opts.sleepInterval ?? 500,
@@ -246,5 +296,6 @@ export function parseArgs(args: string[]): CliOptions {
     autoSwitch: finalAutoSwitch,
     pane: finalPane,
     sessionId: sessionIdArg,
+    list: finalList,
   };
 }
