@@ -35,7 +35,7 @@ export function buildFzfArgs(config: {
   const listParts = [agentTailPath, agentType, '--list'];
   if (project) listParts.push('-p', project);
   if (limit) listParts.push('-n', String(limit));
-  const listCmd = listParts.map((p) => `"${p}"`).join(' ');
+  const listCmd = 'FORCE_COLOR=1 ' + listParts.map((p) => `"${p}"`).join(' ');
 
   // Preview uses --summary for head+tail view (first 5 + last 15 lines)
   const previewParts = [agentTailPath, agentType, '{1}', '--summary'];
