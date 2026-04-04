@@ -79,6 +79,8 @@ export interface SessionListItem extends SessionFile {
   shortId: string;
   /** 專案識別（decoded path, cwd, slug, dir name） */
   project?: string;
+  /** 最後活動時間（從 session 內容讀取，比 file mtime 更準確） */
+  lastActivityTime?: Date;
 }
 
 /**

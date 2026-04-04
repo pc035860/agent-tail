@@ -43,7 +43,12 @@ async function main(): Promise<void> {
 
   const options = parseArgs(['node', 'agent-tail', ...rawArgs, '--list']);
   const agentTailPath = resolveAgentTailPath();
-  const listArgs = buildListArgs(agentTailPath, agentType, options);
+  // Use larger limit for fzf browsing (default 20 is too few for interactive search)
+  const listLimit = options.lines ?? 200;
+  const listArgs = buildListArgs(agentTailPath, agentType, {
+    ...options,
+    lines: listLimit,
+  });
 
   if (!checkFzfAvailable()) {
     console.error(

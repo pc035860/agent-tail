@@ -45,7 +45,7 @@ export function formatSessionList(
 
     return [
       item.shortId,
-      formatRelativeTime(item.mtime),
+      formatRelativeTime(item.lastActivityTime ?? item.mtime),
       agentStr,
       item.project ?? '',
     ].join('\t');

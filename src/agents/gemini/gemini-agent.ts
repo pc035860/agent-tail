@@ -12,6 +12,7 @@ import type {
 } from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
+import { readLastTimestampFromGeminiJSON } from '../../utils/session-time.ts';
 
 /**
  * Gemini CLI Session Finder
@@ -91,7 +92,22 @@ class GeminiSessionFinder implements SessionFinder {
   }): Promise<SessionListItem[]> {
     const files = await this._collectSessions(options);
     const limit = options.limit ?? 20;
-    return files.slice(0, limit);
+    const sliced = files.slice(0, limit);
+
+    await Promise.all(
+      sliced.map(async (item) => {
+        item.lastActivityTime =
+          (await readLastTimestampFromGeminiJSON(item.path)) ?? undefined;
+      })
+    );
+
+    sliced.sort((a, b) => {
+      const ta = (a.lastActivityTime ?? a.mtime).getTime();
+      const tb = (b.lastActivityTime ?? b.mtime).getTime();
+      return tb - ta;
+    });
+
+    return sliced;
   }
 
   /**

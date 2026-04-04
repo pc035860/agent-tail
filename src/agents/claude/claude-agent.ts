@@ -17,6 +17,7 @@ import {
 } from '../../utils/text.ts';
 import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
 import { readCustomTitle } from '../../claude/custom-title.ts';
+import { readLastTimestampFromJSONL } from '../../utils/session-time.ts';
 
 /** JSONL event type for Claude /rename command */
 const CUSTOM_TITLE_TYPE = 'custom-title';
@@ -111,7 +112,24 @@ class ClaudeSessionFinder implements SessionFinder {
   }): Promise<SessionListItem[]> {
     const files = await this._collectMainSessions(options);
     const limit = options.limit ?? 20;
-    return files.slice(0, limit);
+    const sliced = files.slice(0, limit);
+
+    // Read last activity timestamp from session content (tail-read, 8KB)
+    await Promise.all(
+      sliced.map(async (item) => {
+        item.lastActivityTime =
+          (await readLastTimestampFromJSONL(item.path)) ?? undefined;
+      })
+    );
+
+    // Re-sort by lastActivityTime (more accurate than mtime)
+    sliced.sort((a, b) => {
+      const ta = (a.lastActivityTime ?? a.mtime).getTime();
+      const tb = (b.lastActivityTime ?? b.mtime).getTime();
+      return tb - ta;
+    });
+
+    return sliced;
   }
 
   /**
