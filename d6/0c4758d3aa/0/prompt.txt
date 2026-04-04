@@ -810,3 +810,359 @@ ok
 ---
 
 先記到 @specs/brainstorm/ 下好了，晚點再做
+
+---
+
+range: last 6 commit changes
+- run simplify skill\
+- run review-loop skill (codex)\
+- run patch-claudemd skill\
+- run commit skill (with `--auto`)
+
+---
+
+range: last 6 commit changes
+
+add to tasklist
+- run simplify skill\
+- run review-loop skill (codex)\
+- run patch-claudemd skill\
+- run commit skill (with `--auto`)
+
+---
+
+<task-notification>
+<task-id>abf4e311fb212294b</task-id>
+<tool-use-id>toolu_0123n7A2sm243tkamsW69gbM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/abf4e311fb212294b.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review last 6 commits" completed</summary>
+<result>Perfect. Now I have a clear picture of the issues. Let me create a comprehensive report:
+
+## 程式碼品質審查：agent-tail 最後 6 次 commit
+
+### 關鍵問題
+
+#### 1. **Copy-Paste: Priority 匹配邏輯重複** [Critical]
+- **claude-agent.ts:321-327** 和 **:390-395**：完全相同的 priority 計算 (exact=3, prefix=2, includes=1)
+- **codex-agent.ts:187-206**：同樣邏輯，分成 2 塊
+- **gemini-agent.ts:156-174**：重複兩次
+- **cursor-agent.ts:257-269**：變體
+
+**建議**：提取共用函數
+```typescript
+function calculatePriority(normalizedId: string, searchTerm: string): number {
+  if (normalizedId === searchTerm) return 3;
+  if (normalizedId.startsWith(searchTerm)) return 2;
+  if (normalizedId.includes(searchTerm)) return 1;
+  return 0;
+}
+```
+
+---
+
+#### 2. **Copy-Paste: Project Filter 重複** [Medium]
+- **claude-agent.ts:71-73, 312-314, 383-385** 重複三次
+- **codex-agent.ts:80-82, 164-166** 重複兩次
+- **gemini-agent.ts:47-49, 139-141** 重複兩次
+- **cursor-agent.ts:390** 變體
+
+模式完全相同：
+```typescript
+if (options.project) {
+  const pattern = options.project.toLowerCase();
+  if (!file.toLowerCase().includes(pattern)) continue;
+}
+```
+
+**建議**：提取成共用函數或寧可在 glob 層級過濾
+
+---
+
+#### 3. **Stringly-Typed Magic Numbers** [Medium]
+- **claude-agent.ts:322, 324, 326** 硬編碼優先級常數 (3, 2, 1)
+- **codex-agent.ts:188, 190, 192** 和 **200, 202, 204** 重複各兩次
+- **gemini-agent.ts:157, 159, 161** 和 **168, 170, 172** 重複各兩次
+
+**建議**：定義列舉
+```typescript
+enum MatchPriority {
+  EXACT = 3,
+  PREFIX = 2,
+  CONTAINS = 1,
+  NONE = 0,
+}
+```
+
+---
+
+#### 4. **Parameter Sprawl: listSessions 選項物件** [Low-Medium]
+- **claude-agent.ts:113-116**、**codex-agent.ts:116-120**、**gemini-agent.ts:89-93**：都有相同簽名
+```typescript
+listSessions(options: { project?: string; limit?: number })
+```
+這三行重複在每個 agent 中，沒有定義共用介面
+
+**建議**：在 `agent.interface.ts` 定義：
+```typescript
+interface ListSessionsOptions {
+  project?: string;
+  limit?: number;
+}
+```
+
+---
+
+#### 5. **Leaky Abstraction: Session 收集邏輯分散** [Medium]
+- `_collectMainSessions()` / `_collectSessions()` 為私有，每個 agent 都有自己的實現
+- Glob pattern、檔名驗證、priority 排序分散在各處
+- `findBySessionId` / `findSubagent` 都重新發明輪子
+
+**建議**：建立共用 `SessionCollector` 或 base class 以減少複製
+
+---
+
+#### 6. **Redundant State: parseAndFormat 的 guard 迴圈** [Low]
+- **summary.ts:76-82**：`guard < 100` 算數迴圈，可用 `for` 迴圈改寫
+```typescript
+// 改用 for 迴圈會更清楚
+for (let guard = 0; guard < 100; guard++) {
+  const result = parser.parse(line);
+  if (!result) break;
+  // ...
+}
+```
+
+---
+
+#### 7. **Unnecessary Comments: 過度註解** [Low]
+- **claude-agent.ts** 所有註解都是Traditional Chinese，但代碼本身已清晰
+  - Line 70: `// 排除 agent-* 開頭的檔案` —— `filename.startsWith('agent-')` 已足夠清晰
+  - Line 78: `// 從路徑提取專案名` —— `parts[projectIdx]` 邏輯可命名變數改善
+- **summary.ts:13-14** 的註解只複述代碼
+  - Line 125: `// For small files where head and tail overlap` —— 註解 vs. 邏輯重複
+
+**建議**：改用有意義的變數名替代註解
+```typescript
+// 改善前
+const projectIdx = parts.indexOf(filename) - 1;
+const project = projectIdx >= 0 ? parts[projectIdx] : undefined;
+
+// 改善後
+const filenameIndex = parts.indexOf(filename);
+const projectDirIndex = filenameIndex - 1;
+const project = projectDirIndex >= 0 ? parts[projectDirIndex] : undefined;
+```
+
+---
+
+#### 8. **Missing Validation: parseSelection 邊界檢查** [Low]
+- **fzf-helpers.ts:76-82**：`parseSelection` 不驗證 tab 分隔符的數量
+```typescript
+const shortId = trimmed.split('\t')[0];
+return shortId || null;  // 空字串檢查不足
+```
+
+**建議**：
+```typescript
+const fields = trimmed.split('\t');
+const shortId = fields[0]?.trim();
+return shortId && shortId.length > 0 ? shortId : null;
+```
+
+---
+
+#### 9. **Inconsistent Error Handling** [Low]
+- **claude-agent.ts** 所有 catch 都是空註解 `// 忽略無法讀取的檔案`
+- **gemini-agent.ts:181-183** 相同模式
+- 沒有任何日誌或計數，難以偵錯
+
+**建議**：最少記錄錯誤計數或 debug 模式
+
+---
+
+#### 10. **Reference Issue: Closure over stat.mtime** [Low]
+- **claude-agent.ts:127-134**：使用 `Promise.all` 並行讀取，但共用 `item` reference
+```typescript
+sliced.map(async (item) => {
+  const [lastTs, title] = await Promise.all([...]);
+  item.lastActivityTime = lastTs ?? undefined;  // 直接修改傳入物件
+})
+```
+雖然在此場景安全，但不符合函數式風格；建議回傳新物件
+
+---
+
+### 提案修復優先順序
+1. **Priority 匹配邏輯提取** → 消除 10+ 行重複
+2. **Project filter 提取** → 消除 6+ 線重複
+3. **Magic number → enum** → 改善可維護性
+4. **ListSessionsOptions 定義** → 型別安全
+5. **Comment cleanup** → 改用有意義變數名
+
+### 文件位置參考
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/codex/codex-agent.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/gemini/gemini-agent.ts`
+- `/Users/pc035860/code/agent-tail/src/list/summary.ts`
+- `/Users/pc035860/code/agent-tail/src/pick/fzf-helpers.ts`</result>
+<usage><total_tokens>56413</total_tokens><tool_uses>14</tool_uses><duration_ms>32237</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/abf4e311fb212294b.output
+
+---
+
+<task-notification>
+<task-id>af7e723691a79f177</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/af7e723691a79f177.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review last 6 commits" completed</summary>
+<result>Excellent! I now have everything I need. Let me create my efficiency review:
+
+## 🔴 Efficiency Review: Last 6 Commits
+
+### CRITICAL & HIGH-SEVERITY ISSUES
+
+**[src/agents/claude/claude-agent.ts:131]** — Sequential file read in parallel block
+```
+// Current (line 131):
+const cwd = await readCwdFromHead(item.path);  // ❌ SEQUENTIAL
+
+// Should be:
+const [lastTs, title, cwd] = await Promise.all([
+  readLastTimestampFromJSONL(item.path),
+  readCustomTitleFromTail(item.path),
+  readCwdFromHead(item.path),
+]);
+```
+**Issue:** Line 124-126 are in `Promise.all()`, but line 131 performs a sequential `await` *after* that block exits. This blocks on 3 file reads per item (I/O waits serially instead of in parallel). For 20 sessions: ~60 I/O waits instead of 20. 
+
+**Suggestion:** Merge all three reads into single `Promise.all()` to parallelize the cwd read with timestamp and title reads.
+
+---
+
+**[src/list/summary.ts:101–111]** — Triple read on small files
+```
+// Current:
+const headText = await file.slice(0, CHUNK_SIZE).text();  // Read 1
+const tailText = await file.slice(start, size).text();    // Read 2
+if (size <= CHUNK_SIZE * 2) {
+  const fullText = await file.text();                    // Read 3 ❌
+```
+**Issue:** For files ≤32KB, you read head+tail (2×), then read entire file (3×). Wastes 3 I/O ops when you only need 1.
+
+**Suggestion:** 
+```typescript
+if (size <= CHUNK_SIZE * 2) {
+  const fullText = headText.includes('\n' + tailText.split('\n')[0]!) 
+    ? headText + tailText.slice(tailText.indexOf('\n')) 
+    : await file.text();
+  // or simpler: early-exit before reading head+tail
+}
+```
+Or restructure: check size *before* reading chunks, then either read full or head+tail.
+
+---
+
+**[src/list/summary.ts:95–107]** — Sequential reads (head then tail)
+```
+// Current:
+const headText = await file.slice(0, CHUNK_SIZE).text();
+const tailText = await file.slice(start, size).text();  // ❌ Waits for head
+```
+**Issue:** Tail read waits for head I/O to complete, even though they're independent.
+
+**Suggestion:** Parallelize:
+```typescript
+const [headText, tailText] = await Promise.all([
+  file.slice(0, Math.min(size, CHUNK_SIZE)).text(),
+  file.slice(Math.max(0, size - CHUNK_SIZE), size).text(),
+]);
+```
+
+---
+
+**[src/utils/session-time.ts:18–54]** — Early chunk sizes too conservative
+```
+// Current:
+const CHUNK_SIZES = [16384, 65536, 262144]; // 16KB, 64KB, 256KB
+// But line 29: if (chunkSize > size * 2 && chunkSize !== CHUNK_SIZES[0]) break;
+```
+**Issue:** Break condition is buggy—allows CHUNK_SIZES[0] (16KB) even when file is tiny. Also, comment says "30+ file-history-snapshot lines (60KB+)", but largest chunk tried is 256KB. For real 60KB+ sessions, only 3 reads max, but many sessions may need all 3 attempts.
+
+**Suggestion:** Either cap at observed max (~256KB is reasonable) or skip break logic if size is truly tiny. The early-exit on line 29 saves 1-2 reads for very small files.
+
+---
+
+**[src/pick/index.ts:68–75]** — Good pattern, but sequential confirmation
+```
+// Current (lines 69–75):
+const listProc = Bun.spawn(listArgs, { stdout: 'pipe' });
+const listOutput = await new Response(listProc.stdout).text();
+await listProc.exited;  // ❌ Wait for process + read output is inherently sequential
+```
+**Issue:** You're already avoiding the TTY race (good!), but `Response.body` drain + `exited` is sequential. Minimal real-world cost (small list), but mentioned as a pattern to note.
+
+---
+
+### MEDIUM-SEVERITY ISSUES
+
+**[src/list/summary.ts:132–138]** — Parser state not properly isolated
+```
+// Current:
+const tailParsed = parseAndFormat(
+  allTailLines.slice(-(tailCount * 3)),
+  parser,  // ❌ Same parser instance from earlier parseAndFormat call
+  formatter
+).slice(-tailCount);
+```
+**Issue:** Comment admits "We can't reset parser"—but Claude parser carries state. First `parseAndFormat` (line 126) leaves parser in unknown state, then tail parse uses same parser. Results may be garbage.
+
+**Suggestion:** Create separate fresh parser for tail:
+```typescript
+const tailParser = new ClaudeLineParser(options);
+const tailParsed = parseAndFormat(
+  allTailLines.slice(-(tailCount * 3)),
+  tailParser,
+  formatter
+).slice(-tailCount);
+```
+
+---
+
+**[src/utils/session-time.ts:29]** — Break logic side effects
+```typescript
+if (chunkSize > size * 2 && chunkSize !== CHUNK_SIZES[0]) break;
+```
+**Issue:** Allows CHUNK_SIZES[0] always, even if unnecessary. For 1KB file, still tries 16KB chunk. Not wrong, but inconsistent with intent.
+
+**Suggestion:**
+```typescript
+if (chunkSize > size) break; // Skip chunks larger than file
+```
+
+---
+
+### LOW-SEVERITY OBSERVATIONS
+
+- **[src/agents/claude/claude-agent.ts:104]** — `findLatest` still uses `readCustomTitle` (full-file read), not `readCustomTitleFromTail` (8KB). Inconsistent with `listSessions` optimization. Consider unifying.
+
+- **[src/list/summary.ts:142]** — Gap separator always returns 5 lines (`['', '', separator, '', '']`). This adds visual padding for all large files, even single-line separators (when `skipped === 0`). May be intentional, but worth documenting.
+
+---
+
+### Summary Table
+
+| File | Line(s) | Severity | Impact | Type |
+|------|---------|----------|--------|------|
+| claude-agent.ts | 131 | **CRITICAL** | 3× I/O wait per session | Sequential await in parallel block |
+| summary.ts | 101–111 | **CRITICAL** | 3× reads on ≤32KB files | Wasted triple read |
+| summary.ts | 95–107 | **HIGH** | 50% slowdown on I/O | Sequential head→tail reads |
+| session-time.ts | 18–54 | **HIGH** | ~33% extra reads (avg case) | Conservative chunk sizing |
+| summary.ts | 132–138 | **MEDIUM** | Silent data corruption risk | Parser state leak |
+| session-time.ts | 29 | **MEDIUM** | Unnecessary I/O on tiny files | Inconsistent break logic |
+| claude-agent.ts | 104 | **LOW** | Inconsistent API | Mixed tail-read vs full-read |</result>
+<usage><total_tokens>37673</total_tokens><tool_uses>14</tool_uses><duration_ms>39697</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/af7e723691a79f177.output
