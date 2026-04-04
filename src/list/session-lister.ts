@@ -40,7 +40,7 @@ export function formatSessionList(
 ): string[] {
   return items.map((item) => {
     const agentStr = options.color
-      ? (AGENT_COLORS[item.agentType] ?? ((s: string) => s))(item.agentType)
+      ? AGENT_COLORS[item.agentType](item.agentType)
       : item.agentType;
 
     return [

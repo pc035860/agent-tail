@@ -94,11 +94,40 @@ class CursorSessionFinder implements SessionFinder {
   }
 
   async findLatest(options: { project?: string }): Promise<SessionFile | null> {
-    const files = await this._collectMainSessions(options);
-    if (files.length === 0) return null;
+    // Use rolling-max (O(1) memory) instead of full collect+sort
+    const glob = new Glob('*/agent-transcripts/*/*.jsonl');
+    let latest: { path: string; mtime: Date } | null = null;
+    const workspacePathCache = new Map<string, string | null>();
+
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
+      if (file.includes('/subagents/')) continue;
+
+      if (options.project) {
+        const matched = await this._matchProject(
+          file,
+          options.project,
+          workspacePathCache
+        );
+        if (!matched) continue;
+      }
+
+      try {
+        const stats = await stat(file);
+        if (!latest || stats.mtime > latest.mtime) {
+          latest = { path: file, mtime: stats.mtime };
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+
+    if (!latest) return null;
     return {
-      path: files[0]!.path,
-      mtime: files[0]!.mtime,
+      path: latest.path,
+      mtime: latest.mtime,
       agentType: 'cursor',
     };
   }
