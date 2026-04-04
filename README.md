@@ -4,7 +4,7 @@ Real-time log viewer for AI coding assistants. See what your AI is thinking and 
 
 ## What is this?
 
-When you use AI coding assistants like **Claude Code**, **Codex**, or **Gemini CLI**, they create session logs that record every conversation and action. These logs are stored in hidden folders and are hard to read.
+When you use AI coding assistants like **Claude Code**, **Codex**, **Gemini CLI**, or **Cursor**, they create session logs that record every conversation and action. These logs are stored in hidden folders and are hard to read.
 
 **agent-tail** makes it easy to watch these logs in real-time, just like `tail -f` for regular log files. This helps you:
 
@@ -57,11 +57,29 @@ bun start codex
 # Watch Gemini CLI logs
 bun start gemini
 
+# Watch Cursor logs
+bun start cursor
+
 # Load a specific session by ID (partial match)
 bun start claude abc123
 ```
 
 That's it! You'll see a live stream of the AI's activity.
+
+### Browse Past Sessions
+
+List recent sessions and optionally browse them interactively with [fzf](https://github.com/junegunn/fzf):
+
+```bash
+# List recent sessions
+agent-tail claude --list
+
+# Interactive browser with preview (requires fzf)
+agent-pick claude
+
+# Filter by project
+agent-pick codex -p myproject
+```
 
 ## Examples
 
@@ -119,9 +137,9 @@ Don't follow new changes, just show what's already logged:
 bun start claude --no-follow
 ```
 
-## Subagent Features (Claude & Codex)
+## Subagent Features (Claude, Codex & Cursor)
 
-Claude Code and Codex support monitoring subagents (background tasks spawned by the main session).
+Claude Code, Codex, and Cursor support monitoring subagents (background tasks spawned by the main session).
 
 ### Watch Subagents
 
@@ -129,10 +147,12 @@ Claude Code and Codex support monitoring subagents (background tasks spawned by 
 # Watch the latest subagent
 bun start claude --subagent
 bun start codex --subagent
+bun start cursor --subagent
 
 # Watch a specific subagent by ID
 bun start claude --subagent abc123
-bun start codex --subagent 019cc375-5af5-7ed1-9ff8-8a5757d815d1
+bun start codex --subagent
+bun start cursor --subagent 019cc375-5af5-7ed1-9ff8-8a5757d815d1
 ```
 
 ### Interactive Mode
@@ -143,6 +163,7 @@ Switch between main session and subagents in real-time:
 # Start interactive mode
 bun start claude -i
 bun start codex -i
+bun start cursor -i
 
 # Press Tab to cycle through sessions
 # Status line shows current session and available sessions
@@ -158,6 +179,7 @@ Show both main session and subagent outputs together (sorted by time):
 # Include all subagent content in output
 bun start claude --with-subagents
 bun start codex --with-subagents
+bun start cursor --with-subagents
 ```
 
 ### Auto-Switch Mode
@@ -169,13 +191,14 @@ Automatically switch to the latest main session when new sessions start in the s
 bun start claude --auto-switch    # project-based
 bun start codex --auto-switch     # cwd-based (with cache)
 bun start gemini --auto-switch    # .project_root based
+bun start cursor --auto-switch    # workspace-slug based
 
 # The session will automatically switch when:
 # - A new main session starts in the same project
 # - Switch occurs after a 5-second delay to avoid instant switching
 ```
 
-> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined.
+> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined. Supported for Claude, Codex, Gemini, and Cursor.
 
 ### Tmux Pane Mode
 
@@ -185,6 +208,7 @@ Automatically open a tmux pane for each new subagent, showing its output in a se
 # Auto-open tmux pane per subagent
 bun start claude --pane
 bun start codex --pane
+bun start cursor --pane
 ```
 
 > **Note:** Requires tmux environment. Cannot be combined with `--interactive` or `--subagent`. Automatically enables `--with-subagents`. Maximum 6 concurrent panes.
@@ -218,22 +242,23 @@ Negation flags override the preset, giving you fine-grained control while keepin
 | `--quiet` | `-q` | Suppress non-error output messages |
 | `--no-quiet` | | Show informational messages (default) |
 | `--sleep-interval <ms>` | `-s` | Set file polling interval (100-60000ms, default: 500) |
-| `--lines <number>` | `-n` | Number of initial lines to show per file (default: all) |
-| `--subagent [id]` | | Claude/Codex: tail subagent log (latest if no ID) |
-| `--interactive` | `-i` | Claude/Codex: interactive mode with Tab to switch sessions |
+| `--lines <number>` | `-n` | Number of initial lines to show per file (default: all). In `--list` mode: number of sessions |
+| `--list` | `-l` | List recent sessions instead of tailing (tab-separated output) |
+| `--subagent [id]` | | Claude/Codex/Cursor: tail subagent log (latest if no ID) |
+| `--interactive` | `-i` | Claude/Codex/Cursor: interactive mode with Tab to switch sessions |
 | `--no-interactive` | | Disable interactive mode (default) |
-| `--with-subagents` | | Claude/Codex: include subagent content in output |
+| `--with-subagents` | | Claude/Codex/Cursor: include subagent content in output |
 | `--no-with-subagents` | | Exclude subagent content (default) |
-| `--auto-switch` | | Auto-switch to latest session in project (Claude/Gemini/Codex) |
+| `--auto-switch` | | Auto-switch to latest session in project (all agents) |
 | `--no-auto-switch` | | Disable auto-switch (default) |
-| `--all` | `-a` | Claude/Codex: show all content (verbose + subagents + auto-switch) |
-| `--pane` | | Claude/Codex: auto-open tmux pane for each new subagent |
+| `--all` | `-a` | Claude/Codex/Cursor: show all content (verbose + subagents + auto-switch) |
+| `--pane` | | Claude/Codex/Cursor: auto-open tmux pane for each new subagent |
 | `--no-pane` | | Disable pane auto-open (default) |
 
 **Positional Arguments:**
 | Argument | Description |
 |----------|-------------|
-| `<agent-type>` | Required: `codex`, `claude`, or `gemini` |
+| `<agent-type>` | Required: `claude`, `codex`, `gemini`, or `cursor` |
 | `[session-id]` | Optional: load specific session by ID (partial match supported) |
 
 ## How It Works
@@ -245,6 +270,7 @@ Each AI assistant stores its session logs in a specific location:
 | Claude Code | `~/.claude/projects/{project}/{session}.jsonl` |
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
 | Gemini CLI | `~/.gemini/tmp/{project}/chats/session-*.json` |
+| Cursor | `~/.cursor/projects/{workspace}/agent-transcripts/{UUID}/{UUID}.jsonl` |
 
 agent-tail automatically finds the most recent session and displays it in a readable format.
 
@@ -254,7 +280,7 @@ agent-tail automatically finds the most recent session and displays it in a read
 
 This means the AI assistant hasn't created any logs yet. Make sure you've:
 1. Used the AI assistant at least once
-2. Specified the correct agent type (`claude`, `codex`, or `gemini`)
+2. Specified the correct agent type (`claude`, `codex`, `gemini`, or `cursor`)
 
 ### Logs look garbled
 
