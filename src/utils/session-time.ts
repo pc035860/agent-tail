@@ -8,38 +8,43 @@ import { homedir } from 'node:os';
 /** Tail-read size in bytes — 8KB covers most last JSONL lines */
 const TAIL_READ_SIZE = 8192;
 
-/** Head-read size in bytes — 16KB covers first few JSONL lines (some can be >5KB with large prompts) */
-const HEAD_READ_SIZE = 16384;
-
 /**
- * Read the `cwd` field from the first few lines of a JSONL session file.
- * Claude sessions have `cwd` in early lines (usually line 1 or 2).
+ * Read the `cwd` field from a JSONL session file.
+ * Some sessions have 30+ file-history-snapshot lines (60KB+) before the first
+ * line with `cwd`. Uses progressive chunk reading: try 16KB first, then 64KB,
+ * then 256KB. Most sessions find cwd in the first chunk.
  * Replaces homedir with `~` for display.
  */
 export async function readCwdFromHead(
   filePath: string
 ): Promise<string | null> {
+  const CHUNK_SIZES = [16384, 65536, 262144]; // 16KB, 64KB, 256KB
+
   try {
     const file = Bun.file(filePath);
     const size = file.size;
     if (size === 0) return null;
 
-    const head = file.slice(0, Math.min(size, HEAD_READ_SIZE));
-    const text = await head.text();
-    const lines = text.split('\n').filter(Boolean);
+    for (const chunkSize of CHUNK_SIZES) {
+      if (chunkSize > size * 2 && chunkSize !== CHUNK_SIZES[0]) break;
 
-    for (const line of lines) {
-      try {
-        const data = JSON.parse(line);
-        if (data.cwd && typeof data.cwd === 'string') {
-          const home = homedir();
-          if (data.cwd.startsWith(home)) {
-            return '~' + data.cwd.slice(home.length);
+      const head = file.slice(0, Math.min(size, chunkSize));
+      const text = await head.text();
+      const lines = text.split('\n').filter(Boolean);
+
+      for (const line of lines) {
+        try {
+          const data = JSON.parse(line);
+          if (data.cwd && typeof data.cwd === 'string') {
+            const home = homedir();
+            if (data.cwd.startsWith(home)) {
+              return '~' + data.cwd.slice(home.length);
+            }
+            return data.cwd;
           }
-          return data.cwd;
+        } catch {
+          // Skip malformed JSON (truncated at chunk boundary)
         }
-      } catch {
-        // Skip malformed JSON
       }
     }
   } catch {

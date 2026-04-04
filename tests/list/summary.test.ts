@@ -89,8 +89,8 @@ describe('formatSummary', () => {
       }
     );
 
-    // Should have: 3 head + 1 separator + 5 tail = 9 lines
-    expect(result.length).toBeLessThanOrEqual(10);
+    // Should have: 3 head + 5 separator (2 blank + line + 2 blank) + 5 tail = 13
+    expect(result.length).toBeLessThanOrEqual(14);
     expect(result[0]).toBe('line 00');
     expect(result[1]).toBe('line 01');
     expect(result[2]).toBe('line 02');
@@ -125,8 +125,8 @@ describe('formatSummary', () => {
       simpleFormatter
     );
 
-    // Should have head(5) + separator + tail(15) = 21
-    expect(result.length).toBeLessThanOrEqual(22);
+    // Should have head(5) + 5 separator + tail(15) = 25
+    expect(result.length).toBeLessThanOrEqual(26);
     expect(result[0]).toBe('line 0');
     const sepIdx = result.findIndex((l) => l.includes('↕'));
     expect(sepIdx).toBeGreaterThan(0);
