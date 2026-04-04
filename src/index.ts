@@ -87,6 +87,43 @@ function logSessionMeta(sessionFile: SessionFile, quiet: boolean): void {
   }
 }
 
+/**
+ * --list 模式：列出 session 並退出
+ */
+async function listCommand(agent: Agent, options: CliOptions): Promise<void> {
+  const { formatSessionList } = await import('./list/session-lister.ts');
+
+  if (!agent.finder.listSessions) {
+    console.error(
+      chalk.red(`List not supported for ${options.agentType} agent`)
+    );
+    process.exit(1);
+  }
+
+  const limit = options.lines ?? 20;
+  const items = await agent.finder.listSessions({
+    project: options.project,
+    limit,
+  });
+
+  if (items.length === 0) {
+    const projectInfo = options.project
+      ? ` in project "${options.project}"`
+      : '';
+    log(
+      options.quiet,
+      chalk.gray(`No ${options.agentType} sessions found${projectInfo}`)
+    );
+    return;
+  }
+
+  const color = process.stdout.isTTY ?? false;
+  const lines = formatSessionList(items, { color });
+  for (const line of lines) {
+    console.log(line);
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv);
 
@@ -99,6 +136,12 @@ async function main(): Promise<void> {
         : options.agentType === 'cursor'
           ? new CursorAgent({ verbose: options.verbose })
           : new ClaudeAgent({ verbose: options.verbose });
+
+  // --list 模式：列出 session 後退出
+  if (options.list) {
+    await listCommand(agent, options);
+    return;
+  }
 
   // 選擇 Formatter
   const formatter: Formatter = options.raw
