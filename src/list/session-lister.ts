@@ -48,9 +48,8 @@ export function formatSessionList(
       formatRelativeTime(item.lastActivityTime ?? item.mtime),
       agentStr,
       item.project ?? '',
+      item.customTitle ? `"${item.customTitle}"` : '',
     ];
-    // Append custom title as 5th column when present
-    if (item.customTitle) columns.push(`"${item.customTitle}"`);
 
     return columns.join('\t');
   });

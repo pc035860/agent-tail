@@ -80,14 +80,15 @@ describe('formatSessionList', () => {
     expect(result).toHaveLength(1);
 
     const parts = result[0]!.split('\t');
-    expect(parts).toHaveLength(4);
+    expect(parts).toHaveLength(5);
     expect(parts[0]).toBe('abc12345');
     expect(parts[1]).toBe('3m ago');
     expect(parts[2]).toBe('claude');
     expect(parts[3]).toBe('my-project');
+    expect(parts[4]).toBe('');
   });
 
-  test('outputs empty string for undefined project (tab still present)', () => {
+  test('outputs empty string for undefined project and title (tabs still present)', () => {
     const item = makeItem({
       shortId: 'abc12345',
       agentType: 'gemini',
@@ -96,8 +97,9 @@ describe('formatSessionList', () => {
     expect(result).toHaveLength(1);
 
     const parts = result[0]!.split('\t');
-    expect(parts).toHaveLength(4);
+    expect(parts).toHaveLength(5);
     expect(parts[3]).toBe('');
+    expect(parts[4]).toBe('');
   });
 
   test('formats multiple items', () => {

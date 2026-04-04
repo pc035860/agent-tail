@@ -38,8 +38,13 @@ export function buildFzfArgs(config: {
   const listCmd = 'FORCE_COLOR=1 ' + listParts.map((p) => `"${p}"`).join(' ');
 
   // Preview uses --summary for head+tail view (first 5 + last 15 lines)
-  const previewParts = [agentTailPath, agentType, '{1}', '--summary'];
-  if (project) previewParts.push('-p', project);
+  const previewParts = [
+    `"${agentTailPath}"`,
+    `"${agentType}"`,
+    '{1}',
+    '--summary',
+  ];
+  if (project) previewParts.push('-p', `"${project}"`);
   const previewCmd = previewParts.join(' ');
 
   const args: string[] = [
