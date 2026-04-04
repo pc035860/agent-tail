@@ -90,9 +90,9 @@ async function main(): Promise<void> {
   const shortId = parseSelection(output);
   if (!shortId) process.exit(0);
 
-  const tailArgs = [agentTailPath, agentType, shortId];
-  if (options.project) tailArgs.push('-p', options.project);
-  const tailProc = Bun.spawn(tailArgs, {
+  // Don't forward -p: shortId is already unique from the project-filtered list,
+  // and Codex's findBySessionId filters on file path (not cwd), which would fail.
+  const tailProc = Bun.spawn([agentTailPath, agentType, shortId], {
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   process.exit(await tailProc.exited);
