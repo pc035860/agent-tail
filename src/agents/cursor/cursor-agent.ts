@@ -14,11 +14,12 @@ import {
   truncateByLines,
   formatMultiline,
 } from '../../utils/text.ts';
+import { isValidCursorSubagentId } from '../../cursor/watch-builder.ts';
 
 /**
  * Cursor Session Finder
  * 目錄結構: ~/.cursor/projects/{workspace-slug}/agent-transcripts/{UUID}/{UUID}.jsonl
- * Subagent: {UUID}/subagents/{subagent-UUID}.jsonl (MVP 不支援)
+ * Subagent: {UUID}/subagents/{subagent-UUID}.jsonl
  */
 class CursorSessionFinder implements SessionFinder {
   private _baseDir: string;
@@ -142,6 +143,87 @@ class CursorSessionFinder implements SessionFinder {
 
     if (candidates.length === 0) return null;
 
+    candidates.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return b.mtime.getTime() - a.mtime.getTime();
+    });
+
+    const best = candidates[0];
+    if (!best) return null;
+
+    return {
+      path: best.path,
+      mtime: best.mtime,
+      agentType: 'cursor',
+    };
+  }
+
+  /**
+   * 查找 subagent session 檔案
+   * 掃描 workspace/agent-transcripts/UUID/subagents/UUID.jsonl
+   * @param options.subagentId - 部分 UUID 匹配
+   */
+  async findSubagent(options: {
+    project?: string;
+    subagentId?: string;
+  }): Promise<SessionFile | null> {
+    const glob = new Glob('*/agent-transcripts/*/subagents/*.jsonl');
+    const candidates: { path: string; mtime: Date; priority: number }[] = [];
+    const searchTerm = options.subagentId?.toLowerCase();
+
+    const workspacePathCache = new Map<string, string | null>();
+
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
+      // 從檔名提取 UUID
+      const filename = basename(file, '.jsonl');
+      if (!isValidCursorSubagentId(filename)) continue;
+
+      // Project filter
+      if (options.project) {
+        const matched = await this._matchProject(
+          file,
+          options.project,
+          workspacePathCache
+        );
+        if (!matched) continue;
+      }
+
+      // Subagent ID 匹配
+      const normalizedId = filename.toLowerCase();
+      let priority = 3; // 無 filter 時預設優先
+
+      if (searchTerm) {
+        if (normalizedId === searchTerm) {
+          // 精確匹配直接返回
+          try {
+            const stats = await stat(file);
+            return { path: file, mtime: stats.mtime, agentType: 'cursor' };
+          } catch {
+            continue;
+          }
+        } else if (normalizedId.startsWith(searchTerm)) {
+          priority = 2; // 前綴匹配
+        } else if (normalizedId.includes(searchTerm)) {
+          priority = 1; // 包含匹配
+        } else {
+          continue;
+        }
+      }
+
+      try {
+        const stats = await stat(file);
+        candidates.push({ path: file, mtime: stats.mtime, priority });
+      } catch {
+        // 忽略
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // 按優先度排序，相同優先度按 mtime 排序（最新在前）
     candidates.sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
       return b.mtime.getTime() - a.mtime.getTime();
