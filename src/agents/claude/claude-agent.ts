@@ -121,14 +121,13 @@ class ClaudeSessionFinder implements SessionFinder {
     // Enrich with tail-read metadata (parallel I/O, 8KB per file)
     await Promise.all(
       sliced.map(async (item) => {
-        const [lastTs, title] = await Promise.all([
+        const [lastTs, title, cwd] = await Promise.all([
           readLastTimestampFromJSONL(item.path),
           readCustomTitleFromTail(item.path),
+          readCwdFromHead(item.path),
         ]);
         item.lastActivityTime = lastTs ?? undefined;
         if (title) item.customTitle = title;
-        // Read real cwd from session content (replaces lossy path decode)
-        const cwd = await readCwdFromHead(item.path);
         if (cwd) item.project = cwd;
       })
     );

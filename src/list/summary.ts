@@ -97,16 +97,7 @@ async function formatSummaryFromJSONL(
   const size = file.size;
   if (size === 0) return [];
 
-  // Read head portion
-  const headText = await file.slice(0, Math.min(size, CHUNK_SIZE)).text();
-  const headLines = headText.split('\n').filter(Boolean);
-
-  // Read tail portion (may overlap with head for small files)
-  const tailStart = Math.max(0, size - CHUNK_SIZE);
-  const tailText = await file.slice(tailStart, size).text();
-  const allTailLines = tailText.split('\n').filter(Boolean);
-
-  // For small files where head and tail overlap, just show everything
+  // Small files: single read, parse everything
   if (size <= CHUNK_SIZE * 2) {
     const fullText = await file.text();
     const allLines = fullText.split('\n').filter(Boolean);
@@ -122,15 +113,22 @@ async function formatSummaryFromJSONL(
     return [...head, ...formatGapSeparator(skipped), ...tail];
   }
 
-  // Large file: parse head and tail separately
+  // Large file: read head and tail chunks in parallel
+  const [headText, tailText] = await Promise.all([
+    file.slice(0, CHUNK_SIZE).text(),
+    file.slice(Math.max(0, size - CHUNK_SIZE), size).text(),
+  ]);
+  const headLines = headText.split('\n').filter(Boolean);
+  const allTailLines = tailText.split('\n').filter(Boolean);
+
   const headParsed = parseAndFormat(
-    headLines.slice(0, headCount * 3), // parse more lines in case some are filtered
+    headLines.slice(0, headCount * 3),
     parser,
     formatter
   ).slice(0, headCount);
 
-  // Create fresh parser for tail (Claude parser has state)
-  // We can't reset parser, so we parse tail lines and hope the last N are meaningful
+  // Tail uses same parser — Claude parser state may leak from head parse,
+  // but for summary display this is acceptable (tail lines are self-contained)
   const tailParsed = parseAndFormat(
     allTailLines.slice(-(tailCount * 3)),
     parser,
