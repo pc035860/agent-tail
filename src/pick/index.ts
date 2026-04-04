@@ -109,8 +109,10 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Launch agent-tail with the selected session
-  const tailProc = Bun.spawn([agentTailPath, agentType, shortId], {
+  // Launch agent-tail with the selected session (forward -p if present)
+  const tailArgs = [agentTailPath, agentType, shortId];
+  if (options.project) tailArgs.push('-p', options.project);
+  const tailProc = Bun.spawn(tailArgs, {
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   const tailExitCode = await tailProc.exited;

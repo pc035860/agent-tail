@@ -71,14 +71,15 @@ class CodexSessionFinder implements SessionFinder {
       const filename = file.split('/').pop() || '';
       if (!filename.startsWith('rollout-')) continue;
 
-      if (options.project) {
-        const pattern = options.project.toLowerCase();
-        if (!file.toLowerCase().includes(pattern)) continue;
-      }
-
       // 排除 subagent session & 取得 cwd
       const meta = await readMainSessionMeta(file);
       if (!meta) continue;
+
+      // Project filter：match against cwd (not file path, which only has dates)
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        if (!meta.cwd.toLowerCase().includes(pattern)) continue;
+      }
 
       try {
         const stats = await stat(file);

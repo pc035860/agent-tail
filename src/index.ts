@@ -117,7 +117,8 @@ async function listCommand(agent: Agent, options: CliOptions): Promise<void> {
     return;
   }
 
-  const color = process.stdout.isTTY ?? false;
+  const color =
+    (process.stdout.isTTY ?? false) || process.env.FORCE_COLOR === '1';
   const lines = formatSessionList(items, { color });
   for (const line of lines) {
     console.log(line);

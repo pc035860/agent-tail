@@ -37,8 +37,17 @@ export function buildFzfArgs(config: {
   if (limit) listParts.push('-n', String(limit));
   const listCmd = listParts.map((p) => `"${p}"`).join(' ');
 
-  // Build the preview command
-  const previewCmd = `${agentTailPath} ${agentType} {1} --no-follow -n 20`;
+  // Build the preview command (include -p for project-scoped preview)
+  const previewParts = [
+    agentTailPath,
+    agentType,
+    '{1}',
+    '--no-follow',
+    '-n',
+    '20',
+  ];
+  if (project) previewParts.push('-p', project);
+  const previewCmd = previewParts.join(' ');
 
   const args: string[] = [
     '--ansi',
