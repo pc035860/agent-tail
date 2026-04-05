@@ -11,6 +11,10 @@ import {
   parseSelection,
   resolveAgentTailPath,
 } from './fzf-helpers.ts';
+import {
+  extractPickListArgs,
+  extractTailPassthroughArgs,
+} from './arg-passthrough.ts';
 
 function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
@@ -29,9 +33,13 @@ function buildListArgs(
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
+  const listRawArgs = extractPickListArgs(rawArgs);
+  const passthroughArgs = extractTailPassthroughArgs(rawArgs);
 
   if (rawArgs.length === 0 || rawArgs[0]?.startsWith('-')) {
-    console.error('Usage: agent-pick <agent-type> [-p project] [-n count]');
+    console.error(
+      'Usage: agent-pick <agent-type> [-p project] [-n count] [agent-tail-options...]'
+    );
     console.error('Agent types: claude, codex, gemini, cursor');
     process.exit(1);
   }
@@ -45,7 +53,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const options = parseArgs(['node', 'agent-tail', ...rawArgs, '--list']);
+  const options = parseArgs(['node', 'agent-tail', ...listRawArgs, '--list']);
   const agentTailPath = resolveAgentTailPath();
   const listLimit = options.lines ?? 200;
   const listArgs = buildListArgs(agentTailPath, agentType, {
@@ -113,9 +121,12 @@ async function main(): Promise<void> {
   const shortId = parseSelection(output);
   if (!shortId) process.exit(0);
 
-  const tailProc = Bun.spawn([agentTailPath, agentType, shortId], {
-    stdio: ['inherit', 'inherit', 'inherit'],
-  });
+  const tailProc = Bun.spawn(
+    [agentTailPath, agentType, shortId, ...passthroughArgs],
+    {
+      stdio: ['inherit', 'inherit', 'inherit'],
+    }
+  );
   process.exit(await tailProc.exited);
 }
 

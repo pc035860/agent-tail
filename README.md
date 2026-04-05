@@ -79,7 +79,12 @@ agent-pick claude
 
 # Filter by project
 agent-pick codex -p myproject
+
+# Forward extra tail flags after selection
+agent-pick claude -v --with-subagents
 ```
+
+`agent-pick` forwards extra `agent-tail` flags after you press Enter, but keeps list-only filters local (`-p/--project`, `-n/--lines`, and `--list`).
 
 ## Examples
 
