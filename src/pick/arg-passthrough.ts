@@ -1,13 +1,10 @@
-const STRIP_WITH_VALUE = new Set(['-n', '--lines', '-p', '--project']);
+const LIST_OPTS_WITH_VALUE = ['-n', '--lines', '-p', '--project'] as const;
+const STRIP_WITH_VALUE = new Set<string>(LIST_OPTS_WITH_VALUE);
 const STRIP_FLAGS = new Set(['-l', '--list']);
-const STRIP_INLINE_PREFIXES = ['-n=', '--lines=', '-p=', '--project='];
+const STRIP_INLINE_PREFIXES = LIST_OPTS_WITH_VALUE.map((o) => `${o}=`);
 
-function hasInlineValue(arg: string): boolean {
+function hasInlineListOptionValue(arg: string): boolean {
   return STRIP_INLINE_PREFIXES.some((prefix) => arg.startsWith(prefix));
-}
-
-function hasNextToken(nextArg: string | undefined): boolean {
-  return nextArg !== undefined;
 }
 
 export function extractTailPassthroughArgs(rawArgs: string[]): string[] {
@@ -18,10 +15,10 @@ export function extractTailPassthroughArgs(rawArgs: string[]): string[] {
   for (let i = 1; i < rawArgs.length; i++) {
     const arg = rawArgs[i]!;
 
-    if (STRIP_FLAGS.has(arg) || hasInlineValue(arg)) continue;
+    if (STRIP_FLAGS.has(arg) || hasInlineListOptionValue(arg)) continue;
 
     if (STRIP_WITH_VALUE.has(arg)) {
-      if (hasNextToken(rawArgs[i + 1])) i += 1;
+      if (rawArgs[i + 1] !== undefined) i += 1;
       continue;
     }
 
@@ -39,7 +36,7 @@ export function extractPickListArgs(rawArgs: string[]): string[] {
   for (let i = 1; i < rawArgs.length; i++) {
     const arg = rawArgs[i]!;
 
-    if (hasInlineValue(arg)) {
+    if (hasInlineListOptionValue(arg)) {
       listArgs.push(arg);
       continue;
     }
@@ -47,8 +44,9 @@ export function extractPickListArgs(rawArgs: string[]): string[] {
     if (!STRIP_WITH_VALUE.has(arg)) continue;
 
     listArgs.push(arg);
-    if (hasNextToken(rawArgs[i + 1])) {
-      listArgs.push(rawArgs[i + 1]!);
+    const next = rawArgs[i + 1];
+    if (next !== undefined) {
+      listArgs.push(next);
       i += 1;
     }
   }

@@ -16,6 +16,8 @@ import {
   extractTailPassthroughArgs,
 } from './arg-passthrough.ts';
 
+const AGENT_TYPES = ['claude', 'codex', 'gemini', 'cursor'];
+
 function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
@@ -33,25 +35,25 @@ function buildListArgs(
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
-  const listRawArgs = extractPickListArgs(rawArgs);
-  const passthroughArgs = extractTailPassthroughArgs(rawArgs);
 
   if (rawArgs.length === 0 || rawArgs[0]?.startsWith('-')) {
     console.error(
       'Usage: agent-pick <agent-type> [-p project] [-n count] [agent-tail-options...]'
     );
-    console.error('Agent types: claude, codex, gemini, cursor');
+    console.error(`Agent types: ${AGENT_TYPES.join(', ')}`);
     process.exit(1);
   }
 
   const agentType = rawArgs[0]!;
-  const validTypes = ['claude', 'codex', 'gemini', 'cursor'];
-  if (!validTypes.includes(agentType)) {
+  if (!AGENT_TYPES.includes(agentType)) {
     console.error(
-      `Error: Invalid agent type "${agentType}". Use: ${validTypes.join(', ')}`
+      `Error: Invalid agent type "${agentType}". Use: ${AGENT_TYPES.join(', ')}`
     );
     process.exit(1);
   }
+
+  const listRawArgs = extractPickListArgs(rawArgs);
+  const passthroughArgs = extractTailPassthroughArgs(rawArgs);
 
   const options = parseArgs(['node', 'agent-tail', ...listRawArgs, '--list']);
   const agentTailPath = resolveAgentTailPath();

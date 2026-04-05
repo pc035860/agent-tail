@@ -110,6 +110,7 @@ describe('extractPickListArgs', () => {
       '-n=10',
       '-a',
     ]);
+
     expect(result).toEqual(['codex', '-p=myproject', '-n=10']);
   });
 
