@@ -3,9 +3,10 @@
   "checkpoint_id": "5f0094298aaf",
   "strategy": "manual-commit",
   "branch": "feat/session-list",
-  "checkpoints_count": 8,
+  "checkpoints_count": 9,
   "files_touched": [
     "README.md",
+    "specs/brainstorm/agent-pick-arg-passthrough.md",
     "src/pick/arg-passthrough.ts",
     "src/pick/index.ts",
     "tests/pick/arg-passthrough.test.ts"
@@ -16,13 +17,19 @@
       "transcript": "/5f/0094298aaf/0/full.jsonl",
       "content_hash": "/5f/0094298aaf/0/content_hash.txt",
       "prompt": "/5f/0094298aaf/0/prompt.txt"
+    },
+    {
+      "metadata": "/5f/0094298aaf/1/metadata.json",
+      "transcript": "/5f/0094298aaf/1/full.jsonl",
+      "content_hash": "/5f/0094298aaf/1/content_hash.txt",
+      "prompt": "/5f/0094298aaf/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 874,
+    "cache_creation_tokens": 785531,
+    "cache_read_tokens": 155622329,
+    "output_tokens": 173322,
+    "api_call_count": 555
   }
 }
