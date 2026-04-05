@@ -8,6 +8,7 @@ import type {
   ParserOptions,
   ProjectInfo,
   SessionFile,
+  SessionListItem,
 } from '../../core/types.ts';
 import {
   contentToString,
@@ -39,11 +40,14 @@ class CursorSessionFinder implements SessionFinder {
     this._baseDir = dir;
   }
 
-  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+  /**
+   * 收集所有主 session 檔案（共用邏輯）
+   */
+  private async _collectMainSessions(options: {
+    project?: string;
+  }): Promise<SessionListItem[]> {
     const glob = new Glob('*/agent-transcripts/*/*.jsonl');
-    let latest: { path: string; mtime: Date } | null = null;
-
-    // Cache .workspace-trusted lookups per workspace slug
+    const files: SessionListItem[] = [];
     const workspacePathCache = new Map<string, string | null>();
 
     for await (const file of glob.scan({
@@ -65,21 +69,76 @@ class CursorSessionFinder implements SessionFinder {
 
       try {
         const stats = await stat(file);
-        if (!latest || stats.mtime > latest.mtime) {
-          latest = { path: file, mtime: stats.mtime };
-        }
+        const filename = file.split('/').pop() || '';
+        const shortId = filename.replace('.jsonl', '').slice(0, 8);
+
+        // Extract workspace slug from path
+        // Pattern: {baseDir}/{slug}/agent-transcripts/{UUID}/{UUID}.jsonl
+        const relPath = file.slice(this._baseDir.length + 1);
+        const slug = relPath.split('/')[0] ?? '';
+
+        files.push({
+          path: file,
+          mtime: stats.mtime,
+          agentType: 'cursor',
+          shortId,
+          project: slug,
+        });
       } catch {
         // 忽略無法讀取的檔案
       }
     }
 
-    if (!latest) return null;
+    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    return files;
+  }
 
+  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+    // Use rolling-max (O(1) memory) instead of full collect+sort
+    const glob = new Glob('*/agent-transcripts/*/*.jsonl');
+    let latest: { path: string; mtime: Date } | null = null;
+    const workspacePathCache = new Map<string, string | null>();
+
+    for await (const file of glob.scan({
+      cwd: this._baseDir,
+      absolute: true,
+    })) {
+      if (file.includes('/subagents/')) continue;
+
+      if (options.project) {
+        const matched = await this._matchProject(
+          file,
+          options.project,
+          workspacePathCache
+        );
+        if (!matched) continue;
+      }
+
+      try {
+        const stats = await stat(file);
+        if (!latest || stats.mtime > latest.mtime) {
+          latest = { path: file, mtime: stats.mtime };
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+
+    if (!latest) return null;
     return {
       path: latest.path,
       mtime: latest.mtime,
       agentType: 'cursor',
     };
+  }
+
+  async listSessions(options: {
+    project?: string;
+    limit?: number;
+  }): Promise<SessionListItem[]> {
+    const files = await this._collectMainSessions(options);
+    const limit = options.limit ?? 20;
+    return files.slice(0, limit);
   }
 
   /**

@@ -8,10 +8,12 @@ import type {
   ParserOptions,
   ProjectInfo,
   SessionFile,
+  SessionListItem,
 } from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 import { CodexSessionCache, readMainSessionMeta } from './session-cache.ts';
+import { readLastTimestampFromJSONL } from '../../utils/session-time.ts';
 import {
   buildCodexSubagentFiles,
   extractCodexSubagentIds,
@@ -50,49 +52,89 @@ class CodexSessionFinder implements SessionFinder {
     return this._cache;
   }
 
-  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+  /**
+   * 收集所有主 session 檔案（共用邏輯）
+   * 使用 readMainSessionMeta 過濾 subagent 並取得 cwd
+   */
+  private async _collectMainSessions(options: {
+    project?: string;
+  }): Promise<SessionListItem[]> {
     const glob = new Glob('**/*.jsonl');
-    const files: { path: string; mtime: Date }[] = [];
+    const files: SessionListItem[] = [];
+    // Extract UUID from rollout filename: rollout-{timestamp}-{UUID}.jsonl
+    const uuidPattern =
+      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
     for await (const file of glob.scan({
       cwd: this._baseDir,
       absolute: true,
     })) {
-      // 只匹配 rollout-*.jsonl
       const filename = file.split('/').pop() || '';
       if (!filename.startsWith('rollout-')) continue;
 
-      // 如果有 project filter，做模糊比對（對 Codex 來說是日期過濾）
-      if (options.project) {
-        const pattern = options.project.toLowerCase();
-        if (!file.toLowerCase().includes(pattern)) continue;
-      }
-
-      // 排除 subagent session
+      // 排除 subagent session & 取得 cwd
       const meta = await readMainSessionMeta(file);
       if (!meta) continue;
 
+      // Project filter：match against cwd (not file path, which only has dates)
+      if (options.project) {
+        const pattern = options.project.toLowerCase();
+        if (!meta.cwd.toLowerCase().includes(pattern)) continue;
+      }
+
       try {
         const stats = await stat(file);
-        files.push({ path: file, mtime: stats.mtime });
+        const match = uuidPattern.exec(filename);
+        const shortId = match?.[1]?.slice(0, 8) ?? filename.slice(0, 8);
+
+        files.push({
+          path: file,
+          mtime: stats.mtime,
+          agentType: 'codex',
+          shortId,
+          project: meta.cwd,
+        });
       } catch {
         // 忽略無法讀取的檔案
       }
     }
 
-    if (files.length === 0) return null;
-
-    // 按修改時間排序，取最新的
     files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    return files;
+  }
 
-    const latest = files[0];
-    if (!latest) return null;
-
+  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+    const files = await this._collectMainSessions(options);
+    if (files.length === 0) return null;
     return {
-      path: latest.path,
-      mtime: latest.mtime,
+      path: files[0]!.path,
+      mtime: files[0]!.mtime,
       agentType: 'codex',
     };
+  }
+
+  async listSessions(options: {
+    project?: string;
+    limit?: number;
+  }): Promise<SessionListItem[]> {
+    const files = await this._collectMainSessions(options);
+    const limit = options.limit ?? 20;
+    const sliced = files.slice(0, limit);
+
+    await Promise.all(
+      sliced.map(async (item) => {
+        item.lastActivityTime =
+          (await readLastTimestampFromJSONL(item.path)) ?? undefined;
+      })
+    );
+
+    sliced.sort((a, b) => {
+      const ta = (a.lastActivityTime ?? a.mtime).getTime();
+      const tb = (b.lastActivityTime ?? b.mtime).getTime();
+      return tb - ta;
+    });
+
+    return sliced;
   }
 
   /**

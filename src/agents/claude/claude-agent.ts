@@ -8,6 +8,7 @@ import type {
   ParsedLine,
   ParserOptions,
   SessionFile,
+  SessionListItem,
 } from '../../core/types.ts';
 import {
   contentToString,
@@ -16,6 +17,11 @@ import {
 } from '../../utils/text.ts';
 import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
 import { readCustomTitle } from '../../claude/custom-title.ts';
+import {
+  readLastTimestampFromJSONL,
+  readCustomTitleFromTail,
+  readCwdFromHead,
+} from '../../utils/session-time.ts';
 
 /** JSONL event type for Claude /rename command */
 const CUSTOM_TITLE_TYPE = 'custom-title';
@@ -35,44 +41,66 @@ class ClaudeSessionFinder implements SessionFinder {
     return this.baseDir;
   }
 
-  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+  /**
+   * 收集所有主 session 檔案（共用邏輯）
+   * 回傳按 mtime 降序排列的 SessionListItem[]
+   */
+  private async _collectMainSessions(options: {
+    project?: string;
+  }): Promise<SessionListItem[]> {
     const glob = new Glob('**/*.jsonl');
-    const files: { path: string; mtime: Date }[] = [];
+    const files: SessionListItem[] = [];
 
-    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
+    const uuidPattern =
+      /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+
+    for await (const file of glob.scan({
+      cwd: this.baseDir,
+      absolute: true,
+    })) {
       const filename = file.split('/').pop() || '';
 
       // 排除 agent-* 開頭的檔案
       if (filename.startsWith('agent-')) continue;
 
       // 只匹配 UUID 格式的檔案名
-      const uuidPattern =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
-      if (!uuidPattern.test(filename)) continue;
+      const match = uuidPattern.exec(filename);
+      if (!match) continue;
 
       // 如果有 project filter，做模糊比對
       if (options.project) {
         const pattern = options.project.toLowerCase();
-        // 對路徑做模糊比對（包含專案目錄名稱）
         if (!file.toLowerCase().includes(pattern)) continue;
       }
 
       try {
         const stats = await stat(file);
-        files.push({ path: file, mtime: stats.mtime });
+        // 從路徑提取專案名（父目錄名）
+        const parts = file.split('/');
+        const projectIdx = parts.indexOf(filename) - 1;
+        const project = projectIdx >= 0 ? parts[projectIdx] : undefined;
+
+        files.push({
+          path: file,
+          mtime: stats.mtime,
+          agentType: 'claude',
+          shortId: match[1]!,
+          project,
+        });
       } catch {
         // 忽略無法讀取的檔案
       }
     }
 
+    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    return files;
+  }
+
+  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+    const files = await this._collectMainSessions(options);
     if (files.length === 0) return null;
 
-    // 按修改時間排序，取最新的
-    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-
-    const latest = files[0];
-    if (!latest) return null;
-
+    const latest = files[0]!;
     const customTitle = await readCustomTitle(latest.path);
     return {
       path: latest.path,
@@ -80,6 +108,38 @@ class ClaudeSessionFinder implements SessionFinder {
       agentType: 'claude',
       ...(customTitle ? { customTitle } : {}),
     };
+  }
+
+  async listSessions(options: {
+    project?: string;
+    limit?: number;
+  }): Promise<SessionListItem[]> {
+    const files = await this._collectMainSessions(options);
+    const limit = options.limit ?? 20;
+    const sliced = files.slice(0, limit);
+
+    // Enrich with tail-read metadata (parallel I/O, 8KB per file)
+    await Promise.all(
+      sliced.map(async (item) => {
+        const [lastTs, title, cwd] = await Promise.all([
+          readLastTimestampFromJSONL(item.path),
+          readCustomTitleFromTail(item.path),
+          readCwdFromHead(item.path),
+        ]);
+        item.lastActivityTime = lastTs ?? undefined;
+        if (title) item.customTitle = title;
+        if (cwd) item.project = cwd;
+      })
+    );
+
+    // Re-sort by lastActivityTime (more accurate than mtime)
+    sliced.sort((a, b) => {
+      const ta = (a.lastActivityTime ?? a.mtime).getTime();
+      const tb = (b.lastActivityTime ?? b.mtime).getTime();
+      return tb - ta;
+    });
+
+    return sliced;
   }
 
   /**

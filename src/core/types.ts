@@ -28,6 +28,10 @@ export interface CliOptions {
   autoSwitch: boolean;
   /** Claude/Codex: auto-open tmux pane for each new subagent (Codex: Phase 2) */
   pane: boolean;
+  /** List recent sessions instead of tailing */
+  list: boolean;
+  /** Show session summary (first N + last M lines) */
+  summary: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
 }
@@ -67,6 +71,18 @@ export interface ProjectInfo {
 export interface ClaudeSessionResult {
   main: SessionFile;
   subagent?: SessionFile;
+}
+
+/**
+ * Session 列表項目（用於 --list 輸出）
+ */
+export interface SessionListItem extends SessionFile {
+  /** 顯示用短識別碼 */
+  shortId: string;
+  /** 專案識別（decoded path, cwd, slug, dir name） */
+  project?: string;
+  /** 最後活動時間（從 session 內容讀取，比 file mtime 更準確） */
+  lastActivityTime?: Date;
 }
 
 /**

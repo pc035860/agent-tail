@@ -399,6 +399,138 @@ describe('parseArgs', () => {
   });
 
   // ================================================================
+  // --list option
+  // ================================================================
+
+  describe('list option', () => {
+    test('--list sets list to true', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--list']);
+      expect(options.list).toBe(true);
+    });
+
+    test('-l is alias for --list', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '-l']);
+      expect(options.list).toBe(true);
+    });
+
+    test('--list auto-sets follow to false', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--list']);
+      expect(options.follow).toBe(false);
+    });
+
+    test('--list with -n sets lines (session count)', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--list',
+        '-n',
+        '10',
+      ]);
+      expect(options.list).toBe(true);
+      expect(options.lines).toBe(10);
+    });
+
+    test('--list with -p sets project filter', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--list',
+        '-p',
+        'myproject',
+      ]);
+      expect(options.list).toBe(true);
+      expect(options.project).toBe('myproject');
+    });
+
+    test('list defaults to false', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude']);
+      expect(options.list).toBe(false);
+    });
+
+    test('--list with --interactive exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--list', '--interactive'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--list with --all exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--list', '--all'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--list with session-id exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', 'abc123', '--list'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--list with --subagent exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--list', '--subagent'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--list with --raw exits with error', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs(['node', 'agent-tail', 'claude', '--list', '--raw'])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  // ================================================================
   // Codex subagent support (Phase 1)
   // ================================================================
 

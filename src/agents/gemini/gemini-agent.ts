@@ -8,9 +8,11 @@ import type {
   ParserOptions,
   ProjectInfo,
   SessionFile,
+  SessionListItem,
 } from '../../core/types.ts';
 import { truncateByLines, formatMultiline } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
+import { readLastTimestampFromGeminiJSON } from '../../utils/session-time.ts';
 
 /**
  * Gemini CLI Session Finder
@@ -27,12 +29,21 @@ class GeminiSessionFinder implements SessionFinder {
     return this.baseDir;
   }
 
-  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+  /**
+   * 收集所有 session 檔案（共用邏輯）
+   * 檔名格式：session-{timestamp}-{8hex}.json
+   */
+  private async _collectSessions(options: {
+    project?: string;
+  }): Promise<SessionListItem[]> {
     const glob = new Glob('*/chats/session-*.json');
-    const files: { path: string; mtime: Date }[] = [];
+    const files: SessionListItem[] = [];
+    const shortIdPattern = /session-.+-([0-9a-f]{8})\.json$/i;
 
-    for await (const file of glob.scan({ cwd: this.baseDir, absolute: true })) {
-      // 如果有 project filter，做模糊比對（對路徑）
+    for await (const file of glob.scan({
+      cwd: this.baseDir,
+      absolute: true,
+    })) {
       if (options.project) {
         const pattern = options.project.toLowerCase();
         if (!file.toLowerCase().includes(pattern)) continue;
@@ -40,25 +51,63 @@ class GeminiSessionFinder implements SessionFinder {
 
       try {
         const stats = await stat(file);
-        files.push({ path: file, mtime: stats.mtime });
+        const filename = file.split('/').pop() || '';
+        const match = shortIdPattern.exec(filename);
+        const shortId = match?.[1] ?? filename.slice(0, 8);
+
+        // project = basename of the project dir (2 levels up from file)
+        const chatsDir = dirname(file);
+        const projDir = dirname(chatsDir);
+        const project = basename(projDir);
+
+        files.push({
+          path: file,
+          mtime: stats.mtime,
+          agentType: 'gemini',
+          shortId,
+          project,
+        });
       } catch {
         // 忽略無法讀取的檔案
       }
     }
 
-    if (files.length === 0) return null;
-
-    // 按修改時間排序，取最新的
     files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+    return files;
+  }
 
-    const latest = files[0];
-    if (!latest) return null;
-
+  async findLatest(options: { project?: string }): Promise<SessionFile | null> {
+    const files = await this._collectSessions(options);
+    if (files.length === 0) return null;
     return {
-      path: latest.path,
-      mtime: latest.mtime,
+      path: files[0]!.path,
+      mtime: files[0]!.mtime,
       agentType: 'gemini',
     };
+  }
+
+  async listSessions(options: {
+    project?: string;
+    limit?: number;
+  }): Promise<SessionListItem[]> {
+    const files = await this._collectSessions(options);
+    const limit = options.limit ?? 20;
+    const sliced = files.slice(0, limit);
+
+    await Promise.all(
+      sliced.map(async (item) => {
+        item.lastActivityTime =
+          (await readLastTimestampFromGeminiJSON(item.path)) ?? undefined;
+      })
+    );
+
+    sliced.sort((a, b) => {
+      const ta = (a.lastActivityTime ?? a.mtime).getTime();
+      const tb = (b.lastActivityTime ?? b.mtime).getTime();
+      return tb - ta;
+    });
+
+    return sliced;
   }
 
   /**

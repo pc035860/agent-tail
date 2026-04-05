@@ -4,6 +4,7 @@ import type {
   ParsedLine,
   ProjectInfo,
   SessionFile,
+  SessionListItem,
 } from '../core/types.ts';
 
 /**
@@ -54,6 +55,16 @@ export interface SessionFinder {
    * @param projectDir - 專案目錄識別
    */
   findLatestInProject?(projectDir: string): Promise<SessionFile | null>;
+
+  /**
+   * 列出所有 session（按 mtime 降序）
+   * @param options.project - 專案過濾
+   * @param options.limit - 最大回傳數量（預設 20）
+   */
+  listSessions?(options: {
+    project?: string;
+    limit?: number;
+  }): Promise<SessionListItem[]>;
 }
 
 /**

@@ -61,6 +61,14 @@ agent-tail cursor -i               # interactive mode (Tab to switch sessions)
 agent-tail cursor -a               # show all content (verbose + subagents + auto-switch)
 agent-tail cursor --pane           # auto-open tmux pane for each new subagent
 
+# Session listing and browsing
+agent-tail claude --list              # list recent sessions (tab-separated)
+agent-tail codex --list -p myproject  # list with project filter
+agent-tail claude --list -n 10        # show top 10 sessions (-n = session count in list mode)
+agent-pick claude                     # interactive fzf browser with preview (requires fzf)
+agent-pick codex -p myproject         # fzf browser with project filter
+agent-tail claude abc123 --summary    # show head+tail summary of a session
+
 # Super Follow (auto-switch to latest session in project)
 agent-tail claude --auto-switch    # Claude: project-based
 agent-tail gemini --auto-switch    # Gemini: .project_root based
@@ -118,13 +126,21 @@ src/
 │   ├── controller-factory.ts # Auto-detect terminal environment
 │   └── pane-manager.ts       # Pane lifecycle manager (open/close/closeAll, max 6 panes)
 │                             # Phase 4 will add iTerm2 support
+├── list/
+│   ├── session-lister.ts    # formatRelativeTime, formatSessionList (tab-separated output for --list)
+│   └── summary.ts           # formatSummary: head+tail preview with gap separator (═══ ↕ N messages skipped ═══)
+├── pick/
+│   ├── index.ts             # agent-pick entry point (fzf integration, collect-first then printf|fzf)
+│   └── fzf-helpers.ts       # buildFzfArgs, parseSelection, resolveAgentTailPath, checkFzfAvailable
 ├── formatters/
 │   ├── formatter.interface.ts
 │   ├── raw-formatter.ts
 │   └── pretty-formatter.ts
 └── utils/
     ├── text.ts               # Text utilities (truncate, truncateByLines, formatMultiline)
-    └── format-tool.ts        # Tool call formatting for all agents
+    ├── format-tool.ts        # Tool call formatting for all agents
+    └── session-time.ts       # Tail-read utilities: readLastTimestampFromJSONL, readCwdFromHead,
+                              # readCustomTitleFromTail, readLastTimestampFromGeminiJSON
 ```
 
 **Key Patterns:**
@@ -147,6 +163,12 @@ src/
   - Both callbacks point to same `openPaneForSubagent` function; `PaneManager.openPane` guards against duplicate panes
 - **Pane naming**: Task/Agent `description` is extracted from `tool_use` input, queued in `SubagentDetector` (FIFO), and matched to new agents. `PaneManager` sanitizes and applies via `tmux select-pane -T` (2.6+, best-effort). Known limitation: parallel Tasks may mismatch descriptions.
 - **Custom-title support**: Claude Code `/rename` writes `{"type":"custom-title","customTitle":"..."}` to session JSONL. `readCustomTitle()` in `src/claude/custom-title.ts` scans from end (last entry wins). `SessionFile.customTitle` is populated by `ClaudeSessionFinder`. `WatcherSession.displayName` drives interactive mode status line display. `onTitleUpdate` callback in `OnLineHandlerConfig` enables real-time status line refresh in interactive mode.
+
+- **Session Listing** (`--list`): `SessionFinder.listSessions()` is optional on the interface. Each agent extracts a shared `_collectMainSessions()` helper (Claude/Codex/Gemini) or `_collectSessions()` (Gemini) used by both `findLatest()` and `listSessions()`. **Exception**: Cursor's `findLatest()` keeps its own O(1) rolling-max loop for performance — do not merge it into `_collectMainSessions`. Enrichment reads `lastActivityTime`, `customTitle`, and `cwd` via parallel I/O using `src/utils/session-time.ts` tail-read utilities (8KB per file). Claude reads all three; Codex/Gemini only read timestamps; Cursor uses none (no timestamps in JSONL).
+- **`--summary`**: Head+tail preview (first 5 + last 15 lines) with `═══ ↕ N messages skipped ═══` gap separator (chalk.dim). Used by `agent-pick` fzf preview. Small files (≤32KB) single-read; large files parallel head+tail 16KB chunk reads. `parseAndFormat()` drains stateful parsers (Claude) with a while loop guard.
+- **`agent-pick`**: Thin Bun script at `bin/agent-pick` that collects `agent-tail --list` output first, then pipes via `printf | fzf` (avoids TTY race). Preview uses `--summary`. Falls back to plain list when fzf not installed. The shortId (first column of `--list` output) is passed to `agent-tail <type> <shortId>` via `findBySessionId` partial match.
+- **`-n` dual semantics**: In tail mode = last N lines per file. In list mode = number of sessions to show (default 20).
+- **Session time tail-read pattern**: `readCwdFromHead` uses progressive chunk reading (16KB→64KB→256KB) because some Claude sessions have 30+ `file-history-snapshot` lines before `cwd`. `readLastTimestampFromJSONL` and `readCustomTitleFromTail` read last 8KB and scan backward.
 
 **Adding Super Follow to a New Agent:**
 1. Implement `getProjectInfo(sessionPath)` - Return `{ projectDir, displayName }` for the session
@@ -198,6 +220,10 @@ src/
 - **`prefillExistingSubagents(detector, files)`**: Helper in `startCodexMultiWatch` that combines `registerExistingAgent` + `registerShortId` into one loop. Used in both init and `switchToSession` — do not inline back into separate loops.
 - **`onTitleUpdate` is for interactive mode only**: In non-interactive multi-watch, the formatter already outputs `TITL Session renamed: "xxx"` via `onOutput`. Adding `onTitleUpdate` there causes duplicate output. Only interactive mode needs `onTitleUpdate` (to update `displayName` + refresh status line).
 - **`findLatestMainSessionInProject` intentionally skips `customTitle`**: Auto-switch polling runs every 500ms. Reading JSONL content for title would be wasteful. Title is read on-demand via `readCustomTitle()` only when a switch actually happens.
+- **Codex `findBySessionId` project filter matches file path, not cwd**: This is a known limitation. Codex file paths only contain date directories, so `-p` filtering in `findBySessionId` is effectively broken for Codex. `listSessions()` correctly filters on `session_meta.cwd`. `agent-pick` intentionally does NOT forward `-p` to the final tail command to avoid this issue.
+- **`--list` is mutually exclusive with most tail-mode options**: `--interactive`, `--subagent`, `--pane`, `--with-subagents`, `--auto-switch`, `--raw`, `--all`, and `[session-id]` positional arg. It auto-sets `--no-follow`.
+- **`customTitle` in `listSessions()` uses tail-read**: Claude's `listSessions()` populates `customTitle` via `readCustomTitleFromTail()` (8KB tail-read), not the full-file `readCustomTitle()`. Other agents don't support custom titles.
+- **`Bun.spawn` pipe chaining breaks fzf TTY**: Piping `listProc.stdout` directly to fzf's `stdin` via `Bun.spawn` prevents fzf from accessing `/dev/tty` for keyboard input (arrow keys show `^[[A`). Use `sh -c "cmd | fzf ..."` instead — the shell handles pipe setup while fzf gets proper TTY access. See `buildShellCommand()` in `src/pick/fzf-helpers.ts`.
 - **PaneManager logging belongs inside PaneManager, not in callbacks**: `onSubagentEnter` fires on every `agent_progress` event (repeatedly). Logging pane state in the callback causes duplicate messages. Instead, pass `logger` to `PaneManager` constructor; `openPane()` and `closePaneByAgentId()` log only when actually acting (after dedup checks). `openPane()` also re-throws errors so callers can surface `Failed to open pane` warnings.
 
 ## Code Quality
