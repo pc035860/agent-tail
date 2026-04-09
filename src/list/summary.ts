@@ -77,7 +77,9 @@ function parseAndFormat(
     while (parsed && guard < 100) {
       const formatted = formatter.format(parsed);
       if (formatted) output.push(formatted);
-      parsed = parser.parse(line);
+      // Drain with empty string: stateful parsers (Claude) continue yielding
+      // buffered parts; stateless parsers (Codex/Cursor/Gemini) return null
+      parsed = parser.parse('');
       guard++;
     }
   }
