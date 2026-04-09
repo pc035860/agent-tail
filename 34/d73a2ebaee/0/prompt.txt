@@ -1307,3 +1307,7 @@ Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent
 ---
 
 /patch-claudemd
+
+---
+
+把剛剛的修正跟 cluade.md 分開 commit
