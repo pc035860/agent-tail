@@ -131,7 +131,8 @@ src/
 │   └── summary.ts           # formatSummary: head+tail preview with gap separator (═══ ↕ N messages skipped ═══)
 ├── pick/
 │   ├── index.ts             # agent-pick entry point (fzf integration, collect-first then printf|fzf)
-│   └── fzf-helpers.ts       # buildFzfArgs, parseSelection, resolveAgentTailPath, checkFzfAvailable
+│   ├── fzf-helpers.ts       # buildFzfArgs, parseSelection, resolveAgentTailPath, checkFzfAvailable
+│   └── arg-passthrough.ts   # extractTailPassthroughArgs, extractPickListArgs (forward extra CLI args to agent-tail)
 ├── formatters/
 │   ├── formatter.interface.ts
 │   ├── raw-formatter.ts
@@ -165,8 +166,8 @@ src/
 - **Custom-title support**: Claude Code `/rename` writes `{"type":"custom-title","customTitle":"..."}` to session JSONL. `readCustomTitle()` in `src/claude/custom-title.ts` scans from end (last entry wins). `SessionFile.customTitle` is populated by `ClaudeSessionFinder`. `WatcherSession.displayName` drives interactive mode status line display. `onTitleUpdate` callback in `OnLineHandlerConfig` enables real-time status line refresh in interactive mode.
 
 - **Session Listing** (`--list`): `SessionFinder.listSessions()` is optional on the interface. Each agent extracts a shared `_collectMainSessions()` helper (Claude/Codex/Gemini) or `_collectSessions()` (Gemini) used by both `findLatest()` and `listSessions()`. **Exception**: Cursor's `findLatest()` keeps its own O(1) rolling-max loop for performance — do not merge it into `_collectMainSessions`. Enrichment reads `lastActivityTime`, `customTitle`, and `cwd` via parallel I/O using `src/utils/session-time.ts` tail-read utilities (8KB per file). Claude reads all three; Codex/Gemini only read timestamps; Cursor uses none (no timestamps in JSONL).
-- **`--summary`**: Head+tail preview (first 5 + last 15 lines) with `═══ ↕ N messages skipped ═══` gap separator (chalk.dim). Used by `agent-pick` fzf preview. Small files (≤32KB) single-read; large files parallel head+tail 16KB chunk reads. `parseAndFormat()` drains stateful parsers (Claude) with a while loop guard.
-- **`agent-pick`**: Thin Bun script at `bin/agent-pick` that collects `agent-tail --list` output first, then pipes via `printf | fzf` (avoids TTY race). Preview uses `--summary`. Falls back to plain list when fzf not installed. The shortId (first column of `--list` output) is passed to `agent-tail <type> <shortId>` via `findBySessionId` partial match.
+- **`--summary`**: Head+tail preview (first 5 + last 15 lines) with `═══ ↕ N messages skipped ═══` gap separator (chalk.dim). Used by `agent-pick` fzf preview. Small files (≤32KB) single-read; large files parallel head+tail 16KB chunk reads.
+- **`agent-pick`**: Thin Bun script at `bin/agent-pick` that collects `agent-tail --list` output first, then pipes via `printf | fzf` (avoids TTY race). Preview uses `--summary`. Falls back to plain list when fzf not installed. The shortId (first column of `--list` output) is passed to `agent-tail <type> <shortId>` via `findBySessionId` partial match. Extra CLI args (e.g., `-v`, `-i`, `--pane`) are forwarded to the final `agent-tail` command via `extractTailPassthroughArgs`; list-only args (`-n`, `-p`, `-l`) are stripped.
 - **`-n` dual semantics**: In tail mode = last N lines per file. In list mode = number of sessions to show (default 20).
 - **Session time tail-read pattern**: `readCwdFromHead` uses progressive chunk reading (16KB→64KB→256KB) because some Claude sessions have 30+ `file-history-snapshot` lines before `cwd`. `readLastTimestampFromJSONL` and `readCustomTitleFromTail` read last 8KB and scan backward.
 
@@ -224,6 +225,7 @@ src/
 - **`--list` is mutually exclusive with most tail-mode options**: `--interactive`, `--subagent`, `--pane`, `--with-subagents`, `--auto-switch`, `--raw`, `--all`, and `[session-id]` positional arg. It auto-sets `--no-follow`.
 - **`customTitle` in `listSessions()` uses tail-read**: Claude's `listSessions()` populates `customTitle` via `readCustomTitleFromTail()` (8KB tail-read), not the full-file `readCustomTitle()`. Other agents don't support custom titles.
 - **`Bun.spawn` pipe chaining breaks fzf TTY**: Piping `listProc.stdout` directly to fzf's `stdin` via `Bun.spawn` prevents fzf from accessing `/dev/tty` for keyboard input (arrow keys show `^[[A`). Use `sh -c "cmd | fzf ..."` instead — the shell handles pipe setup while fzf gets proper TTY access. See `buildShellCommand()` in `src/pick/fzf-helpers.ts`.
+- **`parseAndFormat` drain must use empty string**: In `summary.ts`, the while loop drains stateful parsers (Claude multi-part messages) by calling `parser.parse('')` — NOT `parser.parse(line)`. Stateless parsers (Codex/Cursor/Gemini) return the same result for the same line forever, causing 100x duplication. Empty string makes stateless parsers return null immediately while Claude's `currentMessageState` continues draining.
 - **PaneManager logging belongs inside PaneManager, not in callbacks**: `onSubagentEnter` fires on every `agent_progress` event (repeatedly). Logging pane state in the callback causes duplicate messages. Instead, pass `logger` to `PaneManager` constructor; `openPane()` and `closePaneByAgentId()` log only when actually acting (after dedup checks). `openPane()` also re-throws errors so callers can surface `Failed to open pane` warnings.
 
 ## Code Quality
