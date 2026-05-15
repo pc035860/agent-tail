@@ -15,6 +15,7 @@ import {
   truncateByLines,
   formatMultiline,
 } from '../../utils/text.ts';
+import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
 import { isValidCursorSubagentId } from '../../cursor/watch-builder.ts';
 
 /**
@@ -428,24 +429,109 @@ function stripAttachedFilesTags(text: string): string {
 }
 
 /**
- * Cursor JSONL 解析器（無狀態）
- * 格式: {"role":"user|assistant","message":{"content":[{"type":"text","text":"..."}]}}
+ * 把物件中的 key 改名（不可變操作；不存在則原樣回傳）
+ */
+function remapKey(
+  input: Record<string, unknown>,
+  from: string,
+  to: string
+): Record<string, unknown> {
+  if (!(from in input)) return input;
+  const { [from]: value, ...rest } = input;
+  return { ...rest, [to]: value };
+}
+
+/**
+ * 把 Cursor tool input key 翻譯成 Claude/Codex 統一格式，讓 formatToolUse 能直接讀。
+ * Cursor 對部分 tool 用了不同的欄位名（例如 Read 用 path 而非 file_path）。
+ * 對 Cursor 獨有的 tool（SemanticSearch / ReadLints / CreatePlan 等）不動，讓它們走 default branch。
+ */
+export function normalizeCursorToolInput(
+  name: string,
+  input: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!input) return input;
+  switch (name) {
+    case 'Read':
+    case 'Delete':
+    case 'StrReplace':
+      return remapKey(input, 'path', 'file_path');
+    case 'Write':
+      return remapKey(
+        remapKey(input, 'path', 'file_path'),
+        'contents',
+        'content'
+      );
+    case 'Glob':
+      return remapKey(
+        remapKey(input, 'glob_pattern', 'pattern'),
+        'target_directory',
+        'path'
+      );
+    case 'WebSearch':
+      return remapKey(input, 'search_term', 'query');
+    default:
+      return input;
+  }
+}
+
+/**
+ * Cursor JSONL 解析器（assistant 為 stateful multi-emit，user 為 single-emit）
+ * 格式: {"role":"user|assistant","message":{"content":[{"type":"text",...} | {"type":"tool_use",name,input}, ...]}}
+ *
+ * 對 assistant message，content 陣列可能含 text + 多個 tool_use；
+ * 仿 ClaudeLineParser，每次 parse() 只回一筆 ParsedLine，caller 端需 drain。
  */
 class CursorLineParser implements LineParser {
   private verbose: boolean;
+  /** 追蹤 assistant message 內部的處理進度 */
+  private currentMessageState: {
+    data: Record<string, unknown>;
+    contentParts: Array<{
+      type: string;
+      text?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+    }>;
+    partIndex: number;
+    hasTextBefore: boolean;
+  } | null = null;
+  /** 追蹤已處理的 line，避免 while 迴圈重複處理 */
+  private lastProcessedLine: string | null = null;
 
   constructor(options: ParserOptions = { verbose: false }) {
     this.verbose = options.verbose;
   }
 
   parse(line: string): ParsedLine | null {
+    // 如果正在處理 assistant message 的內部狀態（drain 中）
+    if (this.currentMessageState) {
+      const result = this.processAssistantPart();
+      if (result) return result;
+      // 處理完畢，清除狀態並回傳 null
+      this.currentMessageState = null;
+      return null;
+    }
+
     if (!line.trim()) return null;
+
+    // 避免重複處理同一個 line
+    if (line === this.lastProcessedLine) {
+      return null;
+    }
+    this.lastProcessedLine = line;
 
     try {
       const data = JSON.parse(line);
       const role = data.role as string;
       if (!role) return null;
 
+      // assistant message 需要特殊處理（可能含多個 tool_use）
+      if (role === 'assistant') {
+        return this.parseAssistantMessage(data);
+      }
+
+      // user message：保持原本 single-emit 路徑（user 不會混 tool_use）
       const content = data.message?.content;
       let text = contentToString(content);
 
@@ -463,7 +549,7 @@ class CursorLineParser implements LineParser {
       const preview = truncateByLines(text, { verbose: this.verbose });
 
       return {
-        type: role, // 'user' | 'assistant' — PrettyFormatter 已支援
+        type: role,
         timestamp: '', // Cursor 日誌無時間戳
         raw: data,
         formatted: formatMultiline(preview),
@@ -471,6 +557,104 @@ class CursorLineParser implements LineParser {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 解析 assistant message，拆分成多個部分（text / tool_use）
+   */
+  private parseAssistantMessage(
+    data: Record<string, unknown>
+  ): ParsedLine | null {
+    const message = data.message as
+      | {
+          content?: Array<{
+            type: string;
+            text?: string;
+            name?: string;
+            input?: Record<string, unknown>;
+          }>;
+        }
+      | undefined;
+    const content = message?.content || [];
+
+    // 過濾有效的部分（非空 text 或具名 tool_use）
+    const validParts = content.filter(
+      (part) =>
+        (part.type === 'text' && part.text?.trim()) ||
+        (part.type === 'tool_use' && part.name)
+    );
+
+    // Fallback：若 content 都是未識別 type（例如 tool_result / image），
+    // 走 contentToString 攤平成單筆 ParsedLine 輸出，避免完全消失
+    if (validParts.length === 0) {
+      const text = contentToString(content);
+      if (!text.trim()) return null;
+      const preview = truncateByLines(text, { verbose: this.verbose });
+      return {
+        type: 'assistant',
+        timestamp: '',
+        raw: data,
+        formatted: formatMultiline(preview),
+      };
+    }
+
+    this.currentMessageState = {
+      data,
+      contentParts: validParts,
+      partIndex: 0,
+      hasTextBefore: false,
+    };
+
+    return this.processAssistantPart();
+  }
+
+  /**
+   * 處理 assistant message 的下一個部分
+   */
+  private processAssistantPart(): ParsedLine | null {
+    if (!this.currentMessageState) return null;
+
+    const { data, contentParts, partIndex } = this.currentMessageState;
+    if (partIndex >= contentParts.length) return null;
+
+    const part = contentParts[partIndex];
+    if (!part) return null;
+
+    this.currentMessageState.partIndex++;
+
+    if (part.type === 'text' && part.text) {
+      this.currentMessageState.hasTextBefore = true;
+      const preview = truncateByLines(part.text, { verbose: this.verbose });
+      return {
+        type: 'assistant',
+        timestamp: '', // Cursor 無時間戳
+        raw: data,
+        formatted: formatMultiline(preview),
+      };
+    }
+
+    if (part.type === 'tool_use' && part.name) {
+      const isTask = isSubagentTool(part.name);
+      const taskDescription =
+        isTask && typeof part.input?.description === 'string'
+          ? part.input.description
+          : undefined;
+      const normalizedInput = normalizeCursorToolInput(part.name, part.input);
+
+      return {
+        type: 'function_call',
+        timestamp: '',
+        raw: part,
+        formatted: formatToolUse(part.name, normalizedInput, {
+          verbose: this.verbose,
+        }),
+        toolName: part.name,
+        isTaskToolUse: isTask,
+        taskDescription,
+      };
+    }
+
+    return null;
   }
 }
 

@@ -1,5 +1,8 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
-import { CursorAgent } from '../../src/agents/cursor/cursor-agent';
+import {
+  CursorAgent,
+  normalizeCursorToolInput,
+} from '../../src/agents/cursor/cursor-agent';
 import type { LineParser } from '../../src/agents/agent.interface';
 
 describe('CursorAgent', () => {
@@ -97,7 +100,8 @@ describe('CursorLineParser', () => {
       expect(result!.formatted).toContain('Here is the solution');
     });
 
-    test('should handle multi-content array', () => {
+    test('should emit multi-content array as separate ParsedLine entries (drain)', () => {
+      // assistant message 為 stateful multi-emit：caller 需 drain 取多筆 ParsedLine
       const line = JSON.stringify({
         role: 'assistant',
         message: {
@@ -108,10 +112,46 @@ describe('CursorLineParser', () => {
         },
       });
 
-      const result = parser.parse(line);
-      expect(result).not.toBeNull();
-      expect(result!.formatted).toContain('First part.');
-      expect(result!.formatted).toContain('Second part.');
+      const first = parser.parse(line);
+      expect(first).not.toBeNull();
+      expect(first!.formatted).toContain('First part.');
+
+      // Drain 第二筆
+      const second = parser.parse(line);
+      expect(second).not.toBeNull();
+      expect(second!.formatted).toContain('Second part.');
+
+      // Drain 完畢
+      expect(parser.parse(line)).toBeNull();
+    });
+
+    test('should emit text + tool_use as separate ParsedLine entries', () => {
+      const line = JSON.stringify({
+        role: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'Running command' },
+            {
+              type: 'tool_use',
+              name: 'Shell',
+              input: { command: 'ls -la' },
+            },
+          ],
+        },
+      });
+
+      const first = parser.parse(line);
+      expect(first).not.toBeNull();
+      expect(first!.type).toBe('assistant');
+      expect(first!.formatted).toContain('Running command');
+
+      const second = parser.parse(line);
+      expect(second).not.toBeNull();
+      expect(second!.type).toBe('function_call');
+      expect(second!.toolName).toBe('Shell');
+      expect(second!.formatted).toContain('ls -la');
+
+      expect(parser.parse(line)).toBeNull();
     });
   });
 
@@ -202,6 +242,91 @@ describe('CursorLineParser', () => {
       expect(result!.formatted).toContain('Tool output here');
     });
 
+    test('should normalize Read input.path → file_path and render filename', () => {
+      const line = JSON.stringify({
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Read',
+              input: { path: '/Users/me/project/README.md', limit: 80 },
+            },
+          ],
+        },
+      });
+
+      const result = parser.parse(line);
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe('function_call');
+      expect(result!.toolName).toBe('Read');
+      expect(result!.formatted).toContain('/Users/me/project/README.md');
+    });
+
+    test('should normalize Glob input keys (glob_pattern → pattern, target_directory → path)', () => {
+      const line = JSON.stringify({
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Glob',
+              input: {
+                target_directory: '/Users/me/project',
+                glob_pattern: '**/*.ts',
+              },
+            },
+          ],
+        },
+      });
+
+      const result = parser.parse(line);
+      expect(result).not.toBeNull();
+      expect(result!.formatted).toContain('**/*.ts');
+      expect(result!.formatted).toContain('/Users/me/project');
+    });
+
+    test('should normalize Write input (path → file_path, contents → content)', () => {
+      const line = JSON.stringify({
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Write',
+              input: {
+                path: '/Users/me/project/out.json',
+                contents: '{}',
+              },
+            },
+          ],
+        },
+      });
+
+      const result = parser.parse(line);
+      expect(result).not.toBeNull();
+      expect(result!.formatted).toContain('/Users/me/project/out.json');
+    });
+
+    test('should normalize WebSearch input.search_term → query', () => {
+      const line = JSON.stringify({
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'WebSearch',
+              input: { search_term: 'best ts patterns', explanation: 'x' },
+            },
+          ],
+        },
+      });
+
+      const result = parser.parse(line);
+      expect(result).not.toBeNull();
+      expect(result!.formatted).toContain('best ts patterns');
+    });
+
     test('should handle content with unknown type items', () => {
       const line = JSON.stringify({
         role: 'assistant',
@@ -215,5 +340,64 @@ describe('CursorLineParser', () => {
       // contentToString falls back to [type] for unknown types
       expect(result!.formatted).toContain('[image]');
     });
+  });
+});
+
+describe('normalizeCursorToolInput', () => {
+  test('returns input unchanged for unknown tool name', () => {
+    const input = { path: '/a', whatever: 1 };
+    expect(normalizeCursorToolInput('SemanticSearch', input)).toEqual(input);
+  });
+
+  test('handles undefined input safely', () => {
+    expect(normalizeCursorToolInput('Read', undefined)).toBeUndefined();
+  });
+
+  test('remaps Read path → file_path', () => {
+    const result = normalizeCursorToolInput('Read', {
+      path: '/file.ts',
+      limit: 10,
+    });
+    expect(result).toEqual({ file_path: '/file.ts', limit: 10 });
+  });
+
+  test('remaps Write path + contents in one pass', () => {
+    const result = normalizeCursorToolInput('Write', {
+      path: '/out.json',
+      contents: '{}',
+    });
+    expect(result).toEqual({ file_path: '/out.json', content: '{}' });
+  });
+
+  test('remaps Glob glob_pattern + target_directory', () => {
+    const result = normalizeCursorToolInput('Glob', {
+      target_directory: '/proj',
+      glob_pattern: '**/*.ts',
+      head_limit: 50,
+    });
+    expect(result).toEqual({
+      path: '/proj',
+      pattern: '**/*.ts',
+      head_limit: 50,
+    });
+  });
+
+  test('remaps WebSearch search_term → query', () => {
+    const result = normalizeCursorToolInput('WebSearch', {
+      search_term: 'foo bar',
+      explanation: 'why',
+    });
+    expect(result).toEqual({ query: 'foo bar', explanation: 'why' });
+  });
+
+  test('leaves Grep input untouched (already aligned)', () => {
+    const input = { path: '/proj', pattern: 'TODO', glob: '*.ts' };
+    expect(normalizeCursorToolInput('Grep', input)).toEqual(input);
+  });
+
+  test('handles partial input (missing from-key returns same shape)', () => {
+    // Cursor Read 有時只有 path 沒 limit；missing key 不該爆
+    const result = normalizeCursorToolInput('Read', { offset: 5 });
+    expect(result).toEqual({ offset: 5 });
   });
 });

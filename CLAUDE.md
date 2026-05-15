@@ -95,7 +95,7 @@ src/
 │   │   ├── codex-agent.ts    # CodexSessionFinder with getProjectInfo, findLatestInProject
 │   │   └── session-cache.ts  # Cwd-indexed cache with incremental refresh
 │   ├── claude/claude-agent.ts
-│   ├── cursor/cursor-agent.ts  # CursorSessionFinder (with findSubagent) + CursorLineParser (stateless, no timestamps)
+│   ├── cursor/cursor-agent.ts  # CursorSessionFinder (with findSubagent) + CursorLineParser (stateful multi-emit for assistant tool_use, no timestamps)
 │   └── gemini/gemini-agent.ts # GeminiSessionFinder with .project_root support
 ├── claude/                   # Claude-specific modules
 │   ├── subagent-detector.ts  # Detect and monitor subagent sessions (with directory watch)
@@ -193,15 +193,15 @@ src/
 **Cursor Agent (Phases 1-3 complete):**
 - **No timestamps**: Cursor JSONL entries have no timestamp field. Parser returns `''`, formatter shows `[--:--:--]`.
 - **Workspace slug is NOT reversible**: `-` in slug could be path separator, literal hyphen, or underscore. Only `.workspace-trusted` (present in ~10% of dirs) has authoritative `workspacePath`. Project filter (`-p`) checks both slug and workspacePath.
-- **Stateless parser**: Like Codex, no need to recreate on session switch. Uses `contentToString()` from `src/utils/text.ts` to handle content arrays.
+- **Stateful multi-emit parser (assistant only)**: Cursor `assistant.message.content` 可含 text + 多個 `tool_use`，parser 仿 Claude 用 `currentMessageState` 拆成多筆 `ParsedLine` 回傳（text → `type: 'assistant'`；tool_use → `type: 'function_call'` + `toolName` + `formatToolUse(...)`）。caller 必須 drain：`while (parsed && guard < 100) { ...; parsed = parser.parse(line); guard++; }`，靠 `lastProcessedLine` 去重避免無窮迴圈。`user` role 仍走 single-emit（`contentToString` + tag strip），不需 drain 但 drain 也安全。session 切換時 `currentMessageState` 通常在 drain loop 結束時已是 null（同步處理完一行就清），跨 session 共用 parser 不會污染。
 - **Tag stripping order matters**: Must run `stripAttachedFilesTags` before `stripUserQueryTags` — attached_files block can precede user_query, and user_query regex uses `^` anchor.
 - **`findLatestInProject` glob `*/*.jsonl`**: Only matches one level deep, so subagent files in `subagents/` subdirectory are naturally excluded — no explicit `/subagents/` check needed.
 - **Subagent detection is pure directory-watch**: Cursor JSONL has **no** spawn/resume/done events. `CursorSubagentDetector` uses only `fs.watch` on `subagents/` dir (with parent dir fallback for the ~88% of sessions that don't have subagents at startup).
 - **Subagent filenames have no prefix**: `{UUID}.jsonl` (not `agent-{hex}.jsonl` like Claude). Use `isValidCursorSubagentId` (UUID regex) for validation.
 - **`CursorSubagentDetector` rolls back on failure**: Unlike Claude's detector, Cursor's `tryAddSubagentFile` removes `agentId` from `knownAgentIds` on failure, since there are no JSONL events for fallback detection.
 - **Pane FIFO eviction**: Cursor has no subagent completion events, so panes accumulate. `startCursorMultiWatch` uses a FIFO array (`paneAgentOrder`) to evict the oldest pane when at 6-pane capacity. `paneAgentOrder` must be cleared on session switch.
-- **Interactive mode follows Codex pattern**: Shared stateless parser, no `detectionHandler`, no custom title support. Do NOT pass `session` to `CursorSubagentDetector` config in interactive mode — the detector's `registerExistingAgent` and `registerNewAgent` both call `session?.addSession?()` internally, which would cause double registration if combined with `onNewSubagent` callback.
-- **`--no-follow --with-subagents` uses sequential output**: NOT `outputTimeSorted` (which infinite-loops with stateless parsers). Output main session first, then subagents by birthtime.
+- **Interactive mode follows Codex pattern**: Shared parser instance (stateful multi-emit, but drain completes within each onLine call so session switching is safe), no `detectionHandler`, no custom title support. Do NOT pass `session` to `CursorSubagentDetector` config in interactive mode — the detector's `registerExistingAgent` and `registerNewAgent` both call `session?.addSession?()` internally, which would cause double registration if combined with `onNewSubagent` callback.
+- **`--no-follow --with-subagents` uses sequential output**: NOT `outputTimeSorted` (Cursor JSONL has no timestamp for sorting). Output main session first, then subagents by birthtime.
 - **All CLI options supported**: `--subagent`, `--with-subagents`, `--all`, `--pane`, `--interactive` now supported for `claude`, `codex`, and `cursor`.
 - **`createInteractiveSessionManager(displayController)`** is shared by Claude, Codex, and Cursor interactive watches.
 
@@ -225,7 +225,7 @@ src/
 - **`--list` is mutually exclusive with most tail-mode options**: `--interactive`, `--subagent`, `--pane`, `--with-subagents`, `--auto-switch`, `--raw`, `--all`, and `[session-id]` positional arg. It auto-sets `--no-follow`.
 - **`customTitle` in `listSessions()` uses tail-read**: Claude's `listSessions()` populates `customTitle` via `readCustomTitleFromTail()` (8KB tail-read), not the full-file `readCustomTitle()`. Other agents don't support custom titles.
 - **`Bun.spawn` pipe chaining breaks fzf TTY**: Piping `listProc.stdout` directly to fzf's `stdin` via `Bun.spawn` prevents fzf from accessing `/dev/tty` for keyboard input (arrow keys show `^[[A`). Use `sh -c "cmd | fzf ..."` instead — the shell handles pipe setup while fzf gets proper TTY access. See `buildShellCommand()` in `src/pick/fzf-helpers.ts`.
-- **`parseAndFormat` drain must use empty string**: In `summary.ts`, the while loop drains stateful parsers (Claude multi-part messages) by calling `parser.parse('')` — NOT `parser.parse(line)`. Stateless parsers (Codex/Cursor/Gemini) return the same result for the same line forever, causing 100x duplication. Empty string makes stateless parsers return null immediately while Claude's `currentMessageState` continues draining.
+- **`parseAndFormat` drain must use empty string**: In `summary.ts`, the while loop drains stateful parsers (Claude/Cursor multi-part messages) by calling `parser.parse('')` — NOT `parser.parse(line)`. Stateless parsers (Codex/Gemini) return the same result for the same line forever, causing 100x duplication. Empty string makes stateless parsers return null immediately while Claude/Cursor's `currentMessageState` continues draining. (Cursor parser also has `lastProcessedLine` dedup, so `parse(line)` is safe too — the `index.ts` cursor callsites use that style for consistency with the existing Gemini drain.)
 - **PaneManager logging belongs inside PaneManager, not in callbacks**: `onSubagentEnter` fires on every `agent_progress` event (repeatedly). Logging pane state in the callback causes duplicate messages. Instead, pass `logger` to `PaneManager` constructor; `openPane()` and `closePaneByAgentId()` log only when actually acting (after dedup checks). `openPane()` also re-throws errors so callers can surface `Failed to open pane` warnings.
 
 ## Code Quality
