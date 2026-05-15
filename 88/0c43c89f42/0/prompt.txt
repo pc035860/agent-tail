@@ -1,0 +1,101 @@
+<task-notification>
+<task-id>ac65a6df4cd24abe0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/ac65a6df4cd24abe0.output</output-file>
+<status>completed</status>
+<summary>Agent "Code reuse review" completed</summary>
+<result>I have enough to ground concrete findings. Here are the code-reuse issues.
+
+## Findings
+
+- **Drain loop duplication (5 sites, identical shape).** Each of `src/index.ts:1663-1670`, `src/index.ts:1811-1817`, `src/index.ts:1931-1938`, `src/index.ts:2107-2114`, and `src/list/summary.ts:74-85` writes the same `let parsed = parser.parse(line); let guard = 0; while (parsed &amp;&amp; guard &lt; 100) { …; parsed = parser.parse(arg); guard++; }`. A 3-line `drainParser(parser, line, onEach, { drainArg })` in `src/utils/` (or `src/core/`) would replace all five, including `summary.ts`'s "drain with `''`" gotcha (now documented twice). MVP comment in the plan notwithstanding, this is a real reuse hit — five copies is past the threshold. *Fix:* extract `drainParser` and call it from every site; `summary.ts` passes `drainArg: ''`, the rest pass `drainArg: line` (Gemini path) or stay at `line` for Cursor.
+
+- **`parseAssistantMessage` / `processAssistantPart` near-duplication with Claude.** `src/agents/cursor/cursor-agent.ts:564-655` mirrors `src/agents/claude/claude-agent.ts:517-609` almost line-for-line; the only Cursor-specific bits are (a) no `modelShort` prefix, (b) `normalizeCursorToolInput` before `formatToolUse`, (c) no timestamp. Given Claude additionally has `toolUseResult` + custom-title branches and richer state, a full base class is overkill, but the **inner `processAssistantPart` body** (validParts filter + state machine + text/tool_use emit) is genuinely shared. *Fix (optional, low priority):* extract a `createAssistantMessageDrain({ getModelPrefix, normalizeInput, getTimestamp })` helper in `src/utils/` or `src/core/assistant-parts.ts`. If you want to keep MVP, at minimum hoist the `validParts` filter — it is byte-identical.
+
+- **`remapKey` has no existing equivalent.** I searched `src/` and `tests/` for `remap`/`renameKey`/`renameProp` — nothing. No lodash dependency in this repo either. The helper is genuinely new; keep it. (Could live in `src/utils/object.ts` if reused later, but right now it has one caller.)
+
+- **`normalizeCursorToolInput` switch — no lookup-table precedent in repo.** `formatToolUse` in `src/utils/format-tool.ts:86-235` is itself a giant switch, so the switch idiom matches house style. No table-driven remap exists elsewhere. Keep as-is.
+
+- **`isSubagentTool` + `taskDescription` extraction is duplicated verbatim.** `cursor-agent.ts:638-642` and `claude-agent.ts:589-593` both do `const isTask = isSubagentTool(part.name); const taskDescription = isTask &amp;&amp; typeof part.input?.description === 'string' ? part.input.description : undefined;`. *Fix:* tiny helper `extractTaskDescription(part)` in `src/utils/format-tool.ts` (next to `isSubagentTool`). 4 lines, two callers, zero risk.
+
+- **No other reuse hits.** `contentToString`, `truncateByLines`, `formatMultiline`, `formatToolUse`, `isSubagentTool` are all correctly reused by the new code.</result>
+<usage><total_tokens>54310</total_tokens><tool_uses>7</tool_uses><duration_ms>37076</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac6c68c05fdd3804b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/ac6c68c05fdd3804b.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review" completed</summary>
+<result>Verified. Here are the efficiency findings:
+
+**Efficiency review — `feat(cursor): render tool_use blocks with normalized input`**
+
+- **`remapKey` early-return (cursor-agent.ts:439)**: When `from` key missing it correctly returns the original `input` reference — no spread/allocation. **negligible**.
+
+- **Double allocation in `Write`/`Glob` normalize (cursor-agent.ts:459–470)**: Two stacked `remapKey` calls each spread the object when both keys are present, producing one throwaway intermediate per tool_use. Per call this is ~2 small object allocations. **negligible** (tool_use is not a tight inner loop — at most a few per assistant message).
+
+- **Two passes over `content` (cursor-agent.ts:581 then drain over `validParts`)**: `filter` then drained iteration. Array N is tiny (usually &lt;20 parts). **negligible**.
+
+- **`lastProcessedLine` retains a reference to the JSONL string (cursor-agent.ts:500, 522)**: It is **never explicitly cleared**, so the last (potentially large, MB-scale assistant message) line stays alive on `sharedParser` for the entire process lifetime in interactive mode. **measurable** in long-running interactive sessions with very large messages.
+  - Fix: clear `this.lastProcessedLine = null` once drain finishes (the same spot at line 512 where `currentMessageState` is cleared), or store only a hash/length+head signature instead of the full string.
+
+- **`truncateByLines` with `verbose=true` (text.ts:53)**: Returns `text` immediately — true no-op. **negligible**.
+
+- **Drain `guard &lt; 100` (index.ts:1808, 1916, 2107, 1665)**: Second `parse(line)` call hits the `line === lastProcessedLine` short-circuit at cursor-agent.ts:519 and returns null after one ref-equality + null check. **not** 100 iterations of work — confirmed cheap. **negligible**.
+  - Edge case: an assistant message with &gt;100 valid parts would silently truncate at guard=100. Realistic? Probably no, but worth a comment or a higher cap. **negligible** in practice.
+
+- **`contentToString` fallback (cursor-agent.ts:590)**: Only runs when all parts are unrecognized types — rare. **negligible**.
+
+- **`currentMessageState` cross-session leak risk (cursor-agent.ts:488)**: `sharedParser` is reused across sessions in interactive/multi-watch. If a drain is interrupted mid-message (session switch before guard exhausts), state persists and the next line on a new session would emit stale parts using the old `data` ref. The drain loops always run to completion synchronously per line, so in practice this can't interleave — but if a session-switch ever happens between lines, `currentMessageState` should be reset. **measurable risk** if switch logic ever lands mid-drain; today it doesn't.
+  - Fix: expose a `reset()` method on `CursorLineParser` and call it from `switchToSession` for safety.
+
+**Overall**: The diff is efficient. The only finding worth acting on is the `lastProcessedLine` reference retention (small leak in long-running interactive mode) and optionally a `reset()` hook for defensive cleanup on session switch.
+
+Relevant files:
+- `/Users/pc035860/code/agent-tail/src/agents/cursor/cursor-agent.ts`
+- `/Users/pc035860/code/agent-tail/src/index.ts`
+- `/Users/pc035860/code/agent-tail/src/utils/text.ts`</result>
+<usage><total_tokens>46127</total_tokens><tool_uses>3</tool_uses><duration_ms>30291</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3f87e6d0e366f299</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/a3f87e6d0e366f299.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review" completed</summary>
+<result>Five drain loops with same guard. Now I have enough to deliver findings.
+
+## Findings
+
+- **src/agents/cursor/cursor-agent.ts:497, 605, 626 — Redundant state `hasTextBefore`.** Field is written but never read in Cursor (it only gates `modelInfo` prefix in Claude on `claude-agent.ts:579`, which Cursor doesn't have). It's pure copy-paste cargo. **Fix:** remove the field from the type and the two assignments.
+
+- **src/agents/cursor/cursor-agent.ts:637–641, 652–653 — Dead `isTaskToolUse` / `taskDescription` for Cursor.** Only `src/claude/watch-builder.ts:162–165` reads these; Cursor's `SubagentDetector` is pure directory-watch with no `pushDescription` consumer. Setting them on Cursor ParsedLine is misleading (suggests Cursor has spawn events). **Fix:** drop both fields from the Cursor tool_use return; remove `isSubagentTool` import if it becomes unused.
+
+- **src/agents/cursor/cursor-agent.ts:498–499, 518–522 — `lastProcessedLine` has a latent correctness bug.** It's never reset after drain completes; if two genuinely identical consecutive JSONL lines arrive (rare but legal), the second is silently dropped. The drain-dedup it's defending against is already handled by the `currentMessageState` short-circuit at the top of `parse()`. **Fix:** remove `lastProcessedLine` entirely — the state-check on line 508 already prevents re-parsing during drain.
+
+- **src/index.ts:1659–1670, 1808–1817, 1929–1938, 2104–2117 + src/list/summary.ts:77 — Five near-identical drain loops with `guard &lt; 100`.** Bodies differ only in the per-emit sink (`sessionManager.handleOutput` / `console.log` / `shouldOutput` gate). A two-line helper `drainParser(parser, line, emit)` would eliminate the magic-number repetition and centralize the guard. **Fix:** extract `function drainParser(parser, line, emit, max = 100)` in a shared util; call sites become one line each. (Acknowledging this overlaps the "reuse" review — flagging the magic-number duplication purely as quality smell.)
+
+- **src/index.ts:2105–2108 — Comment narrates internals.** "Stateful parser drain: Gemini 用 processedMessageIds 追蹤訊息 / Cursor 用 currentMessageState + lastProcessedLine" leaks parser-internal field names into a call site. If field names change, this comment silently goes stale. **Fix:** shorten to "Stateful parsers (Gemini/Cursor): drain until null."
+
+- **src/agents/cursor/cursor-agent.ts:566 (`type: role,` cleanup) — Stale comment removal is fine, but new line 534 comment "user 不會混 tool_use" is an unverifiable assumption.** If Cursor ever changes this, the user branch silently drops tool_use. **Fix:** either route user through the same multi-emit path (cheap, defensive), or make the comment a `// TODO: verify` flag.
+
+**Clean dimensions:**
+- No nested-conditional / chained-ternary issues &gt; 3 levels in `processAssistantPart` / `parseAssistantMessage` — control flow is flat early-returns.
+- `normalizeCursorToolInput` switch is fine; stringly-typed tool names match the existing `format-tool.ts:121–154` style, so no new inconsistency introduced.
+- Tests assert observable output (`formatted` contents, `toolName`, drain returning null when done) — behaviour-focused, not implementation-coupled. Setup duplication is acceptable given Bun's lack of parameterized tests.
+- No parameter-sprawl regressions; `normalizeCursorToolInput(name, input)` is a clean signature.
+
+Relevant files:
+- `/Users/pc035860/code/agent-tail/src/agents/cursor/cursor-agent.ts`
+- `/Users/pc035860/code/agent-tail/src/index.ts`
+- `/Users/pc035860/code/agent-tail/src/list/summary.ts` (existing 5th drain site)
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts` (reference for what `hasTextBefore` is actually for)</result>
+<usage><total_tokens>50546</total_tokens><tool_uses>14</tool_uses><duration_ms>81736</duration_ms></usage>
+</task-notification>
