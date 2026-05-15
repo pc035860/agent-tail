@@ -123,6 +123,10 @@ describe('CursorLineParser', () => {
 
       // Drain 完畢
       expect(parser.parse(line)).toBeNull();
+      // Regression: 再對同 line 呼叫一次仍要回 null（lastProcessedLine dedup），
+      // 否則 drain loop + 同 line 會變無限迴圈
+      expect(parser.parse(line)).toBeNull();
+      expect(parser.parse(line)).toBeNull();
     });
 
     test('should emit text + tool_use as separate ParsedLine entries', () => {

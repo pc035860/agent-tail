@@ -57,6 +57,7 @@ import {
 } from './claude/watch-builder.ts';
 import { findLatestMainSessionInProject } from './claude/auto-switch.ts';
 import { readCustomTitle } from './claude/custom-title.ts';
+import { drainParser } from './utils/parser-drain.ts';
 import { createTerminalController } from './terminal/controller-factory.ts';
 import { PaneManager } from './terminal/pane-manager.ts';
 import { CursorSubagentDetector } from './cursor/subagent-detector.ts';
@@ -1658,16 +1659,11 @@ async function startCursorInteractiveWatch(
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
       onLine: (line: string, label: string) => {
-        // Cursor 無 JSONL 事件，不需要 detectionHandler
-        // Cursor parser 為 stateful multi-emit（assistant message 可拆出多筆 ParsedLine），需 drain
-        let parsed = sharedParser.parse(line);
-        let guard = 0;
-        while (parsed && guard < 100) {
+        // Cursor 無 JSONL 事件，不需要 detectionHandler；parser 為 stateful multi-emit，需 drain
+        drainParser(sharedParser, line, (parsed) => {
           parsed.sourceLabel = label;
           sessionManager.handleOutput(label, formatter.format(parsed));
-          parsed = sharedParser.parse(line);
-          guard++;
-        }
+        });
       },
       onError: (error) => {
         displayController.write(chalk.red(`Error: ${error.message}`));
@@ -1808,14 +1804,10 @@ async function startCursorMultiWatch(
       const lines = content.split('\n').filter((line) => line.trim());
 
       for (const line of lines) {
-        let parsed = parser.parse(line);
-        let guard = 0;
-        while (parsed && guard < 100) {
+        drainParser(parser, line, (parsed) => {
           parsed.sourceLabel = file.label;
           console.log(formatter.format(parsed));
-          parsed = parser.parse(line);
-          guard++;
-        }
+        });
       }
     }
     process.exit(0);
@@ -1926,17 +1918,12 @@ async function startCursorMultiWatch(
   detector.startDirectoryWatch();
 
   // Cursor onLine handler（共用，避免 switchToSession 中重複）
-  // Cursor parser 為 stateful multi-emit，需 drain pattern
   const cursorOnLine = (line: string, label: string) => {
     if (shouldOutput && !shouldOutput(label)) return;
-    let parsed = parser.parse(line);
-    let guard = 0;
-    while (parsed && guard < 100) {
+    drainParser(parser, line, (parsed) => {
       parsed.sourceLabel = label;
       console.log(formatter.format(parsed));
-      parsed = parser.parse(line);
-      guard++;
-    }
+    });
   };
 
   // ========== Non-Interactive Super-Follow ==========
@@ -2103,18 +2090,12 @@ async function startSingleWatch(
     (parser: LineParser) =>
     (line: string): void => {
       if (options.agentType === 'gemini' || options.agentType === 'cursor') {
-        // Stateful parser drain：
-        //  - Gemini 用 processedMessageIds 追蹤訊息，反覆呼叫直到沒更多內容
-        //  - Cursor 用 currentMessageState + lastProcessedLine，assistant message 可拆多筆
-        let parsed = parser.parse(line);
-        let guard = 0;
-        while (parsed && guard < 100) {
+        // Stateful parsers (Gemini/Cursor): drain until null
+        drainParser(parser, line, (parsed) => {
           console.log(formatter.format(parsed));
-          parsed = parser.parse(line);
-          guard++;
-        }
+        });
       } else {
-        // Codex JSONL 模式：每行一個事件，單次處理
+        // Codex JSONL：每行一個事件，單次處理
         const parsed = parser.parse(line);
         if (parsed) {
           console.log(formatter.format(parsed));

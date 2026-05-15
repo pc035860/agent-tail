@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import type { LineParser } from '../agents/agent.interface.ts';
 import type { Formatter } from '../formatters/formatter.interface.ts';
-import type { ParsedLine } from '../core/types.ts';
+import { drainParser } from '../utils/parser-drain.ts';
 
 /**
  * Build the summary gap separator.
@@ -63,7 +63,9 @@ export async function formatSummary(
 
 /**
  * Parse lines through parser, collecting formatted output.
- * Handles stateful parsers (Claude) by draining with while loop.
+ * Drains stateful parsers (Claude/Cursor) via drainParser; passes empty string
+ * as drainArg so stateless parsers (Codex/Gemini) return null immediately
+ * instead of re-emitting on every iteration.
  */
 function parseAndFormat(
   lines: string[],
@@ -72,16 +74,15 @@ function parseAndFormat(
 ): string[] {
   const output: string[] = [];
   for (const line of lines) {
-    let parsed: ParsedLine | null = parser.parse(line);
-    let guard = 0;
-    while (parsed && guard < 100) {
-      const formatted = formatter.format(parsed);
-      if (formatted) output.push(formatted);
-      // Drain with empty string: stateful parsers (Claude) continue yielding
-      // buffered parts; stateless parsers (Codex/Cursor/Gemini) return null
-      parsed = parser.parse('');
-      guard++;
-    }
+    drainParser(
+      parser,
+      line,
+      (parsed) => {
+        const formatted = formatter.format(parsed);
+        if (formatted) output.push(formatted);
+      },
+      { drainArg: '' }
+    );
   }
   return output;
 }

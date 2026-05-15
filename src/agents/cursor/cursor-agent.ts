@@ -15,7 +15,7 @@ import {
   truncateByLines,
   formatMultiline,
 } from '../../utils/text.ts';
-import { formatToolUse, isSubagentTool } from '../../utils/format-tool.ts';
+import { formatToolUse } from '../../utils/format-tool.ts';
 import { isValidCursorSubagentId } from '../../cursor/watch-builder.ts';
 
 /**
@@ -494,9 +494,12 @@ class CursorLineParser implements LineParser {
       input?: Record<string, unknown>;
     }>;
     partIndex: number;
-    hasTextBefore: boolean;
   } | null = null;
-  /** 追蹤已處理的 line，避免 while 迴圈重複處理 */
+  /**
+   * 追蹤已處理的 line，避免 caller drain 完後再對同一行 parse(line) 又重新 init state
+   * （否則會無限重新發送第一個 part）。一旦設置就一直持有到下一個非同 line 的 parse() 為止；
+   * 不要在 drain 完成時清掉——那會打掉這個 dedup guard。
+   */
   private lastProcessedLine: string | null = null;
 
   constructor(options: ParserOptions = { verbose: false }) {
@@ -508,7 +511,9 @@ class CursorLineParser implements LineParser {
     if (this.currentMessageState) {
       const result = this.processAssistantPart();
       if (result) return result;
-      // 處理完畢，清除狀態並回傳 null
+      // 處理完畢，清除狀態並回傳 null。
+      // 注意：lastProcessedLine 必須保留——caller drain 完後可能用同 line 再呼叫一次，
+      // 沒有這個 guard 會 re-init state、re-emit 第一個 part，與 drain loop 一起變無限迴圈。
       this.currentMessageState = null;
       return null;
     }
@@ -602,7 +607,6 @@ class CursorLineParser implements LineParser {
       data,
       contentParts: validParts,
       partIndex: 0,
-      hasTextBefore: false,
     };
 
     return this.processAssistantPart();
@@ -623,7 +627,6 @@ class CursorLineParser implements LineParser {
     this.currentMessageState.partIndex++;
 
     if (part.type === 'text' && part.text) {
-      this.currentMessageState.hasTextBefore = true;
       const preview = truncateByLines(part.text, { verbose: this.verbose });
       return {
         type: 'assistant',
@@ -634,13 +637,9 @@ class CursorLineParser implements LineParser {
     }
 
     if (part.type === 'tool_use' && part.name) {
-      const isTask = isSubagentTool(part.name);
-      const taskDescription =
-        isTask && typeof part.input?.description === 'string'
-          ? part.input.description
-          : undefined;
+      // Cursor subagent 偵測走純 directory-watch（無 JSONL spawn event），
+      // 因此不設 isTaskToolUse / taskDescription — pretty-formatter 仍能透過 toolName 上 TASK category 標籤
       const normalizedInput = normalizeCursorToolInput(part.name, part.input);
-
       return {
         type: 'function_call',
         timestamp: '',
@@ -649,8 +648,6 @@ class CursorLineParser implements LineParser {
           verbose: this.verbose,
         }),
         toolName: part.name,
-        isTaskToolUse: isTask,
-        taskDescription,
       };
     }
 
