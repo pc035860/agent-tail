@@ -1,0 +1,861 @@
+幫我看一下 cursor session log，格式是不是有更新了，我現在看不太到 tool use 內容
+
+- 使用 agent Explore (haiku, run in foreground) 來做廣泛的程式碼探索與資料蒐集\
+- IMPORTANT: run subagents in parallel\
+- Utilize the TaskList tool to plan tasks in the user's best interest. Organize parallelization effectively for optimal results.
+
+---
+
+<task-notification>
+<task-id>a2dafaf4ceec51860</task-id>
+<tool-use-id>toolu_01HDJKfr3uRvAgAChfH7gqJT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/a2dafaf4ceec51860.output</output-file>
+<status>completed</status>
+<summary>Agent "Inspect real Cursor JSONL tool use format" completed</summary>
+<result>Perfect! Now I have everything I need. Let me compile the final report.
+
+## CURSOR AGENT SESSION JSONL FORMAT — FINDINGS
+
+### 5 Most Recently Modified Session Files
+
+1. `/Users/pc035860/.cursor/projects/Users-pc035860-git-samtsan-ec-monorepo/agent-transcripts/agent-d12701a1-14e6-47e2-a10a-32d79f2455d0/agent-d12701a1-14e6-47e2-a10a-32d79f2455d0.jsonl` — 5月 15 21:43 (3.6 KB)
+2. `/Users/pc035860/.cursor/projects/Users-pc035860-git-samtsan-ec-monorepo/agent-transcripts/agent-d925cb46-f43a-4ce4-a666-2711bf5c7246/agent-d925cb46-f43a-4ce4-a666-2711bf5c7246.jsonl` — 5月 15 20:38 (3.2 KB)
+3. `/Users/pc035860/.cursor/projects/Users-pc035860-git-samtsan-ec-monorepo/agent-transcripts/agent-9f14bde3-0b45-4f62-abec-7534d12c51db/agent-9f14bde3-0b45-4f62-abec-7534d12c51db.jsonl` — 5月 15 20:28 (2.5 KB)
+4. `/Users/pc035860/.cursor/projects/Users-pc035860-git-samtsan-ec-monorepo/agent-transcripts/agent-2e651ea0-563c-4c8b-bd6e-15b7188a3656/agent-2e651ea0-563c-4c8b-bd6e-15b7188a3656.jsonl` — 5月 15 20:26 (2.5 KB)
+5. `/Users/pc035860/.cursor/projects/Users-pc035860-git-samtsan-ec-monorepo/agent-transcripts/agent-4f22e166-0472-4469-8e7b-abda40cd95e9/agent-4f22e166-0472-4469-8e7b-abda40cd95e9.jsonl` — 5月 15 19:57 (16.7 KB)
+
+### Distinct Types Observed
+
+- `user` — user message entry
+- `assistant` — assistant/agent response entry
+- `text` — text content part within a message
+- `tool_use` — tool invocation part (nested in `content` array)
+
+**Note**: No separate `tool_result`, `tool_call`, or `function_call` types observed. Tool results appear to be folded back into subsequent `assistant` message entries as additional `text` content.
+
+### Tool Use Schema
+
+**Structure**: Tool invocations appear as objects nested in the `content` array of an `assistant` message, **alongside** `text` parts.
+
+**Key Fields in a `tool_use` object**:
+- `type` — always `"tool_use"`
+- `name` — tool name (string) — e.g., `"Read"`, `"Shell"`, `"TodoWrite"`, `"mcp_graph-memory_search_nodes"`
+- `input` — tool arguments (object or empty `{}`)
+
+**Full message structure**:
+```
+{
+  "role": "assistant",
+  "message": {
+    "content": [
+      { "type": "text", "text": "..." },
+      { "type": "tool_use", "name": "ToolName", "input": { ... } },
+      { "type": "tool_use", "name": "AnotherTool", "input": { ... } },
+      { "type": "text", "text": "..." }
+    ]
+  }
+}
+```
+
+### Examples
+
+**Example 1: Simple text message (user)**
+```json
+{
+  "role": "user",
+  "message": {
+    "content": [
+      {
+        "type": "text",
+        "text": "what tool do you use to invoke a skill ? like pr-review"
+      }
+    ]
+  }
+}
+```
+
+**Example 2: Assistant with multiple tool uses**
+```json
+{
+  "role": "assistant",
+  "message": {
+    "content": [
+      {
+        "type": "text",
+        "text": "開始執行 pr-review 完整流程：先查記憶並讀 Step 1 參考，接著建立任務清單並 checkout PR。"
+      },
+      {
+        "type": "tool_use",
+        "name": "mcp_graph-memory_search_nodes",
+        "input": {}
+      },
+      {
+        "type": "tool_use",
+        "name": "TodoWrite",
+        "input": {
+          "todos": [
+            {
+              "id": "1",
+              "content": "PR #713: Parse URL + checkout + fetch metadata",
+              "status": "in_progress"
+            },
+            {
+              "id": "2",
+              "content": "Step 2: Run code review",
+              "status": "pending"
+            }
+          ],
+          "merge": false
+        }
+      }
+    ]
+  }
+}
+```
+
+**Example 3: Tool use with structured input (Shell command)**
+```json
+{
+  "role": "assistant",
+  "message": {
+    "content": [
+      {
+        "type": "tool_use",
+        "name": "Shell",
+        "input": {
+          "command": "cd \"/Users/pc035860/git/samtsan/ec-monorepo/ec\" &amp;&amp; gh pr checkout 713 &amp;&amp; git branch --show-current",
+          "description": "Verify gh auth, checkout PR 713 in ec submodule"
+        }
+      }
+    ]
+  }
+}
+```
+
+**Example 4: Tool use with array input (Read)**
+```json
+{
+  "type": "tool_use",
+  "name": "Read",
+  "input": {
+    "path": "/Users/pc035860/git/samtsan/ec-monorepo/.cursor/skills/pr-review/SKILL.md",
+    "limit": 80
+  }
+}
+```
+
+### Variations
+
+All sampled files (across the 3 files read: 2–3 KB small files and 39 KB+ large file) use **consistent schema**. No observed differences across file sizes or timestamps. The format is **uniform and recent**.
+
+**Key observations**:
+- `content` is **always an array**, even when containing a single text element
+- Tool invocations and text can be **intermixed** in a single message's `content` array
+- Tool **names vary** (Claude Code tools: `Read`, `Shell`, `Glob`, `Grep`; MCP tools: `mcp_graph-memory_search_nodes`; Cursor-specific: `TodoWrite`)
+- Tool **input shapes vary** by tool (some empty `{}`, some with structured objects)
+- **No explicit tool results** in the JSONL; Cursor appears to log tool invocations but not their stdout/results in the session file (likely stored separately or in a different format)</result>
+<usage><total_tokens>49091</total_tokens><tool_uses>12</tool_uses><duration_ms>50292</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6b30eec011253771</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/a6b30eec011253771.output</output-file>
+<status>completed</status>
+<summary>Agent "Inspect agent-tail cursor parser code" completed</summary>
+<result>Perfect. Now I have all the information I need. Let me create a comprehensive report:
+
+## Tool-Use Handling in agent-tail: Cursor Parser vs. Actual Format
+
+### 1. ParsedLine Interface
+**File:** `/Users/pc035860/code/agent-tail/src/core/types.ts:91-108`
+
+```typescript
+export interface ParsedLine {
+  type: string;
+  timestamp: string;
+  raw: unknown;
+  formatted: string;
+  toolName?: string;           // 僅用於 function_call
+  sourceLabel?: string;
+  isTaskToolUse?: boolean;     // 用於偵測 Task/Agent spawn
+  taskDescription?: string;    // 用於 pane 命名
+  isCustomTitle?: boolean;
+  customTitleValue?: string;
+}
+```
+
+---
+
+### 2. Cursor Parser (CursorLineParser)
+**File:** `/Users/pc035860/code/agent-tail/src/agents/cursor/cursor-agent.ts:434-475`
+
+**Current Implementation:**
+- **JSONL format expected:** `{ role: "user|assistant", message: { content: [...] } }`
+- **Handled types:** Only `"user"` and `"assistant"` (role field)
+- **No tool-use detection whatsoever**
+
+**Parse Method Summary (lines 441-474):**
+1. Reads `data.role` (line 446)
+2. Reads `data.message.content` array (line 449)
+3. Uses `contentToString(content)` to extract text (line 450)
+4. **Tag stripping order (lines 454-458):**
+   - Strip `&lt;attached_files&gt;` blocks first (line 457)
+   - Strip `&lt;user_query&gt;` wrapper tags second (line 458)
+5. Returns ParsedLine with:
+   - `type: role` (either "user" or "assistant") — line 466
+   - `formatted: formatMultiline(preview)` — line 469
+   - **NO `toolName`, NO `isTaskToolUse`, NO tool content extraction**
+
+**Critical Gap:** The parser does NOT inspect for:
+- `type: "tool_use"` in content items
+- Any tool-related fields (name, input)
+- Tool results or function calls
+
+---
+
+### 3. formatToolUse() Function
+**File:** `/Users/pc035860/code/agent-tail/src/utils/format-tool.ts:77-236`
+
+**Signature:**
+```typescript
+export function formatToolUse(
+  name: string,
+  input?: Record&lt;string, unknown&gt;,
+  options: FormatToolOptions = {}
+): string
+```
+
+**Input Expectation:**
+- `name`: Tool name (string) — extracted separately by parser
+- `input`: Parameters object with keys like `prompt`, `command`, `file_path`, `pattern`, etc.
+- `options.verbose`: boolean flag for truncation
+
+**Agent-Specific Branches:** None explicitly. However:
+- **Lines 87-99:** Task/Agent spawn (Claude subagent tool)
+- **Lines 108-119:** Bash commands
+- **Lines 168-184:** Codex shell_command (array format)
+- **Lines 187-203:** Gemini run_shell_command (fallback searching)
+- **No Cursor-specific branch**
+
+**Called by:**
+- Claude parser only: `src/agents/claude/claude-agent.ts:599` (line 18 imports it)
+- **NOT called by CursorLineParser**
+
+---
+
+### 4. Pretty Formatter
+**File:** `/Users/pc035860/code/agent-tail/src/formatters/pretty-formatter.ts:1-88`
+
+**Tool-Use Rendering (lines 20-24):**
+```typescript
+if (parsed.type === 'function_call' &amp;&amp; parsed.toolName) {
+  const category = getToolCategory(parsed.toolName);
+  const typeLabel = this.formatToolCategory(category);
+  return `${chalk.gray(time)} ${sourceLabel}${typeLabel} ${content}`;
+}
+```
+
+**Branches:**
+- **"function_call" type + toolName:** Uses colored category label (SHELL/FILE/SEARCH/WEB/TASK/FUNC) — lines 33-47
+- **Other types:** formatType() with basic labels (USER/ASST/META/TOOL_RESULT/etc.) — lines 64-86
+
+**Output for tool-use:** Would render as `[time] SHELL $ command` if ParsedLine had been created by parser with `type: 'function_call'` and `toolName` field.
+
+---
+
+### 5. Tool-Use Handling Path (End-to-End)
+
+```
+RAW JSONL (Cursor format)
+  ↓
+CursorLineParser.parse()
+  ├─ Reads role field → type: "user" | "assistant"
+  ├─ Reads message.content array
+  ├─ Calls contentToString() → extracts text only
+  ├─ Strips &lt;attached_files&gt; and &lt;user_query&gt; tags
+  └─ Returns ParsedLine { type, timestamp: '', raw, formatted }
+      ├─ NO toolName ❌
+      ├─ NO isTaskToolUse ❌
+      └─ NO formatted tool content ❌
+       
+  ↓ (ParsedLine routed to formatter)
+       
+PrettyFormatter.format()
+  ├─ Check: parsed.type === 'function_call' ? No, it's "user"/"assistant"
+  └─ Fallback: formatType() → USER / ASST label
+      (Tool content lost, rendered as plain text)
+```
+
+**Drop Points:**
+1. **Line 449 in cursor-agent.ts:** `contentToString(content)` — loses tool_use blocks in array (only extracts text/content fields)
+2. **Lines 465-469 in cursor-agent.ts:** ParsedLine created without checking for `type: 'tool_use'` in content array items
+3. **Never calls formatToolUse()** — tool summary not generated
+
+---
+
+### 6. What Claude Parser Does (Comparison)
+
+**File:** `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts:517-608`
+
+Claude correctly handles tool-use:
+- **Line 543:** Filters content parts for `part.type === 'tool_use' &amp;&amp; part.name`
+- **Line 596:** Creates ParsedLine with `type: 'function_call'`
+- **Lines 599-604:** Sets `toolName`, `isTaskToolUse`, `taskDescription`
+- **Line 599:** Calls `formatToolUse(part.name, part.input, ...)`
+
+---
+
+### 7. Recent Commits
+
+**Cursor-related:**
+- `75678f6` — refactor: simplify agent-pick and fix cursor findLatest regression
+- `186e9f7` — feat(cursor): add subagent support with --subagent, --with-subagents, --pane, --all
+- `2c2f45b` — feat(list): add --list option for session listing
+- `f04a3b7` — feat(cursor): add Cursor agent support for session log tailing
+
+**Format-tool-related:**
+- `5894003` — feat(claude): add backward compat for Task→Agent and TodoWrite→Task* renames
+- `ae8aa8c` — feat(agents): unify tool display formatting with category colors
+- `d90878b` — refactor(utils): extract formatToolUse and add tests
+
+---
+
+### Summary
+
+**Cursor Parser Status:** ⚠️ **Incomplete implementation**
+
+The CursorLineParser currently:
+- ✅ Parses role-based messages (user/assistant)
+- ✅ Handles text content extraction with tag stripping
+- ❌ **Does NOT detect tool-use blocks in Cursor's message.content array**
+- ❌ **Does NOT populate ParsedLine.toolName**
+- ❌ **Does NOT call formatToolUse()**
+
+For tool-use support, CursorLineParser needs to mirror Claude's logic (lines 517-608 of claude-agent.ts): filter content parts for `type: 'tool_use'`, extract name/input, and return ParsedLine with `type: 'function_call'` + toolName.</result>
+<usage><total_tokens>45565</total_tokens><tool_uses>20</tool_uses><duration_ms>59631</duration_ms></usage>
+</task-notification>
+
+---
+
+ok plan
+
+---
+
+<task-notification>
+<task-id>ac8dddd7b3fb07b19</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/ac8dddd7b3fb07b19.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace Claude multi-part parse() shape" completed</summary>
+<result>Perfect! Now I have all the information I need. Let me create a comprehensive summary with the exact code quotes and line numbers.
+
+## Summary: LineParser Contract and Claude's Multi-Part Emission
+
+---
+
+### 1. **LineParser Interface** (src/agents/agent.interface.ts, lines 73-78)
+
+```typescript
+/**
+ * JSONL 行解析器介面
+ */
+export interface LineParser {
+  /**
+   * 解析單行 JSONL
+   */
+  parse(line: string): ParsedLine | null;
+}
+```
+
+**Contract**: `parse(line: string): ParsedLine | null` — takes a single line string, returns one ParsedLine or null. The return type is **singular**, not an array. Multi-emission requires **stateful mutation** and **multiple invocations**.
+
+---
+
+### 2. **Claude Parser's Multi-Part Emit Mechanism** 
+#### (src/agents/claude/claude-agent.ts, lines 429–609)
+
+#### **State Field (lines 432–445)**
+```typescript
+class ClaudeLineParser implements LineParser {
+  private verbose: boolean;
+  /** 追蹤 assistant message 內部的處理進度 */
+  private currentMessageState: {
+    data: Record&lt;string, unknown&gt;;
+    contentParts: Array&lt;{
+      type: string;
+      text?: string;
+      name?: string;
+      input?: Record&lt;string, unknown&gt;;
+    }&gt;;
+    partIndex: number;
+    modelShort: string;
+    hasTextBefore: boolean;
+  } | null = null;
+  /** 追蹤已處理的 line，避免 while 迴圈重複處理 */
+  private lastProcessedLine: string | null = null;
+```
+
+#### **parse() Entry Point (lines 451–459)**
+```typescript
+  parse(line: string): ParsedLine | null {
+    // 如果正在處理 assistant message 的內部狀態
+    if (this.currentMessageState) {
+      const result = this.processAssistantPart();
+      if (result) return result;
+      // 處理完畢，清除狀態並回傳 null
+      this.currentMessageState = null;
+      return null;
+    }
+```
+
+#### **parseAssistantMessage Initialization (lines 517–558)**
+```typescript
+  /**
+   * 解析 assistant message，拆分成多個部分
+   */
+  private parseAssistantMessage(
+    data: Record&lt;string, unknown&gt;,
+    _timestamp: string
+  ): ParsedLine | null {
+    const message = data.message as {
+      model?: string;
+      content: Array&lt;{
+        type: string;
+        text?: string;
+        name?: string;
+        input?: Record&lt;string, unknown&gt;;
+      }&gt;;
+    };
+    const model = message?.model || '';
+    const content = message?.content || [];
+
+    // 簡化 model 顯示
+    const modelShort = model
+      .replace('claude-', '')
+      .replace('-20251101', '')
+      .replace('-', ' ');
+
+    // 過濾有效的部分（text 或 tool_use）
+    const validParts = content.filter(
+      (part) =&gt;
+        (part.type === 'text' &amp;&amp; part.text?.trim()) ||
+        (part.type === 'tool_use' &amp;&amp; part.name)
+    );
+
+    if (validParts.length === 0) return null;
+
+    // 初始化狀態
+    this.currentMessageState = {
+      data,
+      contentParts: validParts,
+      partIndex: 0,
+      modelShort,
+      hasTextBefore: false,
+    };
+
+    return this.processAssistantPart();
+  }
+```
+
+#### **processAssistantPart State Machine (lines 563–609)**
+```typescript
+  /**
+   * 處理 assistant message 的下一個部分
+   */
+  private processAssistantPart(): ParsedLine | null {
+    if (!this.currentMessageState) return null;
+
+    const { data, contentParts, partIndex, modelShort, hasTextBefore } =
+      this.currentMessageState;
+    if (partIndex &gt;= contentParts.length) return null;
+
+    const part = contentParts[partIndex];
+    if (!part) return null;
+
+    this.currentMessageState.partIndex++;
+    const timestamp = (data as { timestamp?: string }).timestamp || '';
+
+    if (part.type === 'text' &amp;&amp; part.text) {
+      this.currentMessageState.hasTextBefore = true;
+      const preview = truncateByLines(part.text, { verbose: this.verbose });
+      const modelInfo = modelShort &amp;&amp; !hasTextBefore ? `(${modelShort})` : '';
+      return {
+        type: 'assistant',
+        timestamp,
+        raw: data,
+        formatted: `${modelInfo}${formatMultiline(preview)}`,
+      };
+    }
+
+    if (part.type === 'tool_use' &amp;&amp; part.name) {
+      const isTask = isSubagentTool(part.name);
+      const taskDescription =
+        isTask &amp;&amp; typeof part.input?.description === 'string'
+          ? part.input.description
+          : undefined;
+
+      return {
+        type: 'function_call',
+        timestamp,
+        raw: part,
+        formatted: formatToolUse(part.name, part.input, {
+          verbose: this.verbose,
+        }),
+        toolName: part.name,
+        isTaskToolUse: isTask,
+        taskDescription,
+      };
+    }
+
+    return null;
+  }
+```
+
+---
+
+### 3. **File Watcher Integration** (src/core/file-watcher.ts, lines 143–145)
+
+```typescript
+      for (const line of linesToProcess) {
+        onLine(line);
+      }
+```
+
+**How the watcher calls the parser**: The watcher calls `onLine(line)` **once per JSONL line**. The consumer (typically in `index.ts`) invokes `parser.parse(line)` a **single time** per line. The drain loop (described below) is the **caller's responsibility**, not the watcher's.
+
+---
+
+### 4. **Drain Pattern in Handlers** (src/list/summary.ts, lines 68–87)
+
+The drain mechanism shows how multi-part emission is actually consumed:
+
+```typescript
+/**
+ * Parse lines through parser, collecting formatted output.
+ * Handles stateful parsers (Claude) by draining with while loop.
+ */
+function parseAndFormat(
+  lines: string[],
+  parser: LineParser,
+  formatter: Formatter
+): string[] {
+  const output: string[] = [];
+  for (const line of lines) {
+    let parsed: ParsedLine | null = parser.parse(line);
+    let guard = 0;
+    while (parsed &amp;&amp; guard &lt; 100) {
+      const formatted = formatter.format(parsed);
+      if (formatted) output.push(formatted);
+      // Drain with empty string: stateful parsers (Claude) continue yielding
+      // buffered parts; stateless parsers (Codex/Cursor/Gemini) return null
+      parsed = parser.parse('');
+      guard++;
+    }
+  }
+  return output;
+}
+```
+
+**Key details**:
+- Line 75: `parser.parse(line)` is called **once** with the actual line
+- Lines 77–84: **while loop** repeatedly calls `parser.parse('')` (empty string) to drain buffered parts
+- Line 82 comment explicitly states: *"stateless parsers (Codex/Cursor/Gemini) return null immediately while Claude's `currentMessageState` continues draining"*
+- **Guard clause** (line 76) prevents infinite loops at 100 iterations
+
+**From CLAUDE.md (line 228)**:
+&gt; "**`parseAndFormat` drain must use empty string**: In `summary.ts`, the while loop drains stateful parsers (Claude multi-part messages) by calling `parser.parse('')` — NOT `parser.parse(line)`. Stateless parsers (Codex/Cursor/Gemini) return the same result for the same line forever, causing 100x duplication. Empty string makes stateless parsers return null immediately while Claude's `currentMessageState` continues draining."
+
+---
+
+### 5. **contentToString Utility** (src/utils/text.ts, lines 70–102)
+
+```typescript
+/**
+ * 將 content 轉為字串（處理物件/陣列情況）
+ */
+export function contentToString(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (content === null || content === undefined) return '';
+
+  if (Array.isArray(content)) {
+    return content
+      .map((item) =&gt; {
+        if (typeof item === 'string') return item;
+        if (item &amp;&amp; typeof item === 'object') {
+          // 處理 { type: 'text', text: '...' } 格式
+          if ('text' in item &amp;&amp; typeof item.text === 'string') return item.text;
+          // 處理 { type: 'tool_result', content: '...' } 格式
+          if ('content' in item &amp;&amp; typeof item.content === 'string')
+            return item.content;
+          // 處理其他 type
+          if ('type' in item) return `[${item.type}]`;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  // 物件情況
+  if (typeof content === 'object') {
+    const obj = content as Record&lt;string, unknown&gt;;
+    if ('text' in obj &amp;&amp; typeof obj.text === 'string') return obj.text;
+    if ('content' in obj &amp;&amp; typeof obj.content === 'string') return obj.content;
+    return JSON.stringify(content);
+  }
+
+  return String(content);
+}
+```
+
+**Behavior with tool_use**: When an array contains `[{type: 'text', text: '...'}, {type: 'tool_use', name: '...', input: {...}}]`:
+- The text object returns `.text` field
+- The tool_use object **has no `.text` or `.content` property**, so it matches line 85: `return '[tool_use]'`
+- Result: `"... text... [tool_use]"` (joined with space, line 90)
+
+Used by **CursorLineParser** (line 14 import, line 450 usage) as a simple stateless flattener. Claude parser does NOT use this for `contentToString` — instead, it explicitly iterates each part in `parseAssistantMessage` and calls `processAssistantPart` for each one.
+
+---
+
+## Summary: Multi-Part Emit Mechanism
+
+**For a single JSONL line containing `[text, tool_use, tool_use]`:**
+
+1. **First `parse(line)` call** → `parseAssistantMessage(data, timestamp)` is invoked
+   - Filters `content` array to keep only non-empty text and named tool_use
+   - Initializes `this.currentMessageState = { contentParts: validParts, partIndex: 0, ... }`
+   - Calls `processAssistantPart()` immediately
+   - Returns **ParsedLine for the first text part** (type: `'assistant'`)
+
+2. **Second `parse('')` call** (empty string from drain loop)
+   - Checks `if (this.currentMessageState)` → true
+   - Calls `processAssistantPart()`
+   - Increments `partIndex` from 0 → 1
+   - Returns **ParsedLine for the first tool_use** (type: `'function_call'`)
+
+3. **Third `parse('')` call**
+   - Checks `if (this.currentMessageState)` → true
+   - Calls `processAssistantPart()`
+   - Increments `partIndex` from 1 → 2
+   - Returns **ParsedLine for the second tool_use** (type: `'function_call'`)
+
+4. **Fourth `parse('')` call**
+   - Checks `if (this.currentMessageState)` → true
+   - Calls `processAssistantPart()`
+   - `partIndex = 2 &gt;= contentParts.length (3)` → returns null (line 568)
+   - Caller's while loop sees null, **clears `this.currentMessageState = null`** (line 457)
+
+5. **Fifth `parse('')` call** (guard still active)
+   - Checks `if (this.currentMessageState)` → **false**
+   - Falls through to normal line parsing
+   - `line = ''` is empty, returns null (line 461)
+   - While loop exits (guard++, condition fails)
+
+---
+
+## Drain Contract for Implementers
+
+**Stateful, multi-emit parser (like Claude):**
+- Maintain **instance field** (e.g., `currentMessageState`) to queue parts
+- On `parse(line)` with actual line: initialize state, return first ParsedLine
+- On `parse('')` (empty string): process next buffered part, return ParsedLine or null
+- When buffer exhausted, reset state to null
+- **Contract**: Each call returns at most one item; state is mutated across calls
+
+**Stateless, single-emit parser (like Cursor/Codex):**
+- **No instance fields** that track parsing state
+- On `parse(line)`: analyze only this line, return one ParsedLine or null
+- On `parse('')`: return null immediately (empty line = no content)
+- **Contract**: Always returns the same result for the same input
+- **Consequence**: If consumer doesn't use the drain pattern, repeated calls yield repeated output (hence the guard + empty-string drain is essential)
+
+---
+
+The key design choice: **The interface returns `ParsedLine | null` (singular), not `ParsedLine[]`**. Multi-emission is achieved through **stateful instance fields** that survive across invocation boundaries, combined with a **caller-side while loop** that drains by passing empty strings until null is returned.</result>
+<usage><total_tokens>46294</total_tokens><tool_uses>12</tool_uses><duration_ms>52153</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8e818ad48f3f97d6</task-id>
+<tool-use-id>toolu_01Nekh8ch2Vg2FeXgHN6gp7S</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/a8e818ad48f3f97d6.output</output-file>
+<status>completed</status>
+<summary>Agent "Memory search cursor parser notes" completed</summary>
+<result>No relevant memory found. The graph-memory service is currently unavailable, so I cannot retrieve cached information about Cursor agent parsing or tool use rendering for the agent-tail project.
+
+You can proceed with your task. If needed, refer directly to the codebase at:
+- `src/agents/cursor/cursor-agent.ts` (Cursor line parser)
+- `src/utils/format-tool.ts` (tool use rendering)
+- `src/cursor/watch-builder.ts` (Cursor-specific utilities)</result>
+<usage><total_tokens>14266</total_tokens><tool_uses>3</tool_uses><duration_ms>440320</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2631fe9b4fe5fcb6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/b876a310-b104-448e-b3df-3c693325387e/tasks/a2631fe9b4fe5fcb6.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace Cursor onLine callsites vs Claude drain" completed</summary>
+<result>Perfect! Now let me create the final output summary. Let me format this clearly:
+
+## Summary
+
+I've completed a thorough search of all Cursor parser callsites in `/Users/pc035860/code/agent-tail/src/`. Here are my findings:
+
+### **Cursor Callsites Currently Using Stateless Pattern**
+
+**1. `startCursorInteractiveWatch()` (line 1551)**
+   - **File:** `/Users/pc035860/code/agent-tail/src/index.ts:1660-1666`
+   - **Pattern:** STATELESS
+   - **Code:**
+     ```typescript
+     onLine: (line: string, label: string) =&gt; {
+       const parsed = sharedParser.parse(line);
+       if (!parsed) return;
+       parsed.sourceLabel = label;
+       sessionManager.handleOutput(label, formatter.format(parsed));
+     }
+     ```
+
+**2. `startCursorMultiWatch()` - Non-follow path (line 1759)**
+   - **File:** `/Users/pc035860/code/agent-tail/src/index.ts:1805-1810`
+   - **Pattern:** STATELESS
+   - **Code:**
+     ```typescript
+     for (const line of lines) {
+       const parsed = parser.parse(line);
+       if (parsed) {
+         parsed.sourceLabel = file.label;
+         console.log(formatter.format(parsed));
+       }
+     }
+     ```
+
+**3. `startCursorMultiWatch()` - Follow path (line 1759)**
+   - **File:** `/Users/pc035860/code/agent-tail/src/index.ts:1921-1927`
+   - **Pattern:** STATELESS (shared `cursorOnLine` handler)
+   - **Code:**
+     ```typescript
+     const cursorOnLine = (line: string, label: string) =&gt; {
+       if (shouldOutput &amp;&amp; !shouldOutput(label)) return;
+       const parsed = parser.parse(line);
+       if (!parsed) return;
+       parsed.sourceLabel = label;
+       console.log(formatter.format(parsed));
+     };
+     ```
+   - **Reused at:** lines 2015 and 2053 (multiWatcher.start onLine callbacks)
+
+**4. `startSingleWatch()` - Cursor code path (line 2067)**
+   - **File:** `/Users/pc035860/code/agent-tail/src/index.ts:2100-2105`
+   - **Pattern:** STATELESS (for Cursor; only Gemini uses drain pattern)
+   - **Code:**
+     ```typescript
+     } else {
+       // Codex JSONL 模式：每行一個事件，單次處理
+       const parsed = parser.parse(line);
+       if (parsed) {
+         console.log(formatter.format(parsed));
+       }
+     }
+     ```
+
+---
+
+### **Claude Comparison (Reference - Drain Pattern)**
+
+**1. `startClaudeInteractiveWatch()` (line 781)**
+   - Uses `createOnLineHandler()` from `claude/watch-builder.ts` (line 903)
+   - **Pattern:** DRAIN - see `claude/watch-builder.ts:140-188`
+     ```typescript
+     let parsed = parser.parse(line);
+     while (parsed) {
+       // ... process ...
+       parsed = parser.parse(line);  // Continue loop
+     }
+     ```
+
+**2. `startClaudeMultiWatch()` (line 384)**
+   - Inline `makeOnLine()` factory (lines 1442-1449)
+   - **Pattern:** STATELESS (different from Interactive!)
+     ```typescript
+     const parsed = parser.parse(line);
+     if (!parsed) return;
+     ```
+   - Reason: Uses `Map&lt;label, parser&gt;` (per-file parsers), no shared state to drain
+
+**3. `outputTimeSorted()` batch handler (line 701)**
+   - **Pattern:** DRAIN (lines 725-732)
+     ```typescript
+     let parsed = parser.parse(line);
+     while (parsed) {
+       allParsedLines.push({ parsed, timestamp: ... });
+       parsed = parser.parse(line);
+     }
+     ```
+
+---
+
+### **Cursor Watch-Builder Status**
+
+**File:** `/Users/pc035860/code/agent-tail/src/cursor/watch-builder.ts`
+
+**Current exports:**
+- `getCursorSubagentsDir()`
+- `buildCursorSubagentPath()`
+- `isValidCursorSubagentId()`
+- `makeCursorAgentLabel()`
+- `scanCursorSubagents()`
+- `buildCursorSubagentFiles()`
+
+**❌ NO `createCursorOnLineHandler()` equivalent exists** — unlike Claude and Codex.
+
+---
+
+### **Verdict: Conversion Impact**
+
+**Total Cursor callsites needing drain-pattern conversion: 4**
+
+| Function | Callsites | Already Drain? |
+|----------|-----------|---|
+| `startCursorInteractiveWatch` | 1 (line 1660) | ❌ |
+| `startCursorMultiWatch` (non-follow) | 1 (line 1806) | ❌ |
+| `startCursorMultiWatch` (follow) | 2 (lines 2015, 2053 via `cursorOnLine`) | ❌ |
+| `startSingleWatch` (Cursor path) | 1 (line 2102) | ❌ |
+
+**Shared Helper Opportunity:**
+
+✅ **YES** — `startCursorMultiWatch` reuses `cursorOnLine` at 2 locations (lines 2015, 2053). This is the only consolidated handler.
+
+**Recommended Refactoring Path:**
+
+1. **Create `createCursorOnLineHandler()` in `cursor/watch-builder.ts`** — mirrors `claude/watch-builder.ts:createOnLineHandler()`
+2. **Update the 4 callsites:**
+   - `startCursorInteractiveWatch` line 1660
+   - `startCursorMultiWatch` line 1806 (non-follow)
+   - `startCursorMultiWatch` line 1921 (consolidate `cursorOnLine` using new helper)
+   - `startSingleWatch` line 2102 (if Cursor is ever used in single-watch mode)
+
+3. **Alternative (minimal):** Add drain loop only to `cursorOnLine` at line 1923, and fix lines 1662 and 1806 individually (3 locations, less DRY)
+
+The shared helper approach fixes all 4 locations in one place, but costs a new export in watch-builder.ts.</result>
+<usage><total_tokens>56511</total_tokens><tool_uses>35</tool_uses><duration_ms>111091</duration_ms></usage>
+</task-notification>
+
+---
+
+[Image #1]
+
+- read 可以看得到檔名或行數之類的嗎？
+- redacted 是什麼意思？
+
+---
+
+順手修掉吧, 方案 B
