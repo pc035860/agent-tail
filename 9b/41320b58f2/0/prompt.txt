@@ -1,0 +1,5 @@
+agent-pick 有辦法新增一鍵 copy session id 的功能嗎？
+
+---
+
+為什麼快捷鍵是 ctrl-y ?
