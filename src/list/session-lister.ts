@@ -4,6 +4,27 @@ import type { AgentType, SessionListItem } from '../core/types.ts';
 /** Chalk instance with forced color (level 1 = basic ANSI) for --list output */
 const colorChalk = new Chalk({ level: 1 });
 
+const UUID_REGEX =
+  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const HEX8_TRAIL_REGEX = /([0-9a-f]{8})$/i;
+
+/**
+ * 從 session 檔案路徑提取完整 session ID。
+ * - Claude / Cursor: `{UUID}.jsonl` → UUID
+ * - Codex: `rollout-{ts}-{UUID}.jsonl` → UUID
+ * - Gemini: `session-{ts}-{hex8}.json` → hex8
+ * - Fallback: basename 去副檔名
+ */
+export function extractFullId(path: string): string {
+  const basename = path.split('/').pop() ?? '';
+  const stem = basename.replace(/\.(jsonl|json)$/i, '');
+  const uuidMatch = UUID_REGEX.exec(stem);
+  if (uuidMatch) return uuidMatch[1]!;
+  const hex8Match = HEX8_TRAIL_REGEX.exec(stem);
+  if (hex8Match) return hex8Match[1]!;
+  return stem;
+}
+
 /**
  * Format a Date as relative time string (e.g., "3m ago", "1h ago")
  */
@@ -45,6 +66,7 @@ export function formatSessionList(
 
     const columns = [
       item.shortId,
+      extractFullId(item.path),
       formatRelativeTime(item.lastActivityTime ?? item.mtime),
       agentStr,
       item.project ?? '',

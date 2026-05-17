@@ -32,14 +32,26 @@ describe('buildFzfArgs', () => {
     expect(args[delimIdx + 1]).toBe('\t');
   });
 
-  test('includes --with-nth 2..', () => {
+  test('includes --with-nth 3.. (skips shortId + fullId hidden cols)', () => {
     const args = buildFzfArgs({
       agentType: 'claude',
       agentTailPath: '/usr/local/bin/agent-tail',
     });
     expect(args).toContain('--with-nth');
     const idx = args.indexOf('--with-nth');
-    expect(args[idx + 1]).toBe('2..');
+    expect(args[idx + 1]).toBe('3..');
+  });
+
+  test('includes ctrl-y copy bind that pipes {2} to pbcopy', () => {
+    const args = buildFzfArgs({
+      agentType: 'claude',
+      agentTailPath: '/path/to/agent-tail',
+    });
+    const binds = args.filter((_, i) => i > 0 && args[i - 1] === '--bind');
+    const copyBind = binds.find((b) => b.startsWith('ctrl-y:'));
+    expect(copyBind).toBeDefined();
+    expect(copyBind).toContain('pbcopy');
+    expect(copyBind).toContain('{2}');
   });
 
   test('includes --preview with agent-tail command', () => {

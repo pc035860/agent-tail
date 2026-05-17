@@ -52,13 +52,13 @@ export function buildFzfArgs(config: {
     '--delimiter',
     '\t',
     '--with-nth',
-    '2..',
+    '3..',
     '--preview',
     previewCmd,
     '--preview-window',
     'right:60%:wrap',
     '--header',
-    `Select a ${agentType} session (Ctrl-R: refresh, Ctrl-/: toggle preview, Enter: tail)`,
+    `Select a ${agentType} session (Ctrl-R: refresh, Ctrl-/: toggle preview, Ctrl-Y: copy id, Enter: tail)`,
     '--prompt',
     'session> ',
     '--bind',
@@ -69,6 +69,8 @@ export function buildFzfArgs(config: {
     'ctrl-d:preview-page-down',
     '--bind',
     'ctrl-u:preview-page-up',
+    '--bind',
+    'ctrl-y:execute-silent(printf %s {2} | pbcopy)+change-header(✓ Copied session ID: {2})',
   ];
 
   return args;

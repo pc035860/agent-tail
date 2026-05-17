@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  extractFullId,
   formatRelativeTime,
   formatSessionList,
 } from '../../src/list/session-lister';
@@ -74,32 +75,58 @@ describe('formatSessionList', () => {
       shortId: 'abc12345',
       agentType: 'claude',
       project: 'my-project',
+      path: '/tmp/abc12345-1234-1234-1234-123456789abc.jsonl',
       mtime: new Date(Date.now() - 3 * 60 * 1000),
     });
     const result = formatSessionList([item], { color: false });
     expect(result).toHaveLength(1);
 
     const parts = result[0]!.split('\t');
-    expect(parts).toHaveLength(5);
+    expect(parts).toHaveLength(6);
     expect(parts[0]).toBe('abc12345');
-    expect(parts[1]).toBe('3m ago');
-    expect(parts[2]).toBe('claude');
-    expect(parts[3]).toBe('my-project');
-    expect(parts[4]).toBe('');
+    expect(parts[1]).toBe('abc12345-1234-1234-1234-123456789abc');
+    expect(parts[2]).toBe('3m ago');
+    expect(parts[3]).toBe('claude');
+    expect(parts[4]).toBe('my-project');
+    expect(parts[5]).toBe('');
   });
 
   test('outputs empty string for undefined project and title (tabs still present)', () => {
     const item = makeItem({
       shortId: 'abc12345',
       agentType: 'gemini',
+      path: '/tmp/session-20250101-abc12345.json',
     });
     const result = formatSessionList([item], { color: false });
     expect(result).toHaveLength(1);
 
     const parts = result[0]!.split('\t');
-    expect(parts).toHaveLength(5);
-    expect(parts[3]).toBe('');
+    expect(parts).toHaveLength(6);
+    expect(parts[1]).toBe('abc12345');
     expect(parts[4]).toBe('');
+    expect(parts[5]).toBe('');
+  });
+
+  test('extractFullId handles Claude/Cursor UUID format', () => {
+    const id = extractFullId('/x/y/abc12345-1234-1234-1234-123456789abc.jsonl');
+    expect(id).toBe('abc12345-1234-1234-1234-123456789abc');
+  });
+
+  test('extractFullId handles Codex rollout filename', () => {
+    const id = extractFullId(
+      '/x/y/rollout-2025-01-01T00-00-00-019cc375-5af5-7ed1-9ff8-8a5757d815d1.jsonl'
+    );
+    expect(id).toBe('019cc375-5af5-7ed1-9ff8-8a5757d815d1');
+  });
+
+  test('extractFullId handles Gemini session filename', () => {
+    const id = extractFullId('/x/y/session-1700000000000-abc12345.json');
+    expect(id).toBe('abc12345');
+  });
+
+  test('extractFullId falls back to filename stem when no match', () => {
+    const id = extractFullId('/x/y/unexpected-name.jsonl');
+    expect(id).toBe('unexpected-name');
   });
 
   test('formats multiple items', () => {
