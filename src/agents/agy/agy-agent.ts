@@ -18,26 +18,26 @@ export class AgySessionFinder implements SessionFinder {
   private historyPath: string;
   private cachePath: string;
 
-  constructor() {
-    this.baseDir = join(
-      homedir(),
-      '.gemini',
-      'antigravity-cli',
-      'conversations'
-    );
-    this.historyPath = join(
-      homedir(),
-      '.gemini',
-      'antigravity-cli',
-      'history.jsonl'
-    );
-    this.cachePath = join(
-      homedir(),
-      '.gemini',
-      'antigravity-cli',
-      'cache',
-      'last_conversations.json'
-    );
+  constructor(paths?: {
+    baseDir?: string;
+    historyPath?: string;
+    cachePath?: string;
+  }) {
+    this.baseDir =
+      paths?.baseDir ??
+      join(homedir(), '.gemini', 'antigravity-cli', 'conversations');
+    this.historyPath =
+      paths?.historyPath ??
+      join(homedir(), '.gemini', 'antigravity-cli', 'history.jsonl');
+    this.cachePath =
+      paths?.cachePath ??
+      join(
+        homedir(),
+        '.gemini',
+        'antigravity-cli',
+        'cache',
+        'last_conversations.json'
+      );
   }
 
   getBaseDir(): string {
@@ -88,13 +88,14 @@ export class AgySessionFinder implements SessionFinder {
   }
 
   // 掃描 conversations/*.pb，並藉由 history.jsonl 反查 project
-  private async _collectSessions(options: {
-    project?: string;
-  }): Promise<SessionListItem[]> {
+  private async _collectSessions(
+    options: { project?: string },
+    idToWorkspace?: Map<string, string>
+  ): Promise<SessionListItem[]> {
     const glob = new Glob('*.pb');
     const files: SessionListItem[] = [];
 
-    const idToWorkspace = await this.loadWorkspaceMappings();
+    const mappings = idToWorkspace ?? (await this.loadWorkspaceMappings());
 
     try {
       for await (const file of glob.scan({
@@ -103,14 +104,15 @@ export class AgySessionFinder implements SessionFinder {
       })) {
         const filename = file.split('/').pop() || '';
         const uuid = filename.replace('.pb', '');
-        const workspace = idToWorkspace.get(uuid);
+        const workspace = mappings.get(uuid);
         const project = workspace ? basename(workspace) : undefined;
 
         if (options.project) {
           const pattern = options.project.toLowerCase();
           const matchProject = project?.toLowerCase().includes(pattern);
+          const matchWorkspace = workspace?.toLowerCase().includes(pattern);
           const matchUuid = uuid.toLowerCase().includes(pattern);
-          if (!matchProject && !matchUuid) {
+          if (!matchProject && !matchWorkspace && !matchUuid) {
             continue;
           }
         }
@@ -185,8 +187,8 @@ export class AgySessionFinder implements SessionFinder {
   }
 
   async findLatestInProject(projectDir: string): Promise<SessionFile | null> {
-    const files = await this._collectSessions({});
     const idToWorkspace = await this.loadWorkspaceMappings();
+    const files = await this._collectSessions({}, idToWorkspace);
     // 找出 workspace 吻合的最新的會話（防止多個同名 workspace 誤判）
     const found = files.find((f) => {
       const uuid = basename(f.path).replace('.pb', '');
@@ -202,19 +204,19 @@ export class AgySessionFinder implements SessionFinder {
 }
 
 export class AgyLineParser implements LineParser {
-  private processedTimestamps = new Set<number>();
+  private processedLines = new Set<string>();
   private conversationId: string = '';
   private historyPath: string;
   private pendingLines: ParsedLine[] = [];
   private verbose: boolean;
 
-  constructor(options: ParserOptions = { verbose: false }) {
-    this.historyPath = join(
-      homedir(),
-      '.gemini',
-      'antigravity-cli',
-      'history.jsonl'
-    );
+  constructor(
+    options: ParserOptions = { verbose: false },
+    paths?: { historyPath?: string }
+  ) {
+    this.historyPath =
+      paths?.historyPath ??
+      join(homedir(), '.gemini', 'antigravity-cli', 'history.jsonl');
     this.verbose = options.verbose;
   }
 
@@ -236,9 +238,9 @@ export class AgyLineParser implements LineParser {
             try {
               const data = JSON.parse(rawLine);
               if (data.conversationId === this.conversationId && data.display) {
-                const timestamp = data.timestamp || Date.now();
-                if (!this.processedTimestamps.has(timestamp)) {
-                  this.processedTimestamps.add(timestamp);
+                if (!this.processedLines.has(rawLine)) {
+                  this.processedLines.add(rawLine);
+                  const timestamp = data.timestamp || Date.now();
                   this.pendingLines.push({
                     type: 'user',
                     timestamp: new Date(timestamp).toISOString(),
@@ -266,8 +268,11 @@ export class AgyAgent implements Agent {
   readonly finder: AgySessionFinder;
   readonly parser: AgyLineParser;
 
-  constructor(options: ParserOptions = { verbose: false }) {
-    this.finder = new AgySessionFinder();
-    this.parser = new AgyLineParser(options);
+  constructor(
+    options: ParserOptions = { verbose: false },
+    paths?: { baseDir?: string; historyPath?: string; cachePath?: string }
+  ) {
+    this.finder = new AgySessionFinder(paths);
+    this.parser = new AgyLineParser(options, paths);
   }
 }

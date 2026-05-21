@@ -2,7 +2,7 @@ import type { LineParser } from '../agents/agent.interface.ts';
 import type { ParsedLine } from '../core/types.ts';
 
 /** Max iterations per JSONL line; protects against runaway stateful parsers. */
-const DRAIN_GUARD_MAX = 100;
+const DRAIN_GUARD_MAX = 10000;
 
 /**
  * Drain a stateful LineParser for a single JSONL line.

@@ -69,17 +69,17 @@ describe('drainParser', () => {
     drainParser(statelessParser(), 'same-line', (p) =>
       collected.push(p.formatted)
     );
-    // Guard caps the runaway: 100 iterations, not infinite
-    expect(collected.length).toBe(100);
+    // Guard caps the runaway: 10000 iterations, not infinite
+    expect(collected.length).toBe(10000);
   });
 
-  test('guard cutoff applies when a stateful parser emits more than 100 parts', () => {
-    const parts = Array.from({ length: 250 }, (_, i) => `p${i}`);
+  test('guard cutoff applies when a stateful parser emits more than 10000 parts', () => {
+    const parts = Array.from({ length: 10500 }, (_, i) => `p${i}`);
     const collected: string[] = [];
     drainParser(statefulParser(parts), 'L', (p) => collected.push(p.formatted));
-    expect(collected.length).toBe(100);
+    expect(collected.length).toBe(10000);
     expect(collected[0]).toBe('p0');
-    expect(collected[99]).toBe('p99');
+    expect(collected[9999]).toBe('p9999');
   });
 
   test('parser returning null on first call: onEach is not invoked', () => {

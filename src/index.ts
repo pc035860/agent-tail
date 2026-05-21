@@ -126,7 +126,7 @@ async function summaryCommand(
   }
 
   if (options.agentType === 'agy') {
-    const uuid = sessionFile.path.split('/').pop()?.replace('.pb', '') ?? '';
+    const uuid = basename(sessionFile.path, '.pb');
     agent.parser.setConversationId?.(uuid);
   }
 
@@ -2094,7 +2094,7 @@ async function startSingleWatch(
   // Codex parser 是無狀態的，不需要重建
   let currentParser = agent.parser;
   if (options.agentType === 'agy') {
-    const uuid = basename(sessionFile.path).replace('.pb', '');
+    const uuid = basename(sessionFile.path, '.pb');
     currentParser.setConversationId?.(uuid);
   }
 
@@ -2137,7 +2137,7 @@ async function startSingleWatch(
     } else if (options.agentType === 'agy') {
       const newAgent = new AgyAgent({ verbose: options.verbose });
       currentParser = newAgent.parser;
-      const uuid = basename(nextFile.path).replace('.pb', '');
+      const uuid = basename(nextFile.path, '.pb');
       currentParser.setConversationId?.(uuid);
     }
 
