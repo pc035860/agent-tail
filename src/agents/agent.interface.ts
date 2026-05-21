@@ -75,6 +75,11 @@ export interface LineParser {
    * 解析單行 JSONL
    */
   parse(line: string): ParsedLine | null;
+
+  /**
+   * 設定會話 ID（可選，如 AgyAgent 需要它來識別解析對象）
+   */
+  setConversationId?(id: string): void;
 }
 
 /**

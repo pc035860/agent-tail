@@ -7,10 +7,13 @@ function createProgram(): Command {
   program
     .name('agent-tail')
     .description(
-      'Tail agent session logs (Codex, Claude Code, Gemini CLI & Cursor) in real-time'
+      'Tail agent session logs (Codex, Claude Code, Gemini CLI, Cursor & Antigravity CLI) in real-time'
     )
     .version('0.1.0')
-    .argument('<agent-type>', 'Agent type: codex, claude, gemini, or cursor')
+    .argument(
+      '<agent-type>',
+      'Agent type: codex, claude, gemini, cursor, or agy'
+    )
     .argument(
       '[session-id]',
       'Optional session ID to load (partial match supported)'
@@ -84,10 +87,11 @@ export function parseArgs(args: string[]): CliOptions {
     agentTypeArg !== 'codex' &&
     agentTypeArg !== 'claude' &&
     agentTypeArg !== 'gemini' &&
-    agentTypeArg !== 'cursor'
+    agentTypeArg !== 'cursor' &&
+    agentTypeArg !== 'agy'
   ) {
     console.error(
-      `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", or "cursor".`
+      `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", "cursor", or "agy".`
     );
     process.exit(1);
   }

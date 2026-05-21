@@ -17,7 +17,7 @@ const HEX8_TRAIL_REGEX = /([0-9a-f]{8})$/i;
  */
 export function extractFullId(path: string): string {
   const basename = path.split('/').pop() ?? '';
-  const stem = basename.replace(/\.(jsonl|json)$/i, '');
+  const stem = basename.replace(/\.(jsonl|json|pb)$/i, '');
   const uuidMatch = UUID_REGEX.exec(stem);
   if (uuidMatch) return uuidMatch[1]!;
   const hex8Match = HEX8_TRAIL_REGEX.exec(stem);
@@ -50,6 +50,7 @@ const AGENT_COLORS: Record<AgentType, (s: string) => string> = {
   codex: (s) => colorChalk.green(s),
   gemini: (s) => colorChalk.blue(s),
   cursor: (s) => colorChalk.yellow(s),
+  agy: (s) => colorChalk.cyan(s),
 };
 
 /**

@@ -16,7 +16,7 @@ import {
   extractTailPassthroughArgs,
 } from './arg-passthrough.ts';
 
-const AGENT_TYPES = ['claude', 'codex', 'gemini', 'cursor'];
+const AGENT_TYPES = ['claude', 'codex', 'gemini', 'cursor', 'agy'];
 
 function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;

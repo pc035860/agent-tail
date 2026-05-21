@@ -13,6 +13,7 @@ import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
 import { GeminiAgent } from './agents/gemini/gemini-agent.ts';
 import { CursorAgent } from './agents/cursor/cursor-agent.ts';
+import { AgyAgent } from './agents/agy/agy-agent.ts';
 import type { Formatter } from './formatters/formatter.interface.ts';
 import { RawFormatter } from './formatters/raw-formatter.ts';
 import { PrettyFormatter } from './formatters/pretty-formatter.ts';
@@ -124,7 +125,13 @@ async function summaryCommand(
     process.exit(1);
   }
 
-  const jsonMode = options.agentType === 'gemini';
+  if (options.agentType === 'agy') {
+    const uuid = sessionFile.path.split('/').pop()?.replace('.pb', '') ?? '';
+    agent.parser.setConversationId?.(uuid);
+  }
+
+  const jsonMode =
+    options.agentType === 'gemini' || options.agentType === 'agy';
   const lines = await formatSummary(sessionFile.path, agent.parser, formatter, {
     headLines: 5,
     tailLines: options.lines ?? 15,
@@ -185,7 +192,9 @@ async function main(): Promise<void> {
         ? new GeminiAgent({ verbose: options.verbose })
         : options.agentType === 'cursor'
           ? new CursorAgent({ verbose: options.verbose })
-          : new ClaudeAgent({ verbose: options.verbose });
+          : options.agentType === 'agy'
+            ? new AgyAgent({ verbose: options.verbose })
+            : new ClaudeAgent({ verbose: options.verbose });
 
   // --list 模式：列出 session 後退出
   if (options.list) {
@@ -2084,13 +2093,21 @@ async function startSingleWatch(
   // 為 Gemini 準備可重建的 parser（避免狀態殘留）
   // Codex parser 是無狀態的，不需要重建
   let currentParser = agent.parser;
+  if (options.agentType === 'agy') {
+    const uuid = basename(sessionFile.path).replace('.pb', '');
+    currentParser.setConversationId?.(uuid);
+  }
 
   // 建立 onLine handler 函數（單一 agent 用，與 Claude 多檔案的 createOnLineHandler 不同）
   const makeSingleLineHandler =
     (parser: LineParser) =>
     (line: string): void => {
-      if (options.agentType === 'gemini' || options.agentType === 'cursor') {
-        // Stateful parsers (Gemini/Cursor): drain until null
+      if (
+        options.agentType === 'gemini' ||
+        options.agentType === 'cursor' ||
+        options.agentType === 'agy'
+      ) {
+        // Stateful parsers (Gemini/Cursor/Agy): drain until null
         drainParser(parser, line, (parsed) => {
           console.log(formatter.format(parsed));
         });
@@ -2113,10 +2130,15 @@ async function startSingleWatch(
       chalk.gray(`--- Switched to ${basename(nextFile.path)} ---`)
     );
 
-    // Gemini 需要重建 parser 以清除狀態（processedMessageIds 等）
+    // Gemini/Agy 需要重建 parser 以清除狀態（processedMessageIds 等）
     if (options.agentType === 'gemini') {
       const newAgent = new GeminiAgent({ verbose: options.verbose });
       currentParser = newAgent.parser;
+    } else if (options.agentType === 'agy') {
+      const newAgent = new AgyAgent({ verbose: options.verbose });
+      currentParser = newAgent.parser;
+      const uuid = basename(nextFile.path).replace('.pb', '');
+      currentParser.setConversationId?.(uuid);
     }
 
     watcher = new FileWatcher();
@@ -2124,7 +2146,7 @@ async function startSingleWatch(
       follow: true,
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
-      jsonMode: options.agentType === 'gemini',
+      jsonMode: options.agentType === 'gemini' || options.agentType === 'agy',
       onLine: makeSingleLineHandler(currentParser),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
@@ -2160,7 +2182,7 @@ async function startSingleWatch(
     pollInterval: options.sleepInterval,
     initialLines: options.lines,
     // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
-    jsonMode: options.agentType === 'gemini',
+    jsonMode: options.agentType === 'gemini' || options.agentType === 'agy',
     onLine: makeSingleLineHandler(currentParser),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
