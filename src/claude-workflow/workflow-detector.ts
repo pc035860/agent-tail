@@ -71,9 +71,42 @@ export class WorkflowDetector {
     this.knownRunIds.add(runId);
   }
 
-  /** P5 stub — RED tests assert real behavior; implementation lands in GREEN. */
-  handleMainLine(_parsed: ParsedLine): void {
-    // stub
+  /**
+   * SPEC §9.1 path A — main-JSONL Workflow tool_result detection.
+   * Called by createOnLineHandler when parsed.workflowAsyncLaunch is set.
+   * Sync mark + insert via markRunIdKnown; async _handleNewRunIdFromPathA
+   * handles onNewWorkflow invocation with rollback on failure.
+   */
+  handleMainLine(parsed: ParsedLine): void {
+    if (this.stopped) return;
+    const launch = parsed.workflowAsyncLaunch;
+    if (!launch) return;
+    if (!this.markRunIdKnown(launch.runId)) return;
+    void this._handleNewRunIdFromPathA(launch);
+  }
+
+  private async _handleNewRunIdFromPathA(
+    launch: NonNullable<ParsedLine['workflowAsyncLaunch']>
+  ): Promise<void> {
+    try {
+      await this.config.onNewWorkflow({
+        runId: launch.runId,
+        transcriptDir: launch.transcriptDir,
+        snapshotPath: getWorkflowSnapshotPath(
+          this.config.sessionDir,
+          launch.runId
+        ),
+        ...(launch.scriptPath ? { scriptPath: launch.scriptPath } : {}),
+        ...(launch.summary ? { summary: launch.summary } : {}),
+      });
+    } catch (err) {
+      // Path A failure rolls back so path B (dir watch) can retry on a
+      // subsequent fs event (e.g. snapshot status update).
+      this.knownRunIds.delete(launch.runId);
+      this.config.outputHandler.debug(
+        `[workflow-detector] path A attach ${launch.runId} failed: ${err}`
+      );
+    }
   }
 
   stop(): void {

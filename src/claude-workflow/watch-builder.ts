@@ -163,6 +163,9 @@ export class WorkflowAttachment {
     this.config.outputHandler.info(
       `[wf:${this.config.workflow.runId}] stopped (${reason})`
     );
+
+    // P5 — notify owner so it can drop the runId from its registry.
+    this.config.onStop?.(reason);
   }
 
   // --- internals ---

@@ -174,6 +174,12 @@ export function createOnLineHandler(
         config.detector.handleEarlyDetection();
       }
 
+      // P5 — Workflow path A: main-JSONL Workflow tool_result triggers
+      // auto-attach when --workflow-attach is enabled (default).
+      if (label === MAIN_LABEL && parsed.workflowAsyncLaunch) {
+        config.workflowDetector?.handleMainLine(parsed);
+      }
+
       // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
       if (label === MAIN_LABEL) {
         const raw = parsed.raw as {

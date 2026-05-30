@@ -72,6 +72,7 @@ import {
 import { WorkflowSessionFinder } from './agents/claude/workflow-agent.ts';
 import { WorkflowAttachment } from './claude-workflow/watch-builder.ts';
 import { cwdToClaudeProjectFilter } from './claude-workflow/paths.ts';
+import { WorkflowDetector } from './claude-workflow/workflow-detector.ts';
 
 /**
  * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
@@ -563,6 +564,46 @@ async function startClaudeMultiWatch(
   });
   detector.startDirectoryWatch();
 
+  // P5 — Workflow auto-attach (default on; --no-workflow-attach disables)
+  const wfAttachments = new Map<string, WorkflowAttachment>();
+  let workflowDetector: WorkflowDetector | undefined;
+  if (options.workflowAttach !== false) {
+    const wfOutputHandler = new ConsoleOutputHandler();
+    workflowDetector = new WorkflowDetector({
+      sessionUuid: basename(sessionFile.path, '.jsonl'),
+      sessionDir: dirname(sessionFile.path),
+      outputHandler: wfOutputHandler,
+      onNewWorkflow: async (workflow) => {
+        if (wfAttachments.has(workflow.runId)) return;
+        const attachment = new WorkflowAttachment({
+          workflow,
+          withAgents: options.withWorkflowAgents !== false,
+          verbose: options.verbose,
+          follow: options.follow,
+          pollInterval: options.sleepInterval,
+          initialLines: options.lines,
+          formatter,
+          onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
+          outputHandler: wfOutputHandler,
+          onStop: () => {
+            wfAttachments.delete(workflow.runId);
+          },
+        });
+        wfAttachments.set(workflow.runId, attachment);
+        try {
+          await attachment.start();
+        } catch (err) {
+          wfOutputHandler.debug(
+            `[wf:${workflow.runId}] attachment start failed: ${err}`
+          );
+          wfAttachments.delete(workflow.runId);
+          throw err;
+        }
+      },
+    });
+    await workflowDetector.start();
+  }
+
   // ========== Non-Interactive Super-Follow ==========
   let currentSessionPath = sessionFile.path;
 
@@ -667,6 +708,7 @@ async function startClaudeMultiWatch(
         onOutput: (formatted) => console.log(formatted),
         verbose: options.verbose,
         shouldOutput,
+        workflowDetector,
       }),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
@@ -687,6 +729,14 @@ async function startClaudeMultiWatch(
     superFollow.stop();
     console.log(chalk.gray('\nStopping...'));
     detector?.stop();
+    workflowDetector?.stop();
+    // P5: stop any in-flight workflow attachments (best-effort; SIGINT
+    // exits immediately so we don't await — onStop callbacks may not
+    // run, but PID death cleans up watchers).
+    for (const att of wfAttachments.values()) {
+      void att.stop('user');
+    }
+    wfAttachments.clear();
     multiWatcher.stop();
     // best-effort 清理所有 pane（async 但不等待，因為即將 exit）
     paneManager?.closeAll();
@@ -704,6 +754,7 @@ async function startClaudeMultiWatch(
       onOutput: (formatted) => console.log(formatted),
       verbose: options.verbose,
       shouldOutput,
+      workflowDetector,
     }),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));

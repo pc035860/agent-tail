@@ -24,6 +24,7 @@ import {
 } from '../../utils/session-time.ts';
 import { WorkflowSessionFinder } from './workflow-agent.ts';
 import type { ProjectInfo } from '../../core/types.ts';
+import { isValidWorkflowRunId } from '../../claude-workflow/paths.ts';
 
 /** JSONL event type for Claude /rename command */
 const CUSTOM_TITLE_TYPE = 'custom-title';
@@ -681,6 +682,7 @@ class ClaudeLineParser implements LineParser {
 
     if (part.type === 'tool_use' && part.name) {
       const isTask = isSubagentTool(part.name);
+      const isWorkflow = part.name === 'Workflow';
       const taskDescription =
         isTask && typeof part.input?.description === 'string'
           ? part.input.description
@@ -695,6 +697,7 @@ class ClaudeLineParser implements LineParser {
         }),
         toolName: part.name,
         isTaskToolUse: isTask,
+        ...(isWorkflow ? { isWorkflowToolUse: true } : {}),
         taskDescription,
       };
     }
@@ -716,6 +719,12 @@ class ClaudeLineParser implements LineParser {
       totalDurationMs?: number;
       totalTokens?: number;
       totalToolUseCount?: number;
+      // Workflow async_launched extension fields
+      taskId?: string;
+      runId?: string;
+      summary?: string;
+      transcriptDir?: string;
+      scriptPath?: string;
     };
 
     if (!toolUseResult) return null;
@@ -733,12 +742,39 @@ class ClaudeLineParser implements LineParser {
 
     const formatted = parts.length > 0 ? `(${parts.join(', ')})` : '';
 
-    return {
+    const result: ParsedLine = {
       type: 'tool_result',
       timestamp,
       raw: data,
       formatted,
     };
+
+    // Workflow async_launched detection (SPEC §9.1 / §11.1 P5).
+    // Discriminator: runId matching wf_*hex pattern AND transcriptDir
+    // present. scriptPath/summary/taskId are decoration — populated when
+    // available but missing values don't reject the payload (CI-2).
+    if (
+      status === 'async_launched' &&
+      typeof toolUseResult.runId === 'string' &&
+      isValidWorkflowRunId(toolUseResult.runId) &&
+      typeof toolUseResult.transcriptDir === 'string'
+    ) {
+      result.workflowAsyncLaunch = {
+        runId: toolUseResult.runId,
+        transcriptDir: toolUseResult.transcriptDir,
+        ...(typeof toolUseResult.scriptPath === 'string'
+          ? { scriptPath: toolUseResult.scriptPath }
+          : {}),
+        ...(typeof toolUseResult.summary === 'string'
+          ? { summary: toolUseResult.summary }
+          : {}),
+        ...(typeof toolUseResult.taskId === 'string'
+          ? { taskId: toolUseResult.taskId }
+          : {}),
+      };
+    }
+
+    return result;
   }
 
   private format(data: Record<string, unknown>): string {
