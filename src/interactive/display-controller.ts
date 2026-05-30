@@ -184,7 +184,12 @@ export class DisplayController {
   }
 
   updateStatusLine(sessions: WatcherSession[], activeIndex: number): void {
-    const statusLine = this.buildStatusLine(sessions, activeIndex);
+    const sessionLine = this.buildStatusLine(sessions, activeIndex);
+    // P6 — prepend workflow status when set (renders on its own line).
+    const workflowLine = this.renderWorkflowStatusLine();
+    const statusLine = workflowLine
+      ? `${workflowLine}\n${sessionLine}`
+      : sessionLine;
     this.currentStatusLine = statusLine;
 
     if (this.persistentStatusLine && process.stdout.isTTY) {

@@ -612,6 +612,15 @@ async function startClaudeMultiWatch(
   ): Promise<void> => {
     // 停止現有監控
     detector?.stop();
+    // P5 — super-follow swap: the old detector is bound to the old
+    // sessionDir; stop it AND clear out any in-flight workflow
+    // attachments before binding a new detector for the new session.
+    workflowDetector?.stop();
+    workflowDetector = undefined;
+    for (const att of wfAttachments.values()) {
+      void att.stop('user');
+    }
+    wfAttachments.clear();
     multiWatcher.stop();
 
     // 更新當前 session 路徑
@@ -695,6 +704,46 @@ async function startClaudeMultiWatch(
     subagentsDir = newSubagentsDir;
     multiWatcher = newMultiWatcher;
     detector = newDetector;
+
+    // P5 — re-bind WorkflowDetector to the new session (path A/B both
+    // need the new sessionDir to derive correct snapshot/transcript
+    // paths). Same construction as the initial branch above.
+    if (options.workflowAttach !== false) {
+      const wfOutputHandler = new ConsoleOutputHandler();
+      workflowDetector = new WorkflowDetector({
+        sessionUuid: basename(nextSessionFile.path, '.jsonl'),
+        sessionDir: dirname(nextSessionFile.path),
+        outputHandler: wfOutputHandler,
+        onNewWorkflow: async (workflow) => {
+          if (wfAttachments.has(workflow.runId)) return;
+          const attachment = new WorkflowAttachment({
+            workflow,
+            withAgents: options.withWorkflowAgents !== false,
+            verbose: options.verbose,
+            follow: options.follow,
+            pollInterval: options.sleepInterval,
+            initialLines: options.lines,
+            formatter,
+            onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
+            outputHandler: wfOutputHandler,
+            onStop: () => {
+              wfAttachments.delete(workflow.runId);
+            },
+          });
+          wfAttachments.set(workflow.runId, attachment);
+          try {
+            await attachment.start();
+          } catch (err) {
+            wfOutputHandler.debug(
+              `[wf:${workflow.runId}] attachment start failed: ${err}`
+            );
+            wfAttachments.delete(workflow.runId);
+            throw err;
+          }
+        },
+      });
+      await workflowDetector.start();
+    }
 
     // 重新啟動監控
     await multiWatcher.start(newFiles, {
@@ -989,10 +1038,13 @@ async function startClaudeWorkflowMultiWatch(
     if (controller.isAvailable()) {
       paneManager = new PaneManager(
         controller,
-        (agentId, _path) => {
-          const runtime = `"${process.argv[0]}"`;
-          const script = `"${process.argv[1]}"`;
-          return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
+        (_agentId, path) => {
+          // Workflow agents live in nested `subagents/workflows/{runId}/`
+          // paths — ClaudeSessionFinder.findSubagent's `**/*/subagents/
+          // agent-*.jsonl` glob does NOT match nested workflow paths. Use
+          // `tail -F` directly on the known transcript path (also handles
+          // file rotation gracefully on macOS/Linux).
+          return `tail -F "${path}"`;
         },
         (msg) => log(options.quiet, chalk.gray(msg))
       );

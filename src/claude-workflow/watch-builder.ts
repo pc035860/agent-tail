@@ -156,8 +156,10 @@ export class WorkflowAttachment {
     for (const agentId of this.knownAgentIds) {
       this.config.sessionHandler?.markSessionDone?.(agentId);
     }
+    // Journal session id matches the dispatcher's `wf:{runId}:journal`
+    // (P6 interactive) and the PaneManager pinned key (P7 --workflow-pane).
     this.config.sessionHandler?.markSessionDone?.(
-      `wf:${this.config.workflow.runId}`
+      `wf:${this.config.workflow.runId}:journal`
     );
 
     this.config.outputHandler.info(
