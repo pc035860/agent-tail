@@ -69,6 +69,9 @@ import {
   buildCursorSubagentPath,
   makeCursorAgentLabel,
 } from './cursor/watch-builder.ts';
+import { WorkflowSessionFinder } from './agents/claude/workflow-agent.ts';
+import { WorkflowAttachment } from './claude-workflow/watch-builder.ts';
+import { cwdToClaudeProjectFilter } from './claude-workflow/paths.ts';
 
 /**
  * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
@@ -335,6 +338,21 @@ async function main(): Promise<void> {
   if (!sessionFile) {
     console.error(chalk.red('No session file found'));
     process.exit(1);
+  }
+
+  // Workflow mode dispatch (Claude only). Triggered by either:
+  // (a) explicit --workflow flag, OR
+  // (b) positional wf_* arg → ClaudeSessionFinder.findBySessionId dispatched
+  //     to WorkflowSessionFinder, producing a SessionFile whose customTitle
+  //     starts with 'wf:'.
+  const isWorkflowMode =
+    options.agentType === 'claude' &&
+    (options.workflow !== undefined ||
+      sessionFile?.customTitle?.startsWith('wf:') === true);
+
+  if (isWorkflowMode) {
+    await dispatchClaudeWorkflow(sessionFile, formatter, options);
+    return;
   }
 
   // 監控模式判斷：
@@ -702,6 +720,110 @@ async function startClaudeMultiWatch(
 
   // 保持程式運行
   log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
+}
+
+/**
+ * Workflow mode dispatch (SPEC §10.4) — resolves the snapshot path from
+ * either --workflow flag or positional wf_* arg, then hands off to
+ * startClaudeWorkflowMultiWatch.
+ */
+async function dispatchClaudeWorkflow(
+  sessionFile: SessionFile,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  let snapshotPath: string;
+
+  if (options.workflow !== undefined) {
+    const wfFinder = new WorkflowSessionFinder();
+    let result: SessionFile | null;
+    if (typeof options.workflow === 'string') {
+      result = await wfFinder.findBySessionId(options.workflow, {
+        project: options.project,
+      });
+      if (!result) {
+        console.error(
+          chalk.red(`Error: workflow run not found: ${options.workflow}`)
+        );
+        process.exit(1);
+      }
+    } else {
+      // --workflow (no runId) — scope to current cwd
+      const filter = cwdToClaudeProjectFilter(process.cwd());
+      result = await wfFinder.findLatest({ project: filter });
+      if (!result) {
+        console.error(
+          chalk.red(
+            'Error: no workflow runs found in current cwd. Use --list or --workflow <runId>.'
+          )
+        );
+        process.exit(1);
+      }
+    }
+    snapshotPath = result.path;
+  } else {
+    // Positional-arg path — sessionFile already resolved by
+    // ClaudeSessionFinder.findBySessionId dispatching wf_* to workflow finder.
+    snapshotPath = sessionFile.path;
+  }
+
+  const m = basename(snapshotPath, '.json').match(
+    /^(wf_[0-9a-f]{8}-[0-9a-f]{3})$/
+  );
+  if (!m) {
+    console.error(
+      chalk.red(`Error: failed to derive runId from ${snapshotPath}`)
+    );
+    process.exit(1);
+  }
+  const runId = m[1]!;
+
+  await startClaudeWorkflowMultiWatch(snapshotPath, runId, formatter, options);
+}
+
+async function startClaudeWorkflowMultiWatch(
+  snapshotPath: string,
+  runId: string,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // Derive transcriptDir from snapshotPath:
+  //   .../{enc}/{UUID}/workflows/wf_*.json
+  //   .../{enc}/{UUID}/subagents/workflows/wf_*/
+  const parts = snapshotPath.split('/');
+  const wfIdx = parts.indexOf('workflows');
+  if (wfIdx < 0) {
+    console.error(
+      chalk.red(`Error: malformed workflow snapshot path: ${snapshotPath}`)
+    );
+    process.exit(1);
+  }
+  const sessionDir = parts.slice(0, wfIdx).join('/');
+  const transcriptDir = `${sessionDir}/subagents/workflows/${runId}`;
+
+  const outputHandler = new ConsoleOutputHandler();
+
+  const attachment = new WorkflowAttachment({
+    workflow: { runId, transcriptDir, snapshotPath },
+    withAgents: options.withWorkflowAgents !== false,
+    verbose: options.verbose,
+    follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
+    formatter,
+    onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
+    outputHandler,
+  });
+
+  log(options.quiet, chalk.cyan(`[wf:${runId}] starting workflow watch`));
+  await attachment.start();
+
+  // TODO(P6): coordinate SIGINT with interactive shutdown path
+  process.once('SIGINT', () => {
+    void attachment.stop('user').then(() => process.exit(0));
+  });
+
+  log(options.quiet, chalk.gray('Watching workflow... (Ctrl+C to stop)'));
 }
 
 /**
