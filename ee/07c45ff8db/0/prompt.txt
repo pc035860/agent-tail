@@ -1,0 +1,10 @@
+目前有兩個問題
+1. agp 的 workflow 預覽是空白的
+2. agp claude -i -v 點進 workflow session 後，並沒有辦法用 tab 切換 subagent
+
+整理一下，跟我討論下一步動作
+
+---
+
+1. 你建議呢？
+2. ok
