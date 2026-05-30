@@ -1493,18 +1493,25 @@ macOS 的 fs.watch 在重命名/移除/重建檔案時可能不可靠（Node 已
   added helper unit tests
 
 **Deferred / acknowledged out of scope:**
-- agent-pick full SPEC §11.4 6-column fzf format (workflow rows already
-  visible in `--list`; functional via existing `customTitle` indicator)
-- `--list` strict TYPE/NOTES column format per §11.3 (workflow rows
-  appear with `customTitle = 'wf:{name}'` indicator)
-- Constructor injection of `baseDir` (TDD reviewer W1 — touches
-  `ClaudeAgent` factory + several test files; `workflowFinder` lazy
-  getter is the current stop-gap)
 - `WorkflowAttachmentConfig` 11-field bag → grouped sub-configs
   (mechanical refactor; low impact)
 - macOS `fs.watch` flake mitigation via polling fallback (SPEC §19.6
   explicitly accepts; tests passed locally but sporadically fail in
   Codex sandbox)
+
+**Resolved (post-shipping cleanup, 2026-05-30):**
+- `--list` / `agent-pick` aligned to strict 6-column SPEC §11.3 + §11.4
+  contract: `TYPE\tID\tTIME\tTITLE\tNOTES\tHIDDEN_FULL_ID`. fzf
+  `--with-nth 1..5`, ctrl-y / preview use `{6}` directly (no awk).
+  `parseSelection` returns col 6 (full UUID for main, full runId for
+  workflow). Workflow rows show `{status} · in session {uuid8}` in
+  NOTES; main rows show `project`.
+- `ClaudeSessionFinder.baseDir` is now a constructor option
+  (`new ClaudeSessionFinder({ baseDir })`); `ClaudeAgent` forwards via
+  `{ verbose, baseDir }`. The lazy `workflowFinder` getter +
+  `as unknown as { baseDir: string }` test cast in three Claude test
+  files were removed. Gemini retains the same cast pattern (not in
+  scope; could be a follow-up).
 
 ---
 
