@@ -185,10 +185,13 @@ export class DisplayController {
 
   updateStatusLine(sessions: WatcherSession[], activeIndex: number): void {
     const sessionLine = this.buildStatusLine(sessions, activeIndex);
-    // P6 — prepend workflow status when set (renders on its own line).
+    // P6 — prepend workflow status when set. The persistent status line
+    // only reserves ONE row, so combine workflow + session info on a
+    // single line with a dimmed separator (avoid `\n` which would
+    // overflow the scroll region and disrupt the persistent layout).
     const workflowLine = this.renderWorkflowStatusLine();
     const statusLine = workflowLine
-      ? `${workflowLine}\n${sessionLine}`
+      ? `${workflowLine}${chalk.dim(' • ')}${sessionLine}`
       : sessionLine;
     this.currentStatusLine = statusLine;
 

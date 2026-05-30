@@ -1044,7 +1044,11 @@ async function startClaudeWorkflowMultiWatch(
           // agent-*.jsonl` glob does NOT match nested workflow paths. Use
           // `tail -F` directly on the known transcript path (also handles
           // file rotation gracefully on macOS/Linux).
-          return `tail -F "${path}"`;
+          // Shell-escape via single quotes (escape embedded single quotes
+          // with `'\''`) so paths containing `"`, `$`, backticks, etc.
+          // don't break the command.
+          const escaped = `'${path.replaceAll(`'`, `'\\''`)}'`;
+          return `tail -F ${escaped}`;
         },
         (msg) => log(options.quiet, chalk.gray(msg))
       );
