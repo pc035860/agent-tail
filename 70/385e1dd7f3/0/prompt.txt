@@ -1123,3 +1123,70 @@ None — the review's 8 focus points are all answerable from spec/code as descri
 - `/Users/pc035860/code/agent-tail/src/core/types.ts:38-44` (`CliOptions.workflow*` fields — already shipped in P1)</result>
 <usage><total_tokens>105011</total_tokens><tool_uses>19</tool_uses><duration_ms>161999</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>aab81778705515b1d</task-id>
+<tool-use-id>toolu_019xhhiXBfe3UovggHcUZfYG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/aab81778705515b1d.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P3 plan" completed</summary>
+<result>All ten patches landed cleanly. The plan now reads correctly end-to-end. A few residual nits surfaced on re-read — none blocking, calling them out below for awareness only.
+
+## Verdict
+
+**PASS** (with minor residual nits — non-blocking)
+
+## Residual issues
+
+### R1 — D8 trade-off entry contradicts updated `prefillKnown` docblock (cosmetic)
+The `prefillKnown` docblock (lines 80-86) now correctly says "P3 does not call this — included now so the API contract is tested before P5 wires it." Good. But Decision **D8** in the trade-offs table (line 604) still reads:
+
+&gt; No `prefillKnown` call in P3 dispatcher | Direct attach via `--workflow &lt;runId&gt;` skips the detector entirely — detector is started ONLY when running normal mode (P5 path A). P3 dispatcher path does not start detector.
+
+The rationale is accurate, but the framing reads like the API has zero P3 footprint, which now contradicts the "included now so the API contract is tested" docblock. **Suggested wording**: "P3 dispatcher path does not start the detector; `prefillKnown` ships in P3 only to lock the API contract via tests before P5 wires it."
+
+### R2 — Line 14 in Overview is slightly stale
+Line 14 says:
+&gt; CLI flags in `src/cli/parser.ts`: `--workflow [runId]`, `--no-with-workflow-agents`, `--no-workflow-attach`, `--workflow-pane` (defined; pane impl P7).
+
+That's an incomplete list — Step 3 actually registers six flag bindings (positive `--with-workflow-agents`, `--workflow-attach`, `--workflow-pane` plus their three negations). The Overview describes only the most "user-facing" forms, which is fine, but a reader cross-checking flag count will see a mismatch. **Suggested fix**: change to "`--workflow [runId]`, `--with-workflow-agents`/`--no-with-workflow-agents`, `--workflow-attach`/`--no-workflow-attach`, `--workflow-pane`/`--no-workflow-pane`" or just note "(plus matching `--no-*` negations)".
+
+### R3 — Line 15 in Overview not updated for C6 (positional-arg path)
+Line 15 still says:
+&gt; Dispatcher in `src/index.ts`: when `options.workflow !== undefined`, route Claude to `startClaudeWorkflowMultiWatch`.
+
+But Step 4 (and C6's fix) now also routes on `sessionFile?.customTitle?.startsWith('wf:')`. **Suggested fix**: append "...or when the resolved `sessionFile.customTitle` starts with `wf:` (positional `wf_*` arg)."
+
+### R4 — "Critical Files for Implementation" undercount
+Line 665 says "MODIFY; 4 new flags + validation". With matching `--no-*` pairs it's now six bindings (or four logical flags + their negations). Either count is defensible; the line is slightly stale relative to Step 3. **Suggested fix**: "MODIFY; new workflow flags + validation" (drop the count).
+
+### R5 — Acceptance Mapping T7 wording
+Line 675 references `--no-with-workflow-agents` correctly. Good — this matches the renamed flag. No action.
+
+### R6 — `process.once('SIGINT')` interaction with other handlers (deferred risk, already flagged)
+Step 4.2 still uses `process.once('SIGINT', ...)`. The risk I called out earlier (other SIGINT handlers in the file at index.ts:1437+) hasn't been addressed. This is acceptable for P3 since `startClaudeWorkflowMultiWatch` is the only handler installed before the workflow attachment, but worth documenting as a known limitation that P6 (interactive) will revisit. **Suggested**: add a one-liner comment: `// TODO(P6): coordinate SIGINT with interactive shutdown path`.
+
+## What's good
+
+- All ten patches applied verbatim or near-verbatim — implementation can proceed.
+- C6 dispatcher fix is correctly two-branch (flag vs positional), and the positional branch correctly reuses the `sessionFile.path` from `ClaudeSessionFinder.findBySessionId` (no duplicate finder call).
+- C8's comment in `_startJournalAndFlushHistory` is well-placed and explicit about the wedge slot for P4.
+- C9's `drainParser` swap is clean — note the comment correctly cites the 10000-iteration guard (matching the real helper, not the stale `100` from my original critique).
+- C4/C5's `--with-workflow-agents` / `--no-with-workflow-agents` pair now matches the existing `--with-subagents` / `--no-with-subagents` convention. Future maintainers won't trip on it.
+- Test row 5d (positional-arg) correctly tests the parser layer (`sessionId: 'wf_xxx'`); dispatcher routing is then covered by the integration test promoted in 5d.
+- Integration test promoted to required + the explicit recommendation to skip `startClaudeWorkflowMultiWatch` and drive `WorkflowAttachment` directly avoids `process.exit` trap in tests.
+
+## Ready to implement
+
+The plan can be executed as written. The four residual nits above are cosmetic (R1, R2, R3, R4) or deferred (R6) — none block P3 implementation or test contracts. R3 is the most worth fixing before implementation starts since it affects how a reviewer understands the dispatcher trigger.
+
+## Files referenced
+
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_18-24-50_workflow-p3.md` (under review)
+- `/Users/pc035860/code/agent-tail/src/utils/parser-drain.ts` (`DRAIN_GUARD_MAX = 10000` — matches plan's "10000-iteration guard" comment)
+- `/Users/pc035860/code/agent-tail/src/cli/parser.ts:49-52` (existing `--with-subagents` / `--no-with-subagents` precedent — plan now matches)
+- `/Users/pc035860/code/agent-tail/src/claude/output-handlers.ts:11` (`ConsoleOutputHandler` class — plan now imports correctly)</result>
+<usage><total_tokens>126285</total_tokens><tool_uses>1</tool_uses><duration_ms>37859</duration_ms></usage>
+</task-notification>
