@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "33372eecad34",
+  "strategy": "manual-commit",
+  "branch": "feat/workflow-support",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/list/session-lister.ts",
+    "src/pick/fzf-helpers.ts",
+    "src/pick/index.ts",
+    "tests/list/session-lister.test.ts",
+    "tests/pick/fzf-helpers.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/33/372eecad34/0/metadata.json",
+      "transcript": "/33/372eecad34/0/full.jsonl",
+      "content_hash": "/33/372eecad34/0/content_hash.txt",
+      "prompt": "/33/372eecad34/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8288,
+    "cache_creation_tokens": 237864,
+    "cache_read_tokens": 8127528,
+    "output_tokens": 59082,
+    "api_call_count": 66
+  }
+}

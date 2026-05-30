@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "33372eecad34",
+  "session_id": "ed870914-d922-4f75-a6b0-5871f5bd9552",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-30T13:25:03.274046Z",
+  "branch": "feat/workflow-support",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/pick/fzf-helpers.ts",
+    "src/pick/index.ts",
+    "tests/list/session-lister.test.ts",
+    "tests/pick/fzf-helpers.test.ts",
+    "src/list/session-lister.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "f0842068854b",
+  "token_usage": {
+    "input_tokens": 8288,
+    "cache_creation_tokens": 237864,
+    "cache_read_tokens": 8127528,
+    "output_tokens": 59082,
+    "api_call_count": 66
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-30T13:25:03.069943Z",
+    "agent_lines": 0,
+    "human_added": 128,
+    "human_modified": 77,
+    "human_removed": 0,
+    "total_committed": 128,
+    "agent_percentage": 0
+  }
+}
