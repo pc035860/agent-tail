@@ -106,12 +106,21 @@ export class WorkflowAttachment {
     this.knownAgentIds.add(agentId);
 
     let succeeded = false;
+    const label = makeWorkflowAgentLabel(agentId);
+    // Register the session BEFORE watcher.start() so the initial-dump lines
+    // (FileWatcher reads the whole file synchronously during start) reach
+    // sessionManager.handleOutput's `find(s => s.label === label)` and land
+    // in the new session's buffer. Without this ordering, all historical
+    // lines from a completed transcript were silently dropped, leaving the
+    // tab showing "[No new content - session completed]" after switching.
+    this.config.sessionHandler?.addSession?.(agentId, label, transcriptPath);
+    this.config.sessionHandler?.updateUI?.();
+
     try {
       const parser = new ClaudeAgent({ verbose: this.config.verbose }).parser;
       this.agentParsers.set(agentId, parser);
 
       const watcher = new FileWatcher();
-      const label = makeWorkflowAgentLabel(agentId);
       await watcher.start(transcriptPath, {
         follow: this.config.follow,
         pollInterval: this.config.pollInterval,
@@ -123,15 +132,16 @@ export class WorkflowAttachment {
           ),
       });
       this.agentWatchers.set(agentId, watcher);
-
-      this.config.sessionHandler?.addSession?.(agentId, label, transcriptPath);
-      this.config.sessionHandler?.updateUI?.();
       succeeded = true;
     } finally {
       if (!succeeded) {
         this.knownAgentIds.delete(agentId);
         this.agentParsers.delete(agentId);
         this.agentWatchers.delete(agentId);
+        // SessionHandler has no removeSession API; mark the orphan session
+        // done so the tab clearly indicates "completed" rather than appearing
+        // live but never producing output.
+        this.config.sessionHandler?.markSessionDone?.(agentId);
         this.config.outputHandler.debug(
           `[wf:${this.config.workflow.runId}] attachAgent ${agentId.slice(0, 7)} failed; rolled back`
         );

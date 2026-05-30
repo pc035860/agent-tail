@@ -327,6 +327,65 @@ describe('WorkflowAttachment', () => {
     expect(liveLine!.timestamp).not.toBe(historyTs);
   });
 
+  test('attachAgent calls sessionHandler.addSession BEFORE first onOutput', async () => {
+    // Regression: initial-dump lines were dropped because addSession ran
+    // AFTER watcher.start() completed its synchronous history dump. The
+    // SessionManager could not route those lines to the new session's
+    // buffer (no session with that label yet), so switching to the tab
+    // showed "[No new content — session completed]" for already-finished
+    // workflow agents.
+    fixture = await setupFixture({
+      agents: [
+        {
+          agentId: AGENT_ID_1,
+          lines: [
+            makeAssistantLine('history line A'),
+            makeAssistantLine('history line B'),
+          ],
+        },
+      ],
+    });
+    const handler = createHandler();
+
+    const knownLabels = new Set<string>();
+    const droppedBeforeAddSession: string[] = [];
+    const sessionHandler = {
+      addSession: (_id: string, label: string, _path: string) => {
+        knownLabels.add(label);
+      },
+      updateUI: () => undefined,
+      markSessionDone: () => undefined,
+    };
+
+    const agentLabel = makeWorkflowAgentLabel(AGENT_ID_1);
+    const onOutput = (formatted: string, label: string): void => {
+      // Journal label is registered by the dispatcher, not by attachAgent,
+      // so we only assert ordering on agent labels here.
+      if (label === agentLabel && !knownLabels.has(label)) {
+        droppedBeforeAddSession.push(formatted);
+      }
+    };
+
+    attachment = new WorkflowAttachment({
+      workflow: {
+        runId: RUN_ID,
+        transcriptDir: fixture.transcriptDir,
+        snapshotPath: fixture.snapshotPath,
+      },
+      withAgents: true,
+      verbose: false,
+      follow: false,
+      formatter: rawFormatter(),
+      onOutput,
+      outputHandler: handler,
+      sessionHandler,
+    });
+    await attachment.start();
+
+    expect(knownLabels.has(agentLabel)).toBe(true);
+    expect(droppedBeforeAddSession).toEqual([]);
+  });
+
   test('attachAgent rollback on failure clears all state', async () => {
     fixture = await setupFixture();
     const handler = createHandler();
