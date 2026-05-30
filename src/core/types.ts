@@ -34,6 +34,14 @@ export interface CliOptions {
   summary: boolean;
   /** Optional session ID to load (partial match supported) */
   sessionId?: string;
+  /** --workflow [runId]; true 表示無 runId（取最新 workflow） */
+  workflow?: string | true;
+  /** Tail workflow 內所有 subagent；default true（P3+ 接 CLI 時轉 required） */
+  withWorkflowAgents?: boolean;
+  /** workflow main + subagent 各自開 tmux pane；default false（P7） */
+  workflowPane?: boolean;
+  /** 主 session 模式自動 attach 偵測到的 workflow；default true（P5） */
+  workflowAttach?: boolean;
 }
 
 /**
@@ -83,6 +91,14 @@ export interface SessionListItem extends SessionFile {
   project?: string;
   /** 最後活動時間（從 session 內容讀取，比 file mtime 更準確） */
   lastActivityTime?: Date;
+  /** 類型：main session 或 workflow run（default 視為 'session'） */
+  logType?: 'session' | 'workflow';
+  /** Workflow run ID（僅 logType='workflow' 有值） */
+  workflowRunId?: string;
+  /** Workflow 所屬 main session UUID（僅 logType='workflow' 有值） */
+  workflowSessionUuid?: string;
+  /** Workflow 執行狀態（僅 logType='workflow' 有值） */
+  workflowStatus?: 'running' | 'completed' | 'failed';
 }
 
 /**
@@ -105,4 +121,18 @@ export interface ParsedLine {
   isCustomTitle?: boolean;
   /** The custom title value from the event */
   customTitleValue?: string;
+  /** Journal event type（JournalLineParser） */
+  workflowEvent?: 'started' | 'result';
+  /** Workflow journal event 對應的 agent ID（17-hex） */
+  workflowAgentId?: string;
+  /** Main session 中遇到 tool_use.name='Workflow'（ClaudeLineParser 偵測，P5） */
+  isWorkflowToolUse?: boolean;
+  /** tool_result.toolUseResult.status='async_launched' 的 payload（P5） */
+  workflowAsyncLaunch?: {
+    runId: string;
+    transcriptDir: string;
+    scriptPath: string;
+    summary: string;
+    taskId: string;
+  };
 }
