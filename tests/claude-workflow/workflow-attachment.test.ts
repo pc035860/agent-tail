@@ -274,6 +274,12 @@ describe('WorkflowAttachment', () => {
     fixture = await setupFixture({
       journalLines: [makeStartedJournalLine(AGENT_ID_1)],
     });
+    // Force the journal file mtime to be clearly in the past so the
+    // history timestamp can't accidentally equal the current-time
+    // timestamp emitted in live mode (avoid same-ms flakes).
+    const { utimes } = await import('node:fs/promises');
+    const pastTime = new Date(Date.now() - 60_000);
+    await utimes(fixture.journalPath, pastTime, pastTime);
     const handler = createHandler();
     const collected: ParsedLine[] = [];
 

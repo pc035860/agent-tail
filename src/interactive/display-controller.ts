@@ -49,6 +49,12 @@ export class DisplayController {
   private currentStatusLine = '';
   private terminalRows: number;
   private terminalCols: number;
+  // P6 — workflow status line state. When set, buildStatusLine prepends a
+  // workflow info line above the standard session-tab bar.
+  private workflowStatusState: {
+    runId: string;
+    snapshot: import('../claude-workflow/types.ts').WorkflowSnapshot | null;
+  } | null = null;
   // 保存 handler 引用以便在 destroy() 時移除
   private onResize = () => {
     this.terminalRows = process.stdout.rows || 24;
@@ -133,6 +139,50 @@ export class DisplayController {
   /**
    * 更新狀態列
    */
+  /**
+   * P6 — set workflow status state. When non-null, the status line
+   * prepends a workflow info line ([wf:name] phase/agents/status).
+   */
+  setWorkflowStatus(
+    runId: string,
+    snapshot: import('../claude-workflow/types.ts').WorkflowSnapshot | null
+  ): void {
+    this.workflowStatusState = { runId, snapshot };
+  }
+
+  /** P6 — clear workflow status (returns to standard session-tab bar). */
+  clearWorkflowStatus(): void {
+    this.workflowStatusState = null;
+  }
+
+  /** P6 test seam — build status line string without TTY refresh. */
+  renderWorkflowStatusLine(): string {
+    const s = this.workflowStatusState;
+    if (!s) return '';
+    if (!s.snapshot) {
+      return chalk.gray(`[wf:${s.runId}] (loading snapshot...)`);
+    }
+    const snap = s.snapshot;
+    const name = snap.workflowName ?? s.runId;
+    const parts: string[] = [chalk.cyan(`[wf:${name}]`)];
+    if (snap.workflowProgress && snap.phases) {
+      const phaseEvents = snap.workflowProgress.filter(
+        (p) => p.type === 'workflow_phase'
+      ) as Array<{ index: number; title: string }>;
+      const currentPhase = phaseEvents.at(-1);
+      if (currentPhase) {
+        parts.push(
+          `Phase ${currentPhase.index}/${snap.phases.length}: ${currentPhase.title}`
+        );
+      }
+    }
+    if (typeof snap.agentCount === 'number') {
+      parts.push(`agents ${snap.agentCount}`);
+    }
+    parts.push(snap.status);
+    return parts.join(' | ');
+  }
+
   updateStatusLine(sessions: WatcherSession[], activeIndex: number): void {
     const statusLine = this.buildStatusLine(sessions, activeIndex);
     this.currentStatusLine = statusLine;

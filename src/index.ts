@@ -829,7 +829,135 @@ async function dispatchClaudeWorkflow(
   }
   const runId = m[1]!;
 
-  await startClaudeWorkflowMultiWatch(snapshotPath, runId, formatter, options);
+  if (options.interactive) {
+    await startClaudeWorkflowInteractiveWatch(
+      snapshotPath,
+      runId,
+      formatter,
+      options
+    );
+  } else {
+    await startClaudeWorkflowMultiWatch(
+      snapshotPath,
+      runId,
+      formatter,
+      options
+    );
+  }
+}
+
+/**
+ * P6 — Workflow Interactive mode. TTY fallback delegates to
+ * startClaudeWorkflowMultiWatch (non-interactive). In TTY mode, builds
+ * SessionManager tabs (journal + agents) and a workflow-aware status line.
+ */
+async function startClaudeWorkflowInteractiveWatch(
+  snapshotPath: string,
+  runId: string,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // TTY fallback — non-interactive environments cannot drive Tab key
+  // switching; fall back to standard workflow multi-watch.
+  if (!process.stdin.isTTY) {
+    console.warn(
+      chalk.yellow(
+        'Warning: Interactive mode not available in non-TTY environment.\n' +
+          'Switching to standard workflow watch mode.'
+      )
+    );
+    await startClaudeWorkflowMultiWatch(
+      snapshotPath,
+      runId,
+      formatter,
+      options
+    );
+    return;
+  }
+
+  // TTY-mode implementation: derive paths + build attachment with
+  // SessionManager wiring. See SPEC §12 for the design contract.
+  const parts = snapshotPath.split('/');
+  const wfIdx = parts.indexOf('workflows');
+  if (wfIdx < 0) {
+    console.error(
+      chalk.red(`Error: malformed workflow snapshot path: ${snapshotPath}`)
+    );
+    process.exit(1);
+  }
+  const sessionDir = parts.slice(0, wfIdx).join('/');
+  const transcriptDir = `${sessionDir}/subagents/workflows/${runId}`;
+
+  const displayController = new DisplayController({
+    persistentStatusLine: true,
+    historyLines: 50,
+  });
+  displayController.init();
+  displayController.setWorkflowStatus(runId, null);
+
+  const sessionManager = createInteractiveSessionManager(displayController);
+  const outputHandler = new DisplayControllerOutputHandler(displayController);
+
+  const journalLabel = `[wf:${runId}:journal]`;
+  const journalSessionId = `wf:${runId}:journal`;
+  sessionManager.addSession(journalSessionId, journalLabel, transcriptDir);
+
+  const attachment = new WorkflowAttachment({
+    workflow: { runId, transcriptDir, snapshotPath },
+    withAgents: options.withWorkflowAgents !== false,
+    verbose: options.verbose,
+    follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
+    formatter,
+    onOutput: (formatted, label) => {
+      // SessionManager routes by label match (see handleOutput). Workflow
+      // labels match the addSession label exactly: journal gets
+      // `[wf:{runId}:journal]`; agents get `[wf:{shortId}]`.
+      sessionManager.handleOutput(label, formatted);
+    },
+    outputHandler,
+    sessionHandler: {
+      addSession: (id, label, path) =>
+        sessionManager.addSession(id, label, path),
+      markSessionDone: (id) => sessionManager.markSessionDone(id),
+      updateUI: () =>
+        displayController.updateStatusLine(
+          sessionManager.getAllSessions(),
+          sessionManager.getActiveIndex()
+        ),
+    },
+    onStop: () => {
+      displayController.write(
+        chalk.gray(`[wf:${runId}] stopped — Ctrl+C to exit`)
+      );
+    },
+  });
+
+  // Poll snapshot every 1s to refresh workflow status line.
+  const statusInterval = setInterval(() => {
+    displayController.setWorkflowStatus(runId, attachment.getCurrentSnapshot());
+    displayController.updateStatusLine(
+      sessionManager.getAllSessions(),
+      sessionManager.getActiveIndex()
+    );
+  }, 1000);
+
+  process.once('SIGINT', () => {
+    clearInterval(statusInterval);
+    void attachment.stop('user').then(() => {
+      displayController.destroy();
+      process.exit(0);
+    });
+  });
+
+  await attachment.start();
+
+  displayController.setWorkflowStatus(runId, attachment.getCurrentSnapshot());
+  displayController.updateStatusLine(
+    sessionManager.getAllSessions(),
+    sessionManager.getActiveIndex()
+  );
 }
 
 async function startClaudeWorkflowMultiWatch(
