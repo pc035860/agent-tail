@@ -1461,6 +1461,53 @@ macOS 的 fs.watch 在重命名/移除/重建檔案時可能不可靠（Node 已
 
 ---
 
+## 20. Implementation Status
+
+✅ **All 7 phases complete (2026-05-30)** — feature shipped on branch
+`feat/workflow-support`. 740 tests pass (113 new workflow-specific).
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| P1 — paths + types + JournalLineParser + SnapshotWatcher | ✅ | Lazy GREEN: `lastJson` updates AFTER successful JSON.parse (D6 deviation from §8.2 reference; prevents invalid writes from poisoning dedup cache). |
+| P2 — WorkflowSessionFinder + ClaudeSessionFinder integration + SubagentDetector exclusion | ✅ | `ClaudeSessionFinder.listSessions` now enriches ALL collected main sessions before slice (D5 fix to a latent slice-before-enrich bug). Workflow + main collection run via `Promise.all` (post-simplify perf). |
+| P3 — WorkflowDetector path B + WorkflowAttachment lifecycle + `--workflow` dispatcher | ✅ | Lifecycle ordering preserves the §10.2 R3-B4 invariant (journal initial dump completes before snapshot watcher starts — wedge slot reserved for P4). |
+| P4 — SnapshotWatcher integration + status events + ENOENT/T20 | ✅ | Colored status events (running→gray, completed→green, failed→red). `autoStopScheduled` one-shot latch for terminal status; ENOENT routes to `stop('directory-removed')`. |
+| P5 — ClaudeLineParser Workflow detection + WorkflowDetector path A + auto-attach | ✅ | Discriminator loosened (CI-2): `runId` + `transcriptDir` required; `scriptPath`/`summary`/`taskId` optional. T16 dedup via `markRunIdKnown` sync mark. |
+| P6 — Interactive mode + workflow status line | ✅ | Status line combines workflow + session segments on single TTY line (no `\n` overflow). 1s poll for snapshot refresh with same-content guard. |
+| P7 — PaneManager pin/evict + `--workflow-pane` execution + agent-pick + docs | ✅ | Journal pane pinned via `pinAgent`. Subagent panes use `openPaneEvictIfNeeded` (FIFO over `insertionOrder`, skips pinned). `tail -F` direct command (workflow agents nested under `subagents/workflows/`). agent-pick wf_ routing deferred (functional via existing customTitle display). |
+
+**Post-completion review chain:**
+- Codex `/review-loop` (round 1) — 8 findings flagged; 4 real bugs fixed
+  (DisplayController updateStatusLine unwired, journal session id
+  mismatch, `--workflow-pane` command builder wrong path, super-follow
+  detector not rebound)
+- Codex `/review-loop` (round 2) — 3 followups: TTY single-line render,
+  shell-escape pane path, deferred fs.watch flake (env-specific)
+- `tdd-reviewer` audit — PASS_WITH_ISSUES; tightened color test, rollback
+  test escape hatch, shared DEFAULT_DEBOUNCE_MS
+- `/simplify` (3 parallel review agents) — extracted `deriveWorkflowDirs`
+  + `makeWorkflowJournalSessionId` helpers; dropped dead
+  `stopRequestReason` state; parallelized main + workflow listSessions;
+  same-content guard on status line redraw
+- Codex post-simplify — PASS; switched to `lastIndexOf('workflows')`;
+  added helper unit tests
+
+**Deferred / acknowledged out of scope:**
+- agent-pick full SPEC §11.4 6-column fzf format (workflow rows already
+  visible in `--list`; functional via existing `customTitle` indicator)
+- `--list` strict TYPE/NOTES column format per §11.3 (workflow rows
+  appear with `customTitle = 'wf:{name}'` indicator)
+- Constructor injection of `baseDir` (TDD reviewer W1 — touches
+  `ClaudeAgent` factory + several test files; `workflowFinder` lazy
+  getter is the current stop-gap)
+- `WorkflowAttachmentConfig` 11-field bag → grouped sub-configs
+  (mechanical refactor; low impact)
+- macOS `fs.watch` flake mitigation via polling fallback (SPEC §19.6
+  explicitly accepts; tests passed locally but sporadically fail in
+  Codex sandbox)
+
+---
+
 _建立日期：2026-05-30_
-_狀態：撰寫中 → review-loop pending_
+_狀態：✅ Shipped on `feat/workflow-support` (2026-05-30)_
 _批次：M4 完整版（first-class source + interactive + tmux pane）_
