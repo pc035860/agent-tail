@@ -1342,3 +1342,167 @@ None blocking. Patches 1-8 are all mechanical; the plan can move to implementati
 - `/Users/pc035860/code/agent-tail/src/core/detector-interfaces.ts` — `OutputHandler` interface (warn/info/debug) used by the new handlers</result>
 <usage><total_tokens>107635</total_tokens><tool_uses>14</tool_uses><duration_ms>137849</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a506a88c0e3c78580</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a506a88c0e3c78580.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P5 plan" completed</summary>
+<result>I have sufficient understanding. Let me now write the review.
+
+---
+
+## Verdict
+**PASS_WITH_CHANGES**
+
+Plan is structurally sound and aligns with SPEC §6.2 / §9.1 / §9.1.1 / §9.2 / §11.1 and the existing P1–P4 code. Five mostly-tactical issues should be fixed before implementation; none invalidate the design.
+
+## Critical issues (must fix)
+
+### CI-1. `wfAttachments` map leaks on workflow completion
+P4 already wires `WorkflowAttachment._handleSnapshotChange()` to call `this.stop('completed')` via `queueMicrotask` (see `/Users/pc035860/code/agent-tail/src/claude-workflow/watch-builder.ts:310-317`). However `WorkflowAttachment.stop()` (lines 133-164) has **no callback to notify the owner** — it never tells the dispatcher closure to delete from `wfAttachments`. P5 plan Step 5 also doesn't delete.
+
+Consequence: long-lived `agent-tail claude` session that runs N workflows leaks N `WorkflowAttachment` references (with `Set&lt;string&gt;`, mtime caches, etc.) until process exit. T10b explicitly exercises this code path (parallel workflows per cwd).
+
+**Fix options** (pick one, recommend B):
+
+- **A.** Add `onStopped?: (reason) =&gt; void` to `WorkflowAttachmentConfig`; dispatcher passes `() =&gt; wfAttachments.delete(workflow.runId)`. Also delete in the `catch` path (already in plan).
+- **B.** Make `WorkflowAttachment.stop()` Promise resolve be the cleanup hook — wrap the `attachment.start()` call inside a `.then(...)` or `await` block in `onNewWorkflow`, where the dispatcher subscribes once-off cleanup. Hard to do cleanly because `stop()` is fired async from inside the attachment.
+- **C.** Most pragmatic: extend `WorkflowAttachmentConfig` with `onStop` as in (A). Also remove the runId from `WorkflowDetector.knownRunIds` if you want the same runId to be re-attachable after completion (probably no — runIds are unique per launch).
+
+### CI-2. Discriminator is *too strict* — `summary` and `taskId` are not load-bearing
+Plan Step 2 requires **all five** of `runId / transcriptDir / scriptPath / summary / taskId`. But the only fields actually consumed downstream are:
+
+- `runId` — used by `markRunIdKnown`, `getWorkflowSnapshotPath`, `_handleNewRunIdFromPathA`
+- `transcriptDir` — passed to `DetectedWorkflow`
+- `scriptPath` / `summary` — passed to `DetectedWorkflow` but `DetectedWorkflow` itself declares them optional (`?`), so missing values are tolerated downstream
+- `taskId` — **never consumed** in P5 (not part of `DetectedWorkflow`)
+
+Compare to subagent `async_launched`, which carries `agentId / prompt / outputFile / canReadOutputFile` (no `runId`). The discriminator that actually distinguishes the two is **`runId` matching `wf_*`** — period. `transcriptDir` is "load-bearing because we need it"; `scriptPath / summary / taskId` are decoration.
+
+**Recommended discriminator** (matches SPEC §9.1's stated intent "presence of `runId`"):
+
+```typescript
+if (
+  status === 'async_launched' &amp;&amp;
+  typeof toolUseResult.runId === 'string' &amp;&amp;
+  isValidWorkflowRunId(toolUseResult.runId) &amp;&amp;
+  typeof toolUseResult.transcriptDir === 'string'
+) {
+  result.workflowAsyncLaunch = {
+    runId: toolUseResult.runId,
+    transcriptDir: toolUseResult.transcriptDir,
+    scriptPath: typeof toolUseResult.scriptPath === 'string' ? toolUseResult.scriptPath : '',
+    summary: typeof toolUseResult.summary === 'string' ? toolUseResult.summary : '',
+    taskId: typeof toolUseResult.taskId === 'string' ? toolUseResult.taskId : '',
+  };
+}
+```
+
+But — and this is the catch — the existing `ParsedLine.workflowAsyncLaunch` type in `/Users/pc035860/code/agent-tail/src/core/types.ts:131` declares all five as **required** strings. Either:
+
+1. Loosen the type to `scriptPath?: string; summary?: string; taskId?: string;` (preferred — matches `DetectedWorkflow`)
+2. Keep type strict but **make `transcriptDir`-only fallback emit a debug warning + skip** (rejects malformed payloads but accepts the "Claude trims fields" future). Less forgiving.
+
+Plan choice (5-of-5) is reasonable defensively (D2 rationale is sound) but fragile against minor payload changes. Recommend option 1.
+
+### CI-3. Race: directory watch can deliver `wf_*.json` before path A
+Plan Step 3 sets `markRunIdKnown` synchronously before kicking the async `_handleNewRunIdFromPathA`. Good. But path B's `_handleNewRunId` (workflow-detector.ts:81-110) does **retry on failure** with `markRunIdKnown` re-check — meaning if path A fails (CI-1's rollback fires `knownRunIds.delete(launch.runId)`), path B may have been waiting and re-fire successfully. **This is the intended behavior** (rollback so path B can retry) but the plan says path A rolls back and "path B can retry on dir watch event." Two subtleties:
+
+1. Path B's fs.watch may have already fired and *already lost* the event (fs.watch doesn't replay). If snapshot file already existed by the time path A failed, no further fs event arrives. Recovery requires that path A's runId already exists in `knownRunIds` until removal AND path B sees a *new* event.
+2. If snapshot was written **before** path A handled the line (which can happen on session resume), path B fires first; path A's `markRunIdKnown` then returns false and silently no-ops — correct dedup.
+
+**Action:** Add a test (already in plan T16) but also document in plan §D4 that rollback recovery depends on *future* fs events — if the snapshot file is already stable on disk, path B won't re-fire. This may be acceptable since dispatcher-level retry isn't in scope.
+
+### CI-4. Plan Step 4 dispatch placement — verify ordering doesn't break Task early detection
+The current `createOnLineHandler` flow (lines 161-186 of `watch-builder.ts`):
+1. `parsed.isTaskToolUse` → `pushDescription` + `handleEarlyDetection` (lines 162-168)
+2. `parsed.raw.toolUseResult.agentId &amp;&amp; !commandName &amp;&amp; status !== 'forked'` → `handleFallbackDetection` (lines 171-186)
+
+Plan inserts workflow dispatch **between** these two. That's fine **but**: a `Workflow` async_launched `tool_result` also has `status === 'async_launched'` and **no `agentId`** (since Workflow's payload has `runId`, not `agentId`). The fallback detection block reads `raw.toolUseResult.agentId` which will be `undefined`, so `if (agentId &amp;&amp; ...)` short-circuits — no false subagent registration. 
+
+However, the **assistant `tool_use` block** also has `isTaskToolUse: false` for `name: 'Workflow'` (because `isSubagentTool('Workflow') === false` — verify by checking `SUBAGENT_TOOL_NAMES` in format-tool.ts). So no double-dispatch from tool_use side either. Insertion point is correct.
+
+**Action:** None, but the *test* in `tests/claude/watch-builder.test.ts` extension should explicitly assert `detector.handleEarlyDetection` is NOT called when a Workflow `tool_use` flows through.
+
+### CI-5. P5's `workflowAttach` consistency with P3
+You stated "P3 plan said this field defaults to true via `opts.workflowAttach !== false` in parser." Verified in `/Users/pc035860/code/agent-tail/src/cli/parser.ts:375` — `workflowAttach: opts.workflowAttach !== false`. The CLI flag is also already there (`--workflow-attach` / `--no-workflow-attach`, parser.ts:85-92).
+
+In `core/types.ts:44`, `workflowAttach?: boolean;` — **optional, no default in type**. P5 plan Step 5 reads `options.workflowAttach !== false`. This works (undefined !== false is true → enabled, false !== false is false → skip). Consistent with P3.
+
+**However:** there is an asymmetric tail of subtle bugs to guard against. The plan says "the parser still annotates `ParsedLine` with `workflowAsyncLaunch`, but the detector is never constructed" — this matters because if a downstream Codex/Cursor consumer ever reads `parsed.workflowAsyncLaunch` it would be misleading. Per D6, parser is unconditional — *that* is correct for keeping the parser CLI-agnostic and is per spec.
+
+**Action:** No code change. But add a test: `parser annotates workflowAsyncLaunch regardless of CliOptions` (since parser doesn't see CliOptions anyway, this is implicit — but a test cements the contract).
+
+## Plan patch (proposed edits)
+
+1. **Replace Step 2 discriminator** with `runId + transcriptDir`-only check (per CI-2). Loosen `ParsedLine.workflowAsyncLaunch` type fields `scriptPath / summary / taskId` to optional in `src/core/types.ts`.
+
+2. **Add Step 5.1**: Add `onStop?: (reason: 'completed' | 'directory-removed' | 'user') =&gt; void` to `WorkflowAttachmentConfig`; call it at end of `WorkflowAttachment.stop()`. Dispatcher passes `() =&gt; wfAttachments.delete(workflow.runId)`. (Per CI-1)
+
+3. **Modify Step 5 SIGINT cleanup** to also delete entries as part of `Promise.all` — for completeness even on user interrupt. Replace:
+   ```typescript
+   process.once('SIGINT', () =&gt; {
+     workflowDetector?.stop();
+     void Promise.all(
+       [...wfAttachments.values()].map((a) =&gt; a.stop('user'))
+     ).then(() =&gt; {
+       wfAttachments.clear();
+       process.exit(0);
+     });
+   });
+   ```
+   Also note: `startClaudeMultiWatch` already has its own `process.on('SIGINT', ...)` at line 686 — **must merge** the cleanup into that existing handler rather than register a second one. (Plan uses `process.once`, current code uses `process.on` — registering both yields duplicate handlers.)
+
+4. **Add Step 4.1**: In `OnLineHandlerConfig.workflowDetector` JSDoc, document that callers must construct detector *before* `createOnLineHandler`. Plan's D8 already says this — promote to inline doc comment.
+
+5. **Add test**: `createOnLineHandler` does NOT call `detector.handleEarlyDetection` when `parsed.toolName === 'Workflow'` (CI-4 confirmation).
+
+6. **Add test**: `ClaudeLineParser` populates `workflowAsyncLaunch` with `runId + transcriptDir` only (no scriptPath/summary/taskId) — covers Claude future trimming case (CI-2). And the existing 5-field test should still pass.
+
+7. **Remove from plan**: The "subagent (Agent tool) async_launched" check is conflated — actual subagent completions emit `tool_result` with `agentId / status: 'completed'` (not `async_launched`). Confirm by inspecting an actual subagent JSONL — the SPEC discriminator language is "subagent async_launched also exists" but I couldn't find evidence in code. Either confirm with a real fixture and keep the warning, or simplify the rationale to just "runId is the discriminator."
+
+## Risks &amp; mitigations
+
+| Risk | Mitigation |
+|---|---|
+| `wfAttachments` map leak after each completed workflow | `onStop` callback (CI-1 fix) |
+| Claude Code trims `summary/taskId/scriptPath` in future versions → parser silently drops valid Workflow launches | Loosen discriminator to runId + transcriptDir (CI-2) |
+| Duplicate SIGINT handlers | Merge plan's SIGINT into existing `process.on('SIGINT', ...)` at index.ts:686 |
+| Path A failure rollback gives illusory path B retry | Document limitation; T16 test must verify the **path B fired first** scenario, not just "both events sent" |
+| Interactive mode (`-i`) breakage | Plan Step 5 only touches `startClaudeMultiWatch`. `startClaudeInteractiveWatch` (line 921) is **completely untouched**, and it delegates to `startClaudeMultiWatch` only as a non-TTY fallback (line 936). Interactive mode will silently not auto-attach in P5 — this is documented as P6 scope (correct), but the **TTY-fallback path inside interactive mode** *will* gain workflow detection because it routes through `startClaudeMultiWatch`. That's likely fine but should be called out. |
+| `WorkflowDetector` constructor receives `sessionsRoot` in spec §6 but takes `sessionDir` in actual P3 code — plan uses `sessionDir`, which matches | None — plan is consistent with shipped P3 |
+
+## Test plan
+
+Plan tests are mostly adequate. Add:
+
+1. **Discriminator regression**: parser test with `runId + transcriptDir` only (no scriptPath/summary/taskId) — should populate (after CI-2 loosening) OR should reject (if keeping strict). Pick based on CI-2 decision.
+2. **Workflow tool_use does NOT trigger Task early detection**: `createOnLineHandler` integration test — feed a Workflow tool_use line, assert `detector.handleEarlyDetection` not called.
+3. **Map cleanup**: integration test for `wfAttachments.delete()` on completion — drive a workflow to `status: 'completed'`, assert map is empty after attachment.stop fires.
+4. **SIGINT merge**: smoke test that `startClaudeMultiWatch` registers exactly one SIGINT handler before vs after workflow detector init (use `process.listenerCount('SIGINT')`).
+5. **CliOptions `workflowAttach: false` path**: dispatcher does not construct `WorkflowDetector`, no `handleMainLine` invocation, no auto-attach, but `parsed.workflowAsyncLaunch` is still populated and the tool_result formats normally.
+
+## Open questions
+
+None blocking. Two minor curiosities I'd resolve in implementation, not in plan review:
+
+1. Does the Workflow `tool_use` ever carry useful info we'd want in a `[wf:launching]` hint line? Plan D1 says no — agree, but consider logging `(workflow ${workflowName} launching...)` from the assistant tool_use for UX parity with Task tools. Optional polish, skip per plan.
+2. `--no-workflow-attach` + positional `wf_*` (explicit workflow run via positional arg) — does the flag accidentally affect explicit `--workflow` mode? Spec §11.2 says "allow but no effect" with warning. Current dispatcher code (index.ts:343-356) routes to `dispatchClaudeWorkflow` purely on `--workflow` presence or `customTitle.startsWith('wf:')` — `workflowAttach` is not checked there, so explicit mode is unaffected. Good. Worth a one-line test for safety.
+
+---
+
+**Relevant files**:
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_19-00-00_workflow-p5.md` (the plan)
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts:657-742` (Step 1+2 modification site)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/workflow-detector.ts:26-110` (Step 3 modification site; note existing `prefillKnown` is **not** what plan needs — `handleMainLine` is a separate code path that also calls `markRunIdKnown`)
+- `/Users/pc035860/code/agent-tail/src/claude/watch-builder.ts:94-191` (Step 4 modification site)
+- `/Users/pc035860/code/agent-tail/src/index.ts:412-723` (Step 5 modification site; **existing SIGINT at line 686** must be merged, not added)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/watch-builder.ts:30-164` (`WorkflowAttachment` needs `onStop` per CI-1)
+- `/Users/pc035860/code/agent-tail/src/core/types.ts:125-139` (`ParsedLine.workflowAsyncLaunch` type — loosen per CI-2)
+- `/Users/pc035860/code/agent-tail/src/cli/parser.ts:72-97, 372-376` (P3 `workflowAttach` wiring — verified consistent)</result>
+<usage><total_tokens>105306</total_tokens><tool_uses>19</tool_uses><duration_ms>163294</duration_ms></usage>
+</task-notification>
