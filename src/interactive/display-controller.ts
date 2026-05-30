@@ -9,6 +9,13 @@ export interface DisplayControllerOptions {
   persistentStatusLine?: boolean;
   /** 歷史回看時顯示的最大行數 */
   historyLines?: number;
+  /**
+   * 狀態列佔用的列數（預設 1）。當設為 2 時：
+   *   - row 1 (terminalRows - 1): session tabs
+   *   - row 2 (terminalRows):     workflow segment（或 loading placeholder）
+   * 雙列模式由 workflow interactive watch 啟用，避免合併行造成的長度溢位。
+   */
+  statusRows?: 1 | 2;
 }
 
 /**
@@ -46,6 +53,10 @@ export class DisplayController {
   private isInitialized = false;
   private persistentStatusLine: boolean;
   private historyLines: number;
+  private statusRows: 1 | 2;
+  // currentStatusLine stores the joined representation of all rows
+  // (`\x00`-delimited) so the same-content guard in `updateStatusLine`
+  // detects per-row changes without redrawing on no-op polls.
   private currentStatusLine = '';
   private terminalRows: number;
   private terminalCols: number;
@@ -76,11 +87,16 @@ export class DisplayController {
   constructor(options: DisplayControllerOptions = {}) {
     this.persistentStatusLine = options.persistentStatusLine ?? true;
     this.historyLines = options.historyLines ?? 50;
+    this.statusRows = options.statusRows ?? 1;
     this.terminalRows = process.stdout.rows || 24;
     this.terminalCols = process.stdout.columns || 80;
 
     // 監聽終端大小變化
     process.stdout.on('resize', this.onResize);
+  }
+
+  getStatusRows(): 1 | 2 {
+    return this.statusRows;
   }
 
   /**
@@ -90,10 +106,11 @@ export class DisplayController {
     if (this.isInitialized) return;
 
     if (this.persistentStatusLine && process.stdout.isTTY) {
-      // 設定捲動區域（保留最後一行給狀態列）
-      process.stdout.write(ANSI.setScrollRegion(1, this.terminalRows - 1));
+      // 設定捲動區域（保留最後 statusRows 行給狀態列）
+      const scrollBottom = this.terminalRows - this.statusRows;
+      process.stdout.write(ANSI.setScrollRegion(1, scrollBottom));
       // 移到捲動區域內
-      process.stdout.write(`\x1b[${this.terminalRows - 1};1H`);
+      process.stdout.write(`\x1b[${scrollBottom};1H`);
       // 顯示初始狀態列
       this.refreshStatusLine();
     }
@@ -111,9 +128,11 @@ export class DisplayController {
     process.stdout.off('resize', this.onResize);
 
     if (this.persistentStatusLine && process.stdout.isTTY) {
-      // 清除狀態列
-      process.stdout.write(`\x1b[${this.terminalRows};1H`);
-      process.stdout.write(ANSI.clearLine);
+      // 清除狀態列（依 statusRows 清最後 N 行）
+      for (let i = 0; i < this.statusRows; i++) {
+        process.stdout.write(`\x1b[${this.terminalRows - i};1H`);
+        process.stdout.write(ANSI.clearLine);
+      }
       // 重設捲動區域
       process.stdout.write(ANSI.resetScrollRegion);
       // 顯示游標
@@ -183,27 +202,53 @@ export class DisplayController {
     return parts.join(' | ');
   }
 
-  updateStatusLine(sessions: WatcherSession[], activeIndex: number): void {
+  /**
+   * Test seam — return the status line(s) that would be written, without
+   * touching the TTY. Length === statusRows.
+   *
+   *   statusRows: 1 → [`workflowSegment • sessionLine` (joined)]
+   *   statusRows: 2 → [sessionLine, workflowSegment]
+   *                    (session on top row, workflow on bottom row)
+   */
+  composeStatusLines(
+    sessions: WatcherSession[],
+    activeIndex: number
+  ): string[] {
     const sessionLine = this.buildStatusLine(sessions, activeIndex);
-    // P6 — prepend workflow status when set. The persistent status line
-    // only reserves ONE row, so combine workflow + session info on a
-    // single line with a dimmed separator (avoid `\n` which would
-    // overflow the scroll region and disrupt the persistent layout).
     const workflowLine = this.renderWorkflowStatusLine();
-    const statusLine = workflowLine
+
+    if (this.statusRows === 2) {
+      // Dual-row: session above, workflow below. Workflow row stays as a
+      // reserved slot (empty string) when no workflow state is set, so the
+      // terminal scroll region doesn't jump when state arrives.
+      return [sessionLine, workflowLine];
+    }
+
+    // Single-row (default) — preserve the existing `•`-joined layout for
+    // non-workflow watches.
+    const joined = workflowLine
       ? `${workflowLine}${chalk.dim(' • ')}${sessionLine}`
       : sessionLine;
+    return [joined];
+  }
 
-    // Same-content guard — interactive workflow mode polls this every 1s;
-    // skipping the rewrite avoids ~60 wasted TTY redraws/minute at idle.
-    if (statusLine === this.currentStatusLine) return;
-    this.currentStatusLine = statusLine;
+  updateStatusLine(sessions: WatcherSession[], activeIndex: number): void {
+    const lines = this.composeStatusLines(sessions, activeIndex);
+    // `\x00` joins rows for the same-content guard — interactive workflow
+    // mode polls every 1s; skipping the rewrite avoids ~60 wasted TTY
+    // redraws/minute at idle. NUL byte is safe because no row should ever
+    // contain it (ANSI escapes + printable chars only).
+    const composed = lines.join('\x00');
+    if (composed === this.currentStatusLine) return;
+    this.currentStatusLine = composed;
 
     if (this.persistentStatusLine && process.stdout.isTTY) {
       this.refreshStatusLine();
     } else {
-      // 非 TTY 模式用分隔線顯示
-      console.log(statusLine);
+      // 非 TTY 模式：每列各印一行
+      for (const line of lines) {
+        console.log(line);
+      }
     }
   }
 
@@ -301,18 +346,21 @@ export class DisplayController {
   private refreshStatusLine(): void {
     if (!process.stdout.isTTY) return;
 
+    // currentStatusLine is `\x00`-joined per row (see updateStatusLine).
+    const rows = this.currentStatusLine.split('\x00');
+
     // 保存游標位置
     process.stdout.write(ANSI.saveCursor);
-    // 移到最後一行
-    process.stdout.write(`\x1b[${this.terminalRows};1H`);
-    // 清除行
-    process.stdout.write(ANSI.clearLine);
-    // 輸出狀態列（截斷至終端寬度）
-    const statusLine = this.truncateToWidth(
-      this.currentStatusLine,
-      this.terminalCols
-    );
-    process.stdout.write(statusLine);
+    // 依 statusRows 從上到下寫：
+    //   row 0 → terminalRows - (statusRows - 1)
+    //   row N → terminalRows
+    for (let i = 0; i < rows.length; i++) {
+      const targetRow = this.terminalRows - (this.statusRows - 1) + i;
+      process.stdout.write(`\x1b[${targetRow};1H`);
+      process.stdout.write(ANSI.clearLine);
+      const line = this.truncateToWidth(rows[i] ?? '', this.terminalCols);
+      process.stdout.write(line);
+    }
     // 恢復游標位置
     process.stdout.write(ANSI.restoreCursor);
   }

@@ -968,6 +968,10 @@ async function startClaudeWorkflowInteractiveWatch(
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+    // Workflow mode: reserve two status rows — session tabs on top,
+    // workflow segment below. Other interactive watches keep the default
+    // single-row layout.
+    statusRows: 2,
   });
   displayController.init();
   displayController.setWorkflowStatus(runId, null);
