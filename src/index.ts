@@ -8,6 +8,7 @@ import {
 } from './core/multi-file-watcher.ts';
 import { SessionManager, type WatcherSession } from './core/session-manager.ts';
 import { DisplayController } from './interactive/display-controller.ts';
+import { installInteractiveKeyboard } from './interactive/keyboard.ts';
 import type { Agent, LineParser } from './agents/agent.interface.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
@@ -992,13 +993,21 @@ async function startClaudeWorkflowInteractiveWatch(
     );
   }, 1000);
 
-  process.once('SIGINT', () => {
+  const cleanup = (): void => {
     clearInterval(statusInterval);
-    void attachment.stop('user').then(() => {
-      displayController.destroy();
-      process.exit(0);
-    });
+    // attachment.stop is async; fire-and-forget so we don't block the exit
+    // path. Other interactive watches follow the same sync-cleanup pattern.
+    attachment.stop('user').catch(() => {});
+    displayController.destroy();
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  };
+
+  process.on('SIGINT', () => {
+    cleanup();
+    process.exit(0);
   });
+
+  installInteractiveKeyboard(sessionManager, () => cleanup());
 
   await attachment.start();
 
@@ -1006,6 +1015,10 @@ async function startClaudeWorkflowInteractiveWatch(
   displayController.updateStatusLine(
     sessionManager.getAllSessions(),
     sessionManager.getActiveIndex()
+  );
+
+  displayController.write(
+    chalk.gray('Watching for changes... (Tab to switch, q to quit)')
   );
 }
 
@@ -1338,41 +1351,8 @@ async function startClaudeInteractiveWatch(
     });
   };
 
-  // 設定鍵盤監聽
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', (key: string) => {
-      // Ctrl+C
-      if (key === '\u0003') {
-        cleanup();
-        process.exit(0);
-      }
-      // q - quit
-      if (key === 'q' || key === 'Q') {
-        cleanup();
-        process.exit(0);
-      }
-      // Tab - switch next
-      if (key === '\t') {
-        sessionManager.switchNext();
-      }
-      // Shift+Tab (varies by terminal, common: \u001b[Z)
-      if (key === '\u001b[Z') {
-        sessionManager.switchPrev();
-      }
-      // n - switch next (alternative)
-      if (key === 'n' || key === 'N') {
-        sessionManager.switchNext();
-      }
-      // p - switch prev (alternative)
-      if (key === 'p' || key === 'P') {
-        sessionManager.switchPrev();
-      }
-    });
-  }
+  // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
+  installInteractiveKeyboard(sessionManager, () => cleanup());
 
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, initialSubagent, true);
@@ -1593,35 +1573,8 @@ async function startCodexInteractiveWatch(
     });
   };
 
-  // 設定鍵盤監聽
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', (key: string) => {
-      if (key === '\u0003') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === 'q' || key === 'Q') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === '\t') {
-        sessionManager.switchNext();
-      }
-      if (key === '\u001b[Z') {
-        sessionManager.switchPrev();
-      }
-      if (key === 'n' || key === 'N') {
-        sessionManager.switchNext();
-      }
-      if (key === 'p' || key === 'P') {
-        sessionManager.switchPrev();
-      }
-    });
-  }
+  // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
+  installInteractiveKeyboard(sessionManager, () => cleanup());
 
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, true);
@@ -2087,27 +2040,8 @@ async function startCursorInteractiveWatch(
     });
   };
 
-  // ========== Keyboard Handling ==========
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', (key: string) => {
-      if (key === '\u0003') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === 'q' || key === 'Q') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === '\t') sessionManager.switchNext();
-      if (key === '\u001b[Z') sessionManager.switchPrev(); // Shift+Tab
-      if (key === 'n' || key === 'N') sessionManager.switchNext();
-      if (key === 'p' || key === 'P') sessionManager.switchPrev();
-    });
-  }
+  // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
+  installInteractiveKeyboard(sessionManager, () => cleanup());
 
   // ========== Session Switch (Super-Follow) ==========
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
