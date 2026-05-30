@@ -30,11 +30,22 @@ const CUSTOM_TITLE_TYPE = 'custom-title';
  * Claude Code Session Finder
  * 目錄結構: ~/.claude/projects/{encoded-path}/{UUID}.jsonl
  */
-class ClaudeSessionFinder implements SessionFinder {
+export class ClaudeSessionFinder implements SessionFinder {
   private baseDir: string;
 
   constructor() {
     this.baseDir = join(homedir(), '.claude', 'projects');
+  }
+
+  // Phase 2 stubs — RED tests assert real behavior; implementation lands in GREEN.
+  async getProjectInfo(
+    _sessionPath: string
+  ): Promise<import('../../core/types.ts').ProjectInfo | null> {
+    return null;
+  }
+
+  async findLatestInProject(_projectDir: string): Promise<SessionFile | null> {
+    return null;
   }
 
   getBaseDir(): string {
