@@ -36,18 +36,18 @@ export async function formatWorkflowSummary(
   if (!dirs) return [];
 
   const journalPath = getWorkflowJournalPath(dirs.sessionDir, runId);
-  if (!(await Bun.file(journalPath).exists())) {
-    return [chalk.gray('(workflow journal not yet available)')];
-  }
 
-  // Use journal mtime as the history timestamp so historic events get a
-  // stable timestamp instead of "now" for every line. Falls back silently
-  // if stat fails for any reason.
+  // Single stat() handles both existence check and mtime read. ENOENT →
+  // friendly placeholder; any other error falls through with mtime=undefined
+  // (parser then stamps history events with "now", which is acceptable
+  // fallback behavior for the preview surface).
   let fileMtime: Date | undefined;
   try {
-    const st = await stat(journalPath);
-    fileMtime = st.mtime;
-  } catch {
+    fileMtime = (await stat(journalPath)).mtime;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [chalk.gray('(workflow journal not yet available)')];
+    }
     fileMtime = undefined;
   }
 

@@ -8,7 +8,11 @@ import {
 } from './core/multi-file-watcher.ts';
 import { SessionManager, type WatcherSession } from './core/session-manager.ts';
 import { DisplayController } from './interactive/display-controller.ts';
-import { installInteractiveKeyboard } from './interactive/keyboard.ts';
+import {
+  installInteractiveKeyboard,
+  uninstallInteractiveKeyboard,
+  registerInteractiveCleanup,
+} from './interactive/keyboard.ts';
 import type { Agent, LineParser } from './agents/agent.interface.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
@@ -141,8 +145,6 @@ async function summaryCommand(
   // so the JSONL summary path produces empty output. Detour to a journal-
   // based summary keyed off the snapshot path. Detect via filename shape so
   // we don't depend on SessionListItem-only fields on the SessionFile.
-  const { parseWorkflowSnapshotFilename } =
-    await import('./claude-workflow/paths.ts');
   if (parseWorkflowSnapshotFilename(basename(sessionFile.path))) {
     const { formatWorkflowSummary } =
       await import('./claude-workflow/summary.ts');
@@ -959,6 +961,10 @@ async function startClaudeWorkflowInteractiveWatch(
   }
   const { transcriptDir } = dirs;
 
+  // Register SIGINT early so Ctrl-C during init/await still runs cleanup
+  // (otherwise terminal scroll region / status line stays dirty on exit).
+  const { setCleanup } = registerInteractiveCleanup();
+
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
@@ -1020,13 +1026,9 @@ async function startClaudeWorkflowInteractiveWatch(
     // path. Other interactive watches follow the same sync-cleanup pattern.
     attachment.stop('user').catch(() => {});
     displayController.destroy();
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    uninstallInteractiveKeyboard();
   };
-
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
-  });
+  setCleanup(cleanup);
 
   installInteractiveKeyboard({
     onNext: () => sessionManager.switchNext(),
@@ -1262,10 +1264,22 @@ async function startClaudeInteractiveWatch(
 
   const lockedProjectDir = dirname(sessionFile.path);
 
+  // Register SIGINT early so Ctrl-C during the init/await window still
+  // runs cleanup (otherwise displayController scroll region stays dirty).
+  const { setCleanup } = registerInteractiveCleanup();
+
   // 建立 DisplayController
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+  });
+
+  // Stage-1 minimal cleanup — covers Ctrl-C during the init/await window
+  // before all deps (superFollow / multiWatcher / detector) are bound.
+  // Replaced below with the full cleanup once everything is ready.
+  setCleanup(() => {
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
   });
 
   let sessionManager!: SessionManager;
@@ -1379,16 +1393,6 @@ async function startClaudeInteractiveWatch(
     });
   };
 
-  // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
-  installInteractiveKeyboard({
-    onNext: () => sessionManager.switchNext(),
-    onPrev: () => sessionManager.switchPrev(),
-    onQuit: () => {
-      cleanup();
-      process.exit(0);
-    },
-  });
-
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, initialSubagent, true);
 
@@ -1448,18 +1452,23 @@ async function startClaudeInteractiveWatch(
     displayController.destroy();
     detector?.stop();
     log(options.quiet, chalk.gray('\nStopping...'));
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
+    uninstallInteractiveKeyboard();
     if (multiWatcher) {
       multiWatcher.stop();
     }
   };
+  setCleanup(cleanup);
 
-  // 處理中斷信號
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
+  // Keyboard listener — install AFTER sessionManager + cleanup are bound and
+  // initial buildInteractiveState completed, so an early keypress can't hit
+  // an undefined sessionManager or cleanup TDZ (would leave TTY in raw mode).
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
   });
 
   // 保持程式運行（interactive 模式必須是 follow）
@@ -1496,10 +1505,20 @@ async function startCodexInteractiveWatch(
     : null;
   const projectDir = projectInfo?.projectDir ?? dirname(sessionFile.path);
 
+  // Register SIGINT early so Ctrl-C during init/await still runs cleanup.
+  const { setCleanup } = registerInteractiveCleanup();
+
   // 建立 DisplayController
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+  });
+
+  // Stage-1 minimal cleanup — covers the init/await window. Full cleanup
+  // (incl. superFollow/multiWatcher) replaces this once deps are bound.
+  setCleanup(() => {
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
   });
 
   let sessionManager!: SessionManager;
@@ -1608,16 +1627,6 @@ async function startCodexInteractiveWatch(
     });
   };
 
-  // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
-  installInteractiveKeyboard({
-    onNext: () => sessionManager.switchNext(),
-    onPrev: () => sessionManager.switchPrev(),
-    onQuit: () => {
-      cleanup();
-      process.exit(0);
-    },
-  });
-
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, true);
 
@@ -1668,16 +1677,21 @@ async function startCodexInteractiveWatch(
     displayController.destroy();
     detector?.stop();
     log(options.quiet, chalk.gray('\nStopping...'));
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
+    uninstallInteractiveKeyboard();
     multiWatcher?.stop();
   };
+  setCleanup(cleanup);
 
-  // 處理中斷信號
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
+  // Keyboard listener — install AFTER sessionManager + cleanup are bound,
+  // so an early keypress can't hit an undefined sessionManager or cleanup
+  // TDZ (would leave TTY in raw mode).
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
   });
 
   // 保持程式運行（interactive 模式必須是 follow）
@@ -1982,9 +1996,20 @@ async function startCursorInteractiveWatch(
     ? await cursorAgent.finder.getProjectInfo(sessionFile.path)
     : null;
 
+  // Register SIGINT early so Ctrl-C during init/await still runs cleanup.
+  const { setCleanup } = registerInteractiveCleanup();
+
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+  });
+
+  // Stage-1 minimal cleanup — covers the init/await window. Full cleanup
+  // (incl. superFollow/multiWatcher/detector) replaces this once deps are
+  // bound.
+  setCleanup(() => {
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
   });
 
   let sessionManager!: SessionManager;
@@ -2082,16 +2107,6 @@ async function startCursorInteractiveWatch(
     });
   };
 
-  // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
-  installInteractiveKeyboard({
-    onNext: () => sessionManager.switchNext(),
-    onPrev: () => sessionManager.switchPrev(),
-    onQuit: () => {
-      cleanup();
-      process.exit(0);
-    },
-  });
-
   // ========== Session Switch (Super-Follow) ==========
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
     detector?.stop();
@@ -2137,13 +2152,21 @@ async function startCursorInteractiveWatch(
     superFollow.stop();
     displayController.destroy();
     detector?.stop();
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    uninstallInteractiveKeyboard();
     multiWatcher?.stop();
   };
+  setCleanup(cleanup);
 
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
+  // Keyboard listener — install AFTER sessionManager + cleanup are bound,
+  // so an early keypress can't hit an undefined sessionManager or cleanup
+  // TDZ (would leave TTY in raw mode).
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
   });
 
   superFollow.start();

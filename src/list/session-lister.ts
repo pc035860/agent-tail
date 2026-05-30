@@ -77,6 +77,16 @@ function hiddenFullId(item: SessionListItem): string {
 }
 
 /**
+ * Strip tab / newline / carriage return from a visible column. Output is
+ * tab-delimited (SPEC §11.4) and consumed by fzf — a stray `\t` inside
+ * customTitle or project would push the hidden id out of col 6, breaking
+ * preview / ctrl-y / Enter routing. `\n` / `\r` would split rows.
+ */
+function sanitizeColumn(s: string): string {
+  return s.replace(/[\t\n\r]/g, ' ');
+}
+
+/**
  * Format a list of sessions as tab-separated lines per SPEC §11.3 / §11.4.
  *
  * Columns (tab-separated):
@@ -100,12 +110,15 @@ export function formatSessionList(
         : colorChalk.cyan(typeRaw)
       : typeRaw;
 
+    // Visible columns are sanitized: user-controlled customTitle and
+    // path-derived project may contain tab / newline, which would corrupt
+    // the 6-col tab-delimited contract consumed by fzf.
     const columns = [
       typeStr,
-      item.shortId,
+      sanitizeColumn(item.shortId),
       formatRelativeTime(item.lastActivityTime ?? item.mtime),
-      item.customTitle ?? '(no custom title)',
-      formatNotes(item),
+      sanitizeColumn(item.customTitle ?? '(no custom title)'),
+      sanitizeColumn(formatNotes(item)),
       hiddenFullId(item),
     ];
 
