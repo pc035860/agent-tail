@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "eb918b606057",
+  "strategy": "manual-commit",
+  "branch": "feat/workflow-support",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/claude-workflow/watch-builder.ts",
+    "src/claude-workflow/workflow-detector.ts",
+    "src/core/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/918b606057/0/metadata.json",
+      "transcript": "/eb/918b606057/0/full.jsonl",
+      "content_hash": "/eb/918b606057/0/content_hash.txt",
+      "prompt": "/eb/918b606057/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11233,
+    "cache_creation_tokens": 3082298,
+    "cache_read_tokens": 118448814,
+    "output_tokens": 284208,
+    "api_call_count": 325
+  }
+}

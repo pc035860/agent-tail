@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "eb918b606057",
+  "session_id": "a4125c98-2d39-4722-ae76-ed157651ee39",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-30T11:08:58.412363Z",
+  "branch": "feat/workflow-support",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/claude-workflow/watch-builder.ts",
+    "src/claude-workflow/workflow-detector.ts",
+    "src/core/types.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "9f70d16c6f86",
+  "token_usage": {
+    "input_tokens": 11233,
+    "cache_creation_tokens": 3082298,
+    "cache_read_tokens": 118448814,
+    "output_tokens": 284208,
+    "api_call_count": 325
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-30T11:08:57.399095Z",
+    "agent_lines": 0,
+    "human_added": 434,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 434,
+    "agent_percentage": 0
+  }
+}
