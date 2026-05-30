@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   cwdToClaudeProjectFilter,
+  deriveWorkflowDirs,
   getClaudeProjectsRoot,
   getWorkflowAgentPath,
   getWorkflowJournalPath,
@@ -10,6 +11,7 @@ import {
   getWorkflowsDir,
   isValidWorkflowAgentId,
   isValidWorkflowRunId,
+  makeWorkflowJournalSessionId,
   parseWorkflowAgentFilename,
   parseWorkflowSnapshotFilename,
 } from '../../src/claude-workflow/paths.ts';
@@ -220,5 +222,39 @@ describe('paths — parseWorkflowAgentFilename', () => {
     expect(
       parseWorkflowAgentFilename('agent-01234567890abcdef.json')
     ).toBeNull();
+  });
+});
+
+describe('paths — deriveWorkflowDirs', () => {
+  const RUN_ID = 'wf_12345678-abc';
+
+  test('extracts sessionDir + transcriptDir from canonical path', () => {
+    const path = `/home/x/.claude/projects/-x/abc/workflows/${RUN_ID}.json`;
+    expect(deriveWorkflowDirs(path, RUN_ID)).toEqual({
+      sessionDir: '/home/x/.claude/projects/-x/abc',
+      transcriptDir: `/home/x/.claude/projects/-x/abc/subagents/workflows/${RUN_ID}`,
+    });
+  });
+
+  test('uses LAST `workflows` segment (defensive against project names)', () => {
+    const path = `/home/u/workflows/.claude/projects/-x/abc/workflows/${RUN_ID}.json`;
+    expect(deriveWorkflowDirs(path, RUN_ID)).toEqual({
+      sessionDir: '/home/u/workflows/.claude/projects/-x/abc',
+      transcriptDir: `/home/u/workflows/.claude/projects/-x/abc/subagents/workflows/${RUN_ID}`,
+    });
+  });
+
+  test('returns null when path has no workflows segment', () => {
+    expect(
+      deriveWorkflowDirs('/tmp/not-a-claude-path.json', RUN_ID)
+    ).toBeNull();
+  });
+});
+
+describe('paths — makeWorkflowJournalSessionId', () => {
+  test('returns wf:{runId}:journal (no brackets)', () => {
+    expect(makeWorkflowJournalSessionId('wf_12345678-abc')).toBe(
+      'wf:wf_12345678-abc:journal'
+    );
   });
 });

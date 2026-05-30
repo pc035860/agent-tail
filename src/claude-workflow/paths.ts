@@ -91,7 +91,10 @@ export function deriveWorkflowDirs(
   runId: string
 ): { sessionDir: string; transcriptDir: string } | null {
   const parts = snapshotPath.split('/');
-  const wfIdx = parts.indexOf('workflows');
+  // Use the LAST `workflows` segment — defensive against a user whose
+  // home or project name happens to contain `workflows`. The relevant
+  // segment is always the rightmost one (parent of the snapshot file).
+  const wfIdx = parts.lastIndexOf('workflows');
   if (wfIdx < 0) return null;
   const sessionDir = parts.slice(0, wfIdx).join('/');
   return {
