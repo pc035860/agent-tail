@@ -1506,3 +1506,81 @@ None blocking. Two minor curiosities I'd resolve in implementation, not in plan 
 - `/Users/pc035860/code/agent-tail/src/cli/parser.ts:72-97, 372-376` (P3 `workflowAttach` wiring — verified consistent)</result>
 <usage><total_tokens>105306</total_tokens><tool_uses>19</tool_uses><duration_ms>163294</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a299b147bfc8d431d</task-id>
+<tool-use-id>toolu_01Vhqq3SRGGin8dqx2KufvhW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a299b147bfc8d431d.output</output-file>
+<status>completed</status>
+<summary>Agent "TDD audit P1-P7 tests" completed</summary>
+<result>Now I have enough data. Let me consolidate the audit.
+
+---
+
+## Verdict
+**PASS_WITH_ISSUES**
+
+164/164 tests green. Suite is high quality overall — clear fixtures, real I/O over mocks, FIRST‑principled, anti‑patterns avoided. Two structural concerns merit attention; neither blocks the merge.
+
+## Blocking Issues (must fix)
+None.
+
+## Warnings (should fix)
+
+- **[Fragile Test — private field write through `as unknown as` cast]**
+  - File: `/Users/pc035860/code/agent-tail/tests/agents/claude/workflow-merge.test.ts:17` (`makeFinder` helper)
+  - Evidence: `(finder as unknown as { baseDir: string }).baseDir = baseDir;` patches a private field. The production code's lazy getter has been retrofitted (`workflowFinder` re‑creates when `getBaseDir() !== this.baseDir`) specifically because the test does this. A separate comment block (`workflow-merge.test.ts:9‑13`) reinforces that the ordering of mutate vs. invoke matters.
+  - Rationale: This is the textbook **Test‑Logic‑in‑Production** signal — production code now has a runtime check whose only justification is test ergonomics. If `WorkflowSessionFinder` is later cached differently, this test silently keeps reading the home directory.
+  - Fix: Add a constructor option `new ClaudeAgent({ verbose: false, baseDir: tempDir })` (or a factory) so tests inject via the public surface. Remove the lazy re‑binding guard in `ClaudeSessionFinder.workflowFinder` once tests are migrated.
+
+- **[Weak Assertion — color test relies on string inequality]**
+  - File: `/Users/pc035860/code/agent-tail/tests/claude-workflow/workflow-attachment-snapshot.test.ts:399‑442` (`status line color: completed→green, failed→red, running→gray`)
+  - Evidence: Asserts `running.formatted !== completed.formatted` rather than checking ANSI codes (`\u001b[32m` for green, `\u001b[31m` for red, `\u001b[90m` for gray). The strings differ even if all three colors were green, because each contains its own status word.
+  - Fix: Match on the actual ANSI escape sequences (e.g., `expect(completed.formatted).toContain('\u001b[32m')`); or use `chalk.green('completed')` as the expected substring source‑of‑truth.
+
+- **[Test Smell — rollback test allows pass on no‑op]**
+  - File: `/Users/pc035860/code/agent-tail/tests/claude-workflow/workflow-attachment.test.ts:330‑376` (`attachAgent rollback on failure clears all state`)
+  - Evidence: The first assertion is `expect(handler.debugMsgs.some(...) || threw === false).toBe(true)` — this passes when the attempt silently succeeded **and** rollback never fired. The test then proves a second call works, but if the production code stopped throwing entirely on a missing file, the test would still be green while the rollback path went dead.
+  - Fix: Force the failure (e.g., create the file as an unreadable directory with `mkdir`, or stub the underlying `FileWatcher.start` to reject), assert `threw === true`, then assert successful re‑attach. Drop the `|| threw === false` escape hatch.
+
+- **[Magic Constant — snapshot debounce slack mirrored, not derived]**
+  - File: `/Users/pc035860/code/agent-tail/tests/claude-workflow/workflow-attachment-snapshot.test.ts:14` (`const SNAPSHOT_DEBOUNCE_WAIT_MS = 50 * 3 + 50;`)
+  - Evidence: Hardcoded `50` repeats the SPEC §8.2 default. If `DEFAULT_DEBOUNCE_MS` in `src/claude-workflow/snapshot-watcher.ts:9` is tuned, this test silently under‑waits and flakes on CI.
+  - Fix: Either import `DEFAULT_DEBOUNCE_MS` or have `WorkflowAttachment` accept a `snapshotDebounceMs` override and have tests pass a small explicit value (mirroring the `snapshot-watcher.test.ts` `DEBOUNCE_MS = 10` pattern).
+
+- **[Fragile Test — fixed‑sleep flake risk on directory watch]**
+  - Files: `/Users/pc035860/code/agent-tail/tests/claude-workflow/workflow-detector.test.ts:75, 105, 126, 152, 201` (`waitMs(500)`, `waitMs(400)`, `waitMs(600)`)
+  - Evidence: `fs.watch` debounce intervals + `setTimeout` slack rather than event waits. Test file's own comments acknowledge the flake. Currently passes, but slow CI workers (e.g., GitHub Actions ARM) can miss a 100ms retry budget.
+  - Fix (low priority): Expose a promise from `WorkflowDetector` (`whenRunIdEmitted(runId)`) so tests can `await` deterministic events. Failing that, raise the slack by 3× as the snapshot test already does.
+
+## Design Signals
+- `ClaudeSessionFinder.workflowFinder` lazy re‑rebinding (see Warning #1) is a **testability‑driven mutation** of production code. Acceptable as a stop‑gap, but it's a code smell — DI through the constructor would let the production path stay clean.
+- `WorkflowAttachment` is invoked directly in unit/integration tests, bypassing `startClaudeWorkflowMultiWatch` dispatcher. The integration test in `tests/integration/workflow-multi-watch.test.ts:14‑16` openly notes it "skips the dispatcher (which would touch process.exit)". That's the right call — but it means **no automated test exercises `startClaudeWorkflowMultiWatch` itself**, leaving the wire‑up between CLI flags and `WorkflowAttachment` covered only by manual verification (SPEC §17.2). Consider injecting an `exitFn` callback to make the dispatcher testable end‑to‑end.
+
+## Test Suite Health
+- **Coverage of T1‑T20 acceptance criteria** — partial:
+  - Automated: T1, T2, T2b (via `workflow-merge` + `workflow-agent`), T4‑T7 (workflow‑attachment + integration), T8 + T19 (snapshot status events / invalid JSON), T16 (workflow‑detector‑path‑a), T17 (subagent‑detector‑workflows), T18 (journal‑tolerance), T20 (snapshot ENOENT), T12/T13 (display‑controller‑workflow), T14/T15 (pane‑manager‑pin).
+  - **Not automated (gap)**: **T3** (`--workflow wf_DOES_NOT_EXIST` exits 1, no watcher left), **T3b** (`--workflow` no runId in cwd → exit 1 + hint), **T8b** (auto‑exit message in non‑interactive path — exit‑code semantics not asserted), **T9** (early detection 0.5s budget — only the parser plumbing is unit‑tested via `claude-workflow-parser` + `workflow-detector-path-a`; the end‑to‑end timing is unverified), **T9b** (`--no-workflow-attach` only verified at the parser layer; no test confirms the dispatcher actually skips attach), **T10** (workflow inner subagent dynamic attach — the *inner dir‑watch attaching subagents* is covered by `workflow-attachment.test.ts:132`, but only for agent transcripts created post‑start), **T10b** (parallel workflows in same cwd — *unverified*), **T11** (Tab toggles workflow journal ↔ subagents in interactive — DisplayController is tested but SessionManager wiring isn't), **T15b** (`--workflow-pane + -i` exits 1 *is* covered at `tests/cli/parser.test.ts:790`; partial credit).
+- **Speed**: fast for pure helpers (paths, types, parser, pane‑pin); medium for fs/`fs.watch` tests (~7s wall). No real network/DB.
+- **Independence**: solid. `_fixtures.ts` produces a fresh `mkdtemp` per call; every snapshot/attachment test has `afterEach` `rm`. No `beforeAll` shared state. `SnapshotWatcher` test's `let watcher` pattern is correctly nulled in `afterEach`.
+- **AAA structure**: clear in nearly every test. Multi‑assertion tests (e.g., `workflow-detector-path-a.test.ts:53`) assert a single concept (event payload shape) — acceptable. The color test (warning #2 above) is the only one that mixes "three statuses produce distinct output" into one block; consider splitting.
+- **FIRST**: Fast ✓, Independent ✓, Repeatable ✓ (no `Math.random`, no `Date.now()` in assertions except the `futureTimestamp` hero‑case which is explicitly self‑documenting), Self‑validating ✓, Timely ✓ (TDD RED→GREEN per phase).
+
+## Recommendations
+Ordered by impact:
+
+1. **Replace the `baseDir` field‑poke with constructor injection** (Warning #1). Single highest‑leverage change — removes the only production code branch that exists solely for tests, and unlocks deletion of the `workflowFinder` lazy re‑bind.
+2. **Add the four missing acceptance‑criteria tests** for **T3**, **T3b**, **T9b** (dispatcher‑level), and **T10b** (parallel workflows in one cwd). These are user‑facing contracts in SPEC §14 that currently rely on manual verification.
+3. **Strengthen the color assertion** (Warning #2) to match real ANSI codes — the current test is a near‑tautology.
+4. **Tighten the rollback test** (Warning #3) so it can no longer pass on a no‑op.
+5. **Share `DEFAULT_DEBOUNCE_MS`** between production and tests (Warning #4) — small refactor, eliminates CI flake class.
+6. **Make `startClaudeWorkflowMultiWatch` testable** by injecting `exitFn` so the wire‑up between `parseArgs` and `WorkflowAttachment.stop('completed')` (T8b exit‑code path) can be asserted end‑to‑end.
+
+Files most worth re‑reading when acting on the above:
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts` (lines 37‑90)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/watch-builder.ts` (auto‑exit + ENOENT path at lines 314, 331)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/snapshot-watcher.ts:9` (`DEFAULT_DEBOUNCE_MS`)</result>
+<usage><total_tokens>103092</total_tokens><tool_uses>37</tool_uses><duration_ms>161659</duration_ms></usage>
+</task-notification>
