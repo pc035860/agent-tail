@@ -6,7 +6,7 @@ import type { WorkflowSnapshot } from './types.ts';
 // Not a LineParser. Does not reuse FileWatcher because snapshot is replace,
 // not append. fs.watch + debounce + raw-text dedup.
 
-const DEFAULT_DEBOUNCE_MS = 50;
+export const DEFAULT_DEBOUNCE_MS = 50;
 
 export interface SnapshotWatcherConfig {
   path: string;

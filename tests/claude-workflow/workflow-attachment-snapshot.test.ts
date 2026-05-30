@@ -1,6 +1,8 @@
 import { describe, test, expect, afterEach } from 'bun:test';
 import { rm, writeFile, unlink } from 'node:fs/promises';
+import chalk from 'chalk';
 import { WorkflowAttachment } from '../../src/claude-workflow/watch-builder';
+import { DEFAULT_DEBOUNCE_MS } from '../../src/claude-workflow/snapshot-watcher';
 import {
   RUN_ID,
   type Fixture,
@@ -11,7 +13,9 @@ import {
   waitMs,
 } from './_fixtures';
 
-const SNAPSHOT_DEBOUNCE_WAIT_MS = 50 * 3 + 50;
+// Slack relative to the production default, so a future tweak to the
+// debounce constant doesn't silently under-wait.
+const SNAPSHOT_DEBOUNCE_WAIT_MS = DEFAULT_DEBOUNCE_MS * 3 + 50;
 
 function snapshotJson(
   status: 'running' | 'completed' | 'failed',
@@ -425,8 +429,6 @@ describe('WorkflowAttachment — snapshot integration', () => {
     }
 
     const statusLines = lines.filter((l) => l.formatted.includes('[snapshot]'));
-    // ANSI escape sequences differ by color. We just assert each status line
-    // has SOME color code attached (chalk applies them by default).
     const running = statusLines.find((l) => l.formatted.includes('running'))!;
     const completed = statusLines.find((l) =>
       l.formatted.includes('completed')
@@ -435,10 +437,12 @@ describe('WorkflowAttachment — snapshot integration', () => {
     expect(running).toBeDefined();
     expect(completed).toBeDefined();
     expect(failed).toBeDefined();
-    // The colors are distinct — formatted strings should differ in the ANSI
-    // prefix even when stripped of message bodies.
-    expect(running.formatted).not.toBe(completed.formatted);
-    expect(completed.formatted).not.toBe(failed.formatted);
+    // Assert actual ANSI escape sequences applied per status (gray=90,
+    // green=32, red=31). This catches the case where any status silently
+    // gets the wrong color.
+    expect(running.formatted).toContain(chalk.gray('status=running')); // gray
+    expect(completed.formatted).toContain(chalk.green('status=completed')); // green
+    expect(failed.formatted).toContain(chalk.red('status=failed')); // red
   });
 });
 

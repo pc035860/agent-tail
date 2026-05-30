@@ -347,7 +347,8 @@ describe('WorkflowAttachment', () => {
     });
     await attachment.start();
 
-    // Attach a non-existent transcript file → start() should fail and rollback
+    // Attach a non-existent transcript file → start() must throw and
+    // trigger the rollback path (debug log).
     let threw = false;
     try {
       await attachment.attachAgent(
@@ -357,10 +358,9 @@ describe('WorkflowAttachment', () => {
     } catch {
       threw = true;
     }
-    // Either resolved or threw — what matters is rollback ran (debug message)
+    expect(threw).toBe(true);
     expect(
-      handler.debugMsgs.some((m) => m.includes(AGENT_ID_1.slice(0, 7))) ||
-        threw === false
+      handler.debugMsgs.some((m) => m.includes(AGENT_ID_1.slice(0, 7)))
     ).toBe(true);
 
     // After rollback, attempting again should succeed (state was cleaned)
