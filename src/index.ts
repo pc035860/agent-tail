@@ -982,6 +982,34 @@ async function startClaudeWorkflowMultiWatch(
 
   const outputHandler = new ConsoleOutputHandler();
 
+  // P7 — --workflow-pane: open tmux pane for journal (pinned) + subagents
+  let paneManager: PaneManager | null = null;
+  if (options.workflowPane) {
+    const controller = createTerminalController();
+    if (controller.isAvailable()) {
+      paneManager = new PaneManager(
+        controller,
+        (agentId, _path) => {
+          const runtime = `"${process.argv[0]}"`;
+          const script = `"${process.argv[1]}"`;
+          return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
+        },
+        (msg) => log(options.quiet, chalk.gray(msg))
+      );
+      const journalKey = `wf:${runId}:journal`;
+      await paneManager.openPane(
+        journalKey,
+        `${transcriptDir}/journal.jsonl`,
+        `wf:${runId}`
+      );
+      paneManager.pinAgent(journalKey);
+    } else {
+      console.warn(
+        chalk.yellow('Warning: --workflow-pane requires tmux; ignoring flag')
+      );
+    }
+  }
+
   const attachment = new WorkflowAttachment({
     workflow: { runId, transcriptDir, snapshotPath },
     withAgents: options.withWorkflowAgents !== false,
@@ -992,6 +1020,21 @@ async function startClaudeWorkflowMultiWatch(
     formatter,
     onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
     outputHandler,
+    sessionHandler: paneManager
+      ? {
+          addSession: (agentId, _label, path) => {
+            void paneManager?.openPaneEvictIfNeeded(
+              agentId,
+              path,
+              `wf:${agentId.slice(0, 7)}`
+            );
+          },
+          markSessionDone: (agentId) => {
+            void paneManager?.closePaneByAgentId(agentId);
+          },
+          updateUI: () => {},
+        }
+      : undefined,
   });
 
   log(options.quiet, chalk.cyan(`[wf:${runId}] starting workflow watch`));
@@ -999,7 +1042,10 @@ async function startClaudeWorkflowMultiWatch(
 
   // TODO(P6): coordinate SIGINT with interactive shutdown path
   process.once('SIGINT', () => {
-    void attachment.stop('user').then(() => process.exit(0));
+    void attachment.stop('user').then(async () => {
+      await paneManager?.closeAll();
+      process.exit(0);
+    });
   });
 
   // Skip the "Watching workflow..." log when the initial snapshot already
