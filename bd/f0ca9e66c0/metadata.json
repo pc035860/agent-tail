@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "bdf0ca9e66c0",
+  "strategy": "manual-commit",
+  "branch": "feat/workflow-support",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "CLAUDE.md",
+    "src/claude-workflow/summary.ts",
+    "src/index.ts",
+    "src/interactive/keyboard.ts",
+    "src/list/session-lister.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/f0ca9e66c0/0/metadata.json",
+      "transcript": "/bd/f0ca9e66c0/0/full.jsonl",
+      "content_hash": "/bd/f0ca9e66c0/0/content_hash.txt",
+      "prompt": "/bd/f0ca9e66c0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 700,
+    "cache_creation_tokens": 513513,
+    "cache_read_tokens": 43019193,
+    "output_tokens": 78904,
+    "api_call_count": 104
+  }
+}
