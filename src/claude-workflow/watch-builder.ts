@@ -11,9 +11,15 @@ import type { Formatter } from '../formatters/formatter.interface.ts';
 import { ClaudeAgent } from '../agents/claude/claude-agent.ts';
 import type { LineParser } from '../agents/agent.interface.ts';
 import { drainParser } from '../utils/parser-drain.ts';
+import chalk from 'chalk';
 import { JournalLineParser } from './journal-parser.ts';
+import { SnapshotWatcher } from './snapshot-watcher.ts';
 import { parseWorkflowAgentFilename, isValidWorkflowAgentId } from './paths.ts';
-import type { DetectedWorkflow, WorkflowSnapshot } from './types.ts';
+import type {
+  DetectedWorkflow,
+  WorkflowProgressItem,
+  WorkflowSnapshot,
+} from './types.ts';
 
 // SPEC §10.2 — WorkflowAttachment manages the lifecycle of a single
 // workflow run's watchers (journal + agent transcripts + subagent dir).
@@ -49,14 +55,16 @@ export class WorkflowAttachment {
   private readonly agentWatchers = new Map<string, FileWatcher>();
   private readonly agentParsers = new Map<string, LineParser>();
   private subagentDirWatcher: FSWatcher | null = null;
+  private snapshotWatcher: SnapshotWatcher | null = null;
+  private currentSnapshot: WorkflowSnapshot | null = null;
+  private stopRequestReason: 'completed' | 'failed' | null = null;
   private readonly knownAgentIds = new Set<string>();
   private stopped = false;
 
   constructor(private readonly config: WorkflowAttachmentConfig) {}
 
-  /** P4 stub — returns null. Real impl reads currentSnapshot field. */
   getCurrentSnapshot(): WorkflowSnapshot | null {
-    return null;
+    return this.currentSnapshot;
   }
 
   async start(): Promise<void> {
@@ -71,10 +79,20 @@ export class WorkflowAttachment {
       this._startSubagentDirWatch();
     }
 
-    // Step 4 — snapshot watcher: P4 scope (not wired here)
+    // Step 4 — snapshot watcher (LAST, so onChange-triggered stop runs after
+    // history dump completes — see _startJournalAndFlushHistory note).
+    this.snapshotWatcher = new SnapshotWatcher({
+      path: this.config.workflow.snapshotPath,
+      onChange: (snap) => this._handleSnapshotChange(snap),
+      onError: (err) => this._handleSnapshotError(err),
+    });
+    await this.snapshotWatcher.start();
   }
 
   async attachAgent(agentId: string, transcriptPath: string): Promise<void> {
+    // Post-stop subagent-dir-watch events must not spawn new watchers
+    // during the queueMicrotask gap between scheduling and executing stop().
+    if (this.stopped) return;
     if (this.knownAgentIds.has(agentId)) return;
     this.knownAgentIds.add(agentId);
 
@@ -117,6 +135,10 @@ export class WorkflowAttachment {
   ): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+
+    // Close snapshot watcher first to silence further onChange firings.
+    this.snapshotWatcher?.stop();
+    this.snapshotWatcher = null;
 
     this.subagentDirWatcher?.close();
     this.subagentDirWatcher = null;
@@ -263,5 +285,64 @@ export class WorkflowAttachment {
         `[wf:${this.config.workflow.runId}] subagent dir watch failed: ${err}`
       );
     }
+  }
+
+  private _handleSnapshotChange(snap: WorkflowSnapshot): void {
+    if (this.stopped) return;
+
+    this.currentSnapshot = snap;
+
+    const label = makeWorkflowJournalLabel(this.config.workflow.runId);
+    const phaseInfo = this._phaseProgress(snap);
+    const body = `[snapshot] status=${snap.status}${phaseInfo ? ` ${phaseInfo}` : ''}`;
+    const color =
+      snap.status === 'failed'
+        ? chalk.red
+        : snap.status === 'completed'
+          ? chalk.green
+          : chalk.gray;
+    this.config.onOutput(color(body), label);
+
+    // Q6 / T8b — auto-exit on completed/failed (one-shot latch).
+    // stop() reason union is 'completed' | 'directory-removed' | 'user'.
+    // The actual 'failed' status is conveyed via the colored event line above;
+    // we stop with reason 'completed' (semantically: "workflow finished").
+    if (snap.status === 'completed' || snap.status === 'failed') {
+      if (!this.stopRequestReason) {
+        this.stopRequestReason = snap.status;
+        queueMicrotask(() => {
+          void this.stop('completed');
+        });
+      }
+    }
+  }
+
+  private _handleSnapshotError(err: Error): void {
+    if (this.stopped) return;
+
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      // T20 — snapshot file removed. stop('directory-removed') will emit
+      // an info line; no extra warn here to avoid duplication.
+      queueMicrotask(() => void this.stop('directory-removed'));
+      return;
+    }
+
+    // Invalid JSON / transient read failure (T19) — log and continue.
+    this.config.outputHandler.debug(
+      `[wf:${this.config.workflow.runId}] snapshot error: ${err.message}`
+    );
+  }
+
+  private _phaseProgress(snap: WorkflowSnapshot): string {
+    const progress = snap.workflowProgress ?? [];
+    const phaseEvents = progress.filter(
+      (p): p is Extract<WorkflowProgressItem, { type: 'workflow_phase' }> =>
+        p.type === 'workflow_phase'
+    );
+    const currentPhase = phaseEvents.at(-1);
+    if (!currentPhase) return '';
+    const total = snap.phases?.length ? snap.phases.length : '?';
+    return `(phase ${currentPhase.index}/${total}: ${currentPhase.title})`;
   }
 }

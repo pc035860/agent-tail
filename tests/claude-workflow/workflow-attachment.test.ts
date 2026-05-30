@@ -61,7 +61,11 @@ describe('WorkflowAttachment', () => {
     await attachment.start();
 
     const journalLabel = makeWorkflowJournalLabel(RUN_ID);
-    const journalLines = lines.filter((l) => l.label === journalLabel);
+    // Filter out snapshot status event lines (P4 emits these under the
+    // journal label too); we want only the JournalLineParser-emitted lines.
+    const journalLines = lines.filter(
+      (l) => l.label === journalLabel && !l.formatted.includes('[snapshot]')
+    );
     expect(journalLines.length).toBe(2);
   });
 

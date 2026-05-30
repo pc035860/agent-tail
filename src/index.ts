@@ -823,7 +823,15 @@ async function startClaudeWorkflowMultiWatch(
     void attachment.stop('user').then(() => process.exit(0));
   });
 
-  log(options.quiet, chalk.gray('Watching workflow... (Ctrl+C to stop)'));
+  // Skip the "Watching workflow..." log when the initial snapshot already
+  // shows terminal status — the auto-exit is queued via microtask and the
+  // process will end before a real watch begins.
+  const initialStatus = attachment.getCurrentSnapshot()?.status;
+  const isTerminal =
+    initialStatus === 'completed' || initialStatus === 'failed';
+  if (!isTerminal) {
+    log(options.quiet, chalk.gray('Watching workflow... (Ctrl+C to stop)'));
+  }
 }
 
 /**
