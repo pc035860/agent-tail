@@ -43,6 +43,16 @@ agent-tail claude -a               # show all content (verbose + subagents + aut
 agent-tail claude --all            # same as -a
 agent-tail claude --pane           # auto-open tmux pane for each new subagent
 
+# Claude Workflow mode (Phases P1-P7 complete)
+agent-tail claude --workflow                 # tail latest workflow in current cwd
+agent-tail claude --workflow wf_<runId>      # tail specific workflow by runId
+agent-tail claude wf_<runId>                 # positional shortcut (ClaudeSessionFinder
+                                             # dispatches wf_* IDs to WorkflowSessionFinder)
+agent-tail claude --workflow wf_x -i         # interactive: journal + each agent as Tab
+agent-tail claude --workflow wf_x --workflow-pane  # tmux pane per source (journal pinned)
+agent-tail claude --no-with-workflow-agents  # skip workflow subagent transcripts
+agent-tail claude --no-workflow-attach       # disable workflow auto-attach in main session
+
 # Codex-specific options (Phase 2/3 complete)
 agent-tail codex --subagent <uuid> # tail specific Codex subagent by UUID
 agent-tail codex --with-subagents  # include subagent content in output
@@ -240,6 +250,8 @@ src/
 - **`Bun.spawn` pipe chaining breaks fzf TTY**: Piping `listProc.stdout` directly to fzf's `stdin` via `Bun.spawn` prevents fzf from accessing `/dev/tty` for keyboard input (arrow keys show `^[[A`). Use `sh -c "cmd | fzf ..."` instead — the shell handles pipe setup while fzf gets proper TTY access. See `buildShellCommand()` in `src/pick/fzf-helpers.ts`.
 - **`drainParser` helper centralizes drain loops**: `src/utils/parser-drain.ts` exposes `drainParser(parser, line, onEach, { drainArg? })` with a 100-iteration guard. Used by `summary.ts:parseAndFormat` (passes `drainArg: ''` so stateless parsers like Codex/Gemini return null immediately instead of re-emitting up to the guard) and 4 cursor callsites in `src/index.ts` (default `drainArg: line`; cursor's `lastProcessedLine` dedup makes that safe). Rule: if a callsite might receive a stateless parser, pass `drainArg: ''`; otherwise the default is fine.
 - **PaneManager logging belongs inside PaneManager, not in callbacks**: `onSubagentEnter` fires on every `agent_progress` event (repeatedly). Logging pane state in the callback causes duplicate messages. Instead, pass `logger` to `PaneManager` constructor; `openPane()` and `closePaneByAgentId()` log only when actually acting (after dedup checks). `openPane()` also re-throws errors so callers can surface `Failed to open pane` warnings.
+- **Workflow path helpers** (`src/claude-workflow/paths.ts`): `deriveWorkflowDirs(snapshotPath, runId)` extracts `{ sessionDir, transcriptDir }` from a `wf_*.json` snapshot path; used by both `startClaudeWorkflowMultiWatch` and `startClaudeWorkflowInteractiveWatch` in `src/index.ts`. Uses `lastIndexOf('workflows')` (not `indexOf`) — defensive against project paths that happen to contain the literal segment `workflows`. `makeWorkflowJournalSessionId(runId)` returns the bracketless session-id form `wf:{runId}:journal` shared by the interactive dispatcher, PaneManager pinned key, and `WorkflowAttachment.stop`'s `markSessionDone` — string consistency across all 3 sites is required for correct teardown.
+- **Workflow `--workflow-pane` command**: workflow agents live in nested `{enc-cwd}/{UUID}/subagents/workflows/wf_*/agent-*.jsonl` paths. `ClaudeSessionFinder.findSubagent`'s `**/*/subagents/agent-*.jsonl` glob does NOT match nested workflow paths — so the pane command must use `tail -F "<path>"` directly (with shell-escaped single quotes) rather than `agent-tail claude --subagent <id>`. See `startClaudeWorkflowMultiWatch` in `src/index.ts`.
 
 ## Code Quality
 
