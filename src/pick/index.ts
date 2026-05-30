@@ -120,11 +120,14 @@ async function main(): Promise<void> {
   if (fzfExitCode !== 0) process.exit(fzfExitCode);
 
   const output = await new Response(fzfProc.stdout).text();
-  const shortId = parseSelection(output);
-  if (!shortId) process.exit(0);
+  // parseSelection returns col 6 (HIDDEN_FULL_ID) per SPEC §11.4:
+  //   - main session → full UUID (agent-tail partial-matches by prefix)
+  //   - workflow     → full runId `wf_*` (routed via findBySessionId)
+  const sessionId = parseSelection(output);
+  if (!sessionId) process.exit(0);
 
   const tailProc = Bun.spawn(
-    [agentTailPath, agentType, shortId, ...passthroughArgs],
+    [agentTailPath, agentType, sessionId, ...passthroughArgs],
     {
       stdio: ['inherit', 'inherit', 'inherit'],
     }
