@@ -39,6 +39,8 @@ export interface WorkflowAttachmentConfig {
   onOutput: (formatted: string, label: string) => void;
   outputHandler: OutputHandler;
   sessionHandler?: SessionHandler;
+  /** P5 — called at the end of stop() so dispatcher can drop refs / unregister. */
+  onStop?: (reason: 'completed' | 'directory-removed' | 'user') => void;
 }
 
 export function makeWorkflowJournalLabel(runId: string): string {

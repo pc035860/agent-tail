@@ -127,12 +127,14 @@ export interface ParsedLine {
   workflowAgentId?: string;
   /** Main session 中遇到 tool_use.name='Workflow'（ClaudeLineParser 偵測，P5） */
   isWorkflowToolUse?: boolean;
-  /** tool_result.toolUseResult.status='async_launched' 的 payload（P5） */
+  /** tool_result.toolUseResult.status='async_launched' 的 payload（P5）
+   *  runId + transcriptDir 必填；scriptPath/summary/taskId 為 decoration，
+   *  缺值容錯（CI-2 resilience against future Claude Code payload changes）。 */
   workflowAsyncLaunch?: {
     runId: string;
     transcriptDir: string;
-    scriptPath: string;
-    summary: string;
-    taskId: string;
+    scriptPath?: string;
+    summary?: string;
+    taskId?: string;
   };
 }

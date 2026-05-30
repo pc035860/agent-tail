@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs';
 import type { OutputHandler } from '../core/detector-interfaces.ts';
+import type { ParsedLine } from '../core/types.ts';
 import {
   getWorkflowsDir,
   getWorkflowSubagentsDir,
@@ -68,6 +69,11 @@ export class WorkflowDetector {
    */
   prefillKnown(runId: string): void {
     this.knownRunIds.add(runId);
+  }
+
+  /** P5 stub — RED tests assert real behavior; implementation lands in GREEN. */
+  handleMainLine(_parsed: ParsedLine): void {
+    // stub
   }
 
   stop(): void {
