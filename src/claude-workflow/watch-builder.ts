@@ -13,7 +13,7 @@ import type { LineParser } from '../agents/agent.interface.ts';
 import { drainParser } from '../utils/parser-drain.ts';
 import { JournalLineParser } from './journal-parser.ts';
 import { parseWorkflowAgentFilename, isValidWorkflowAgentId } from './paths.ts';
-import type { DetectedWorkflow } from './types.ts';
+import type { DetectedWorkflow, WorkflowSnapshot } from './types.ts';
 
 // SPEC §10.2 — WorkflowAttachment manages the lifecycle of a single
 // workflow run's watchers (journal + agent transcripts + subagent dir).
@@ -53,6 +53,11 @@ export class WorkflowAttachment {
   private stopped = false;
 
   constructor(private readonly config: WorkflowAttachmentConfig) {}
+
+  /** P4 stub — returns null. Real impl reads currentSnapshot field. */
+  getCurrentSnapshot(): WorkflowSnapshot | null {
+    return null;
+  }
 
   async start(): Promise<void> {
     await this._waitForTranscriptDir();

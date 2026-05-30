@@ -7,113 +7,21 @@ import {
   makeWorkflowJournalLabel,
   makeWorkflowAgentLabel,
 } from '../../src/claude-workflow/watch-builder';
-import type { OutputHandler } from '../../src/core/detector-interfaces';
 import type { ParsedLine } from '../../src/core/types';
 import type { Formatter } from '../../src/formatters/formatter.interface';
-import { PrettyFormatter } from '../../src/formatters/pretty-formatter';
-
-const RUN_ID = 'wf_12345678-abc';
-const AGENT_ID_1 = '01234567890abcde1';
-const AGENT_ID_2 = '01234567890abcde2';
-
-function createHandler(): OutputHandler & { debugMsgs: string[] } {
-  const debugMsgs: string[] = [];
-  return {
-    debugMsgs,
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    debug: (m: string) => debugMsgs.push(m),
-  };
-}
-
-function captureOutput(): {
-  lines: { formatted: string; label: string }[];
-  onOutput: (formatted: string, label: string) => void;
-} {
-  const lines: { formatted: string; label: string }[] = [];
-  return {
-    lines,
-    onOutput: (formatted, label) => lines.push({ formatted, label }),
-  };
-}
-
-function rawFormatter(): Formatter {
-  // Use the actual PrettyFormatter — `formatted` is already populated by
-  // the parser for system events, so this just passes it through.
-  return new PrettyFormatter();
-}
-
-interface Fixture {
-  tempDir: string;
-  workflowDir: string;
-  transcriptDir: string;
-  journalPath: string;
-  snapshotPath: string;
-}
-
-async function setupFixture(
-  opts: {
-    journalLines?: string[];
-    agents?: { agentId: string; lines: string[] }[];
-  } = {}
-): Promise<Fixture> {
-  const tempDir = await mkdtemp(join(tmpdir(), 'wf-attachment-'));
-  const sessionDir = join(tempDir, 'session');
-  const workflowDir = join(sessionDir, 'workflows');
-  const transcriptDir = join(sessionDir, 'subagents', 'workflows', RUN_ID);
-  await mkdir(workflowDir, { recursive: true });
-  await mkdir(transcriptDir, { recursive: true });
-
-  const journalPath = join(transcriptDir, 'journal.jsonl');
-  const snapshotPath = join(workflowDir, `${RUN_ID}.json`);
-
-  await writeFile(
-    snapshotPath,
-    JSON.stringify({ runId: RUN_ID, status: 'running' })
-  );
-  if (opts.journalLines && opts.journalLines.length > 0) {
-    await writeFile(journalPath, opts.journalLines.join('\n') + '\n');
-  } else {
-    await writeFile(journalPath, '');
-  }
-
-  for (const agent of opts.agents ?? []) {
-    const path = join(transcriptDir, `agent-${agent.agentId}.jsonl`);
-    await writeFile(path, agent.lines.join('\n') + '\n');
-  }
-
-  return {
-    tempDir,
-    workflowDir,
-    transcriptDir,
-    journalPath,
-    snapshotPath,
-  };
-}
-
-function makeStartedJournalLine(agentId: string): string {
-  return JSON.stringify({
-    type: 'started',
-    key: 'v2:abc',
-    agentId,
-  });
-}
-
-function makeAssistantLine(text: string): string {
-  return JSON.stringify({
-    type: 'assistant',
-    timestamp: '2026-01-01T00:00:00Z',
-    message: {
-      model: 'claude-sonnet-4-5-20251101',
-      content: [{ type: 'text', text }],
-    },
-  });
-}
-
-function waitMs(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
+import {
+  AGENT_ID_1,
+  AGENT_ID_2,
+  RUN_ID,
+  type Fixture,
+  captureOutput,
+  createHandler,
+  makeAssistantLine,
+  makeStartedJournalLine,
+  rawFormatter,
+  setupFixture,
+  waitMs,
+} from './_fixtures';
 
 describe('WorkflowAttachment', () => {
   let fixture: Fixture;
