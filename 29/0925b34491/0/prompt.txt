@@ -1632,3 +1632,97 @@ Files most worth re‑reading when acting on the above:
 - **[src/agents/claude/claude-agent.ts:298]** `sessionId.startsWith('wf_')` dispatch — could call `isValidWorkflowRunId` from `paths.ts:64` for stricter gating, but current `startsWith` is intentional (also catches malformed `wf_*` per inline comment). **No change recommended.**</result>
 <usage><total_tokens>111692</total_tokens><tool_uses>29</tool_uses><duration_ms>105026</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a781bd588fef4b93d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a781bd588fef4b93d.output</output-file>
+<status>completed</status>
+<summary>Agent "Quality review" completed</summary>
+<result>I have all the data I need to write up findings.
+
+## Code Quality Findings
+
+**Redundant state / cached values**
+
+- [src/claude-workflow/watch-builder.ts:62] `stopRequestReason: 'completed' | 'failed' | null` is used only as a one-shot latch (line 318) — the actual value is never read. The class already has `stopped: boolean` (line 64) and `currentSnapshot` (line 61, whose `.status` carries the same info) → collapse to a plain `autoStopScheduled: boolean` or just check `stopped` after `queueMicrotask`.
+- [src/claude-workflow/journal-parser.ts:34-40] Constructor sets `historyTimestamp` from `fileMtime`, then immediately overwrites with `''` if no mtime — flatten to a single ternary and drop the dead first assignment.
+- [src/core/types.ts:125-129] `workflowEvent` and `workflowAgentId` on `ParsedLine` are written by `JournalLineParser` but never read anywhere → dead state on the shared `ParsedLine` shape. Same for `isWorkflowToolUse` (written line 700 of claude-agent.ts, no readers). Remove or wire them up.
+
+**Copy-paste with variation**
+
+- [src/index.ts:570-605 vs 711-746] The `WorkflowDetector` + `onNewWorkflow → new WorkflowAttachment` block is duplicated **verbatim** in `startClaudeMultiWatch` initial setup AND inside its `switchToSession` callback (~36 lines × 2). Only `sessionFile` vs `nextSessionFile` differs. Extract to `createWorkflowAutoAttach(sessionFile, options, formatter, wfAttachments) → WorkflowDetector`.
+- [src/index.ts:929-938 vs 1019-1030] `parts.indexOf('workflows')` + `sessionDir`/`transcriptDir` derivation is duplicated in both `startClaudeWorkflowInteractiveWatch` and `startClaudeWorkflowMultiWatch`. Should be a helper in `src/claude-workflow/paths.ts` (e.g. `deriveDirsFromSnapshotPath(snapshotPath, runId)`).
+- [src/index.ts:870-879] `basename(snapshotPath, '.json').match(/^(wf_…)$/)` reimplements `parseWorkflowSnapshotFilename` from `paths.ts` instead of reusing it.
+
+**Leaky abstractions**
+
+- [src/agents/claude/claude-agent.ts:49-54] `workflowFinder` getter re-creates the inner finder whenever `baseDir` changes "because tests mutate baseDir via cast." The leak is two-sided: prod code carries a defensive `getBaseDir()` round-trip on every property access for a test-only mutation pattern. Either (a) accept `baseDir` as a constructor option (single source of truth, test passes `tempDir`), or (b) drop the test hack and use the real `~/.claude/projects` with a fixture HOME env var.
+- [src/agents/claude/workflow-agent.ts:34] `getBaseDir()` exists only to support that getter — would disappear with the fix above.
+
+**Parameter sprawl / config sites**
+
+- [src/claude-workflow/watch-builder.ts:30-44] `WorkflowAttachmentConfig` has 11 fields mixing watch-tuning (`follow`/`pollInterval`/`initialLines`), formatting (`verbose`/`formatter`), agent-toggle (`withAgents`), I/O hooks (`onOutput`/`outputHandler`/`sessionHandler`/`onStop`), and `workflow` payload. Group into `{ workflow, watchOptions, handlers }` — at minimum the four `FileWatcher.start` knobs (follow/pollInterval/initialLines/verbose) should travel as one `watchOptions` object since they're forwarded together into two separate `FileWatcher` callsites (journal + agents).
+- [src/index.ts call sites 578, 719, 954, 1069] The same 11-field literal is built four times with near-identical values — the regrouping above would shrink each call to ~3 lines.
+
+**Stringly-typed code**
+
+- [src/index.ts:950-951, 1055; src/claude-workflow/watch-builder.ts:159-163] `` `wf:${runId}:journal` `` (the session-id form, no brackets) is hand-built in 4 places. `makeWorkflowJournalLabel` only covers the bracketed `[…]` form. Add `makeWorkflowJournalSessionId(runId)` and use it in both `index.ts` and `WorkflowAttachment.stop` (line 162). Likewise `` `wf:${agentId.slice(0,7)}` `` at index.ts:1085 duplicates `makeWorkflowAgentLabel` minus brackets — add a `…SessionId` variant.
+- [src/index.ts:352] `customTitle?.startsWith('wf:')` is the dispatch trigger but the prefix is hard-coded; `WorkflowSessionFinder` writes `` `wf:${title}` `` at workflow-agent.ts:177. Extract `WORKFLOW_TITLE_PREFIX = 'wf:'` so renaming the marker is one edit.
+- [src/index.ts:870-871] Inline `/^(wf_[0-9a-f]{8}-[0-9a-f]{3})$/` duplicates `WORKFLOW_RUN_ID_REGEX` in `paths.ts` (which is also unexported — only the predicate `isValidWorkflowRunId` is). Use `parseWorkflowSnapshotFilename(basename(snapshotPath))`.
+
+**Unclear ownership**
+
+- [src/index.ts:568] `wfAttachments` map is owned by `startClaudeMultiWatch`'s closure, mutated by **3 different sites**: the detector's `onNewWorkflow`, attachment's `onStop`, and `switchToSession` / SIGINT teardown. Combined with the duplicated detector-construction block, it's hard to see who guarantees no leaks across a super-follow swap. The proposed `createWorkflowAutoAttach` helper should own `wfAttachments` and expose `{ detector, stopAll() }`.
+- [src/terminal/pane-manager.ts:48-51, 86, 131-132, 187-189] `insertionOrder` array + `pinnedAgentIds` set are mutated in 4 places (`openPane`, `closePaneByAgentId`, `closeAll`, `openPaneEvictIfNeeded`) but the workflow-specific FIFO eviction logic is opt-in via a separate public method. Either always-on (drop the dual `openPane`/`openPaneEvictIfNeeded` API), or move FIFO state into a `WorkflowPaneStrategy` to keep the base manager invariant clear.
+- [src/claude-workflow/watch-builder.ts:124-131] `attachAgent`'s rollback deletes from `knownAgentIds`/`agentParsers`/`agentWatchers` but only `knownAgentIds` was added before the try; the other two are conditionally set inside the try. The cleanup is correct today but defensive-deletes against state that may never have been added — clearer to scope cleanup to "what we actually inserted past each step."</result>
+<usage><total_tokens>97112</total_tokens><tool_uses>25</tool_uses><duration_ms>124366</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aace025c85bbb02c2</task-id>
+<tool-use-id>toolu_01CTRLbLnehmWkVbpeR6piL6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/aace025c85bbb02c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review" completed</summary>
+<result>I have enough information. Here is my efficiency review.
+
+---
+
+**Efficiency findings — workflow-support feature:**
+
+- **[workflow-agent.ts:151] N+1 file read in `_collectWorkflows`** — Every snapshot is read sequentially in the `for await` loop (`await Bun.file(file).text()` inside the scan iterator). With M workflow snapshots this is M serialized reads even though `listSessions`/`findLatest` only need the top-N by mtime. Fix: collect `{file, stats}` first, slice to `~3×limit` by mtime, then `Promise.all` the JSON reads for that subset only. For `findLatest` (which only needs the newest mtime) the JSON read can be deferred entirely — `customTitle` is decorative.
+
+- **[workflow-agent.ts:141-146] Sequential `stat` in glob loop** — Same loop awaits one `stat` per file. Collect paths first, then `Promise.all(stat)`. Combined with the fix above, total I/O on a 200-workflow project drops from ~400 serial syscalls to ~2 batched rounds.
+
+- **[claude-agent.ts:171-180] `_collectAndEnrichMainSessions` and `workflowFinder.listSessions` run sequentially in `listSessions`** — `await mainItems` then `await wfItems`. These are independent — wrap in `Promise.all([main, wf])` to halve wall-clock.
+
+- **[claude-agent.ts:210-221] Confirmed `Promise.all` is used for enrichment** — but the inner triple `Promise.all([readLastTimestampFromJSONL, readCustomTitleFromTail, readCwdFromHead])` reads the same file three times (head + 2× tail). The two tail reads (`readLastTimestampFromJSONL` and `readCustomTitleFromTail`) both read the last 8KB — collapse to a single tail read with two scans. Halves I/O on the per-session hot path.
+
+- **[index.ts:986-993] 1s status-line poll unconditionally re-renders** — `setWorkflowStatus` always overwrites state and `updateStatusLine` always emits ANSI to TTY, even when the snapshot reference is identical. `SnapshotWatcher` already dedups by raw JSON — expose `getCurrentSnapshot` identity or a `dirty` flag and skip the redraw when unchanged. At idle this is 60 needless TTY writes/minute.
+
+- **[display-controller.ts:186-204] `updateStatusLine` has no same-content guard** — even outside the workflow poll, every call rebuilds + rewrites ANSI. Cache `currentStatusLine` comparison and short-circuit when equal (the field already exists for other reasons).
+
+- **[watch-builder.ts:103,142] New `ClaudeAgent` constructed per agent attachment AND per `createOnLineHandler` parser-miss** — `ClaudeAgent` allocates a `ClaudeSessionFinder` (with `WorkflowSessionFinder` lazily) just to discard everything but `.parser`. Construct a `ClaudeLineParser` directly, or expose a `createParser(options)` factory. Hot in workflow mode with many subagents.
+
+- **[watch-builder.ts:122-138] `JSON.parse(line)` runs twice on `agent_progress` lines** — once here for the early `agent_progress` check, then again inside `parser.parse(line)`. The substring guard helps but the duplicate parse remains for every progress event. Consider passing the already-parsed object into the parser, or letting the parser surface progress events.
+
+- **[workflow-agent.ts:104,177] `listSessions`/`findLatest` always materializes ALL workflows before slicing** — same shape as the Claude main-session enrich-then-slice bug noted in CLAUDE.md, but worse here because each entry pays a full JSON read. After fixing N+1 above, also pass `limit` into `_collectWorkflows` and slice post-sort-by-mtime before reading JSON.
+
+- **[index.ts:568, 620-623, 785-788] `wfAttachments` Map cleanup looks correct** — `onStop` deletes on natural completion; `switchToSession` and SIGINT both iterate + `clear()`. `WorkflowAttachment.knownAgentIds` and `WorkflowDetector.knownRunIds` grow only with real subagents/runs (bounded by workload). No leak.
+
+- **[watch-builder.ts:247-268] `_scanAndAttachInitialAgents` awaits `attachAgent` sequentially** — `for (...) await attachAgent(...)` serializes file-open + history flush per agent. For a workflow with many pre-existing agent transcripts on resume, this delays first output. Sort birthtime-asc then `Promise.all` the attachments (or at least `Promise.allSettled`).
+
+- **[snapshot-watcher.ts:67-93] `reload()` reads whole snapshot on every fs.watch event** — unavoidable since snapshots are replace-not-append, but the raw-text dedup at line 76 is good. No issue, just confirming.
+
+- **[workflow-detector.ts:42, watch-builder.ts:272] `fs.watch` 'rename' events fire for both create AND delete** — handler doesn't distinguish; relies on `parseWorkflowSnapshotFilename` validity + `knownRunIds` dedup. Cheap, no issue, but a deleted snapshot triggers a wasted `parseWorkflowSnapshotFilename` call. Negligible.
+
+- **[index.ts:711-746] `switchToSession` rebuilds `WorkflowDetector` config inline (duplicated from init)** — not efficiency per se, but the duplicated `onNewWorkflow` factory means any future fix to attachment options needs both sites updated. Out of scope for this review (reuse agent will catch).
+
+No TOCTOU existence checks found in the workflow path — code uses operate-and-catch pattern consistently. No unbounded growth detected.</result>
+<usage><total_tokens>94993</total_tokens><tool_uses>20</tool_uses><duration_ms>126598</duration_ms></usage>
+</task-notification>
