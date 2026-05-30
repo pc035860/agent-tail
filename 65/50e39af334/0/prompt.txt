@@ -1190,3 +1190,155 @@ The plan can be executed as written. The four residual nits above are cosmetic (
 - `/Users/pc035860/code/agent-tail/src/claude/output-handlers.ts:11` (`ConsoleOutputHandler` class — plan now imports correctly)</result>
 <usage><total_tokens>126285</total_tokens><tool_uses>1</tool_uses><duration_ms>37859</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a6c4a98efd7f5a0b0</task-id>
+<tool-use-id>toolu_018CzUeCBeuzCN7APqe1uKpN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a6c4a98efd7f5a0b0.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P4 plan" completed</summary>
+<result>I have enough context. Now I can provide a thorough review.
+
+## Verdict
+PASS_WITH_CHANGES
+
+## Restated Plan (3-7 bullets)
+- Add `snapshotWatcher`, `currentSnapshot`, `stopRequestReason` state to `WorkflowAttachment`; expose `getCurrentSnapshot()` getter.
+- Wire `SnapshotWatcher` as Step 4 of `WorkflowAttachment.start()` (after journal + initial agents + subagent dir watch); pass through `onChange` → status event log line + auto-exit on terminal status via `queueMicrotask(stop)`; pass through `onError` → ENOENT triggers `stop('directory-removed')`, other errors log debug and continue.
+- Add snapshot watcher cleanup at top of `stop()` so further `onChange` is silenced.
+- Reuse SPEC's stop-reason union `'completed' | 'directory-removed' | 'user'`; `failed` status uses `'completed'` reason with the actual status carried in the event log line (Plan D5).
+- Add two new test files: `workflow-attachment-snapshot.test.ts` (10 cases) + `journal-tolerance.test.ts` (1 case for T18).
+- Phase progress is best-effort: filters `workflowProgress` for `type === 'workflow_phase'` and takes `.at(-1)`.
+
+## Critical issues (must fix)
+
+### C1. `queueMicrotask` does NOT decouple from `await attachment.start()` callers (your focus item 1)
+The current `dispatchClaudeWorkflow` flow in `src/index.ts:818-826` is:
+```
+await attachment.start();                   // step 4 SnapshotWatcher.start() awaits initial read
+                                            // initial onChange runs synchronously inside that await
+                                            // queueMicrotask(stop) scheduled here
+process.once('SIGINT', ...)                 // sync
+log(options.quiet, 'Watching workflow...')  // sync
+// main() returns
+                                            // ← microtask drain happens here → stop() runs
+```
+A microtask runs before any I/O / timer callback but AFTER the currently-executing synchronous code finishes. So `stop()` does run after `start()` returns and `main()` finishes scheduling. **However**, two issues:
+
+1. The "Watching workflow... (Ctrl+C to stop)" log line still prints AFTER the auto-exit has been scheduled, which will be immediately followed by `[wf:...] stopped (completed)` — confusing UX implying "we're watching" then immediate exit.
+2. The plan claims `queueMicrotask` lets callers "still inspect `getCurrentSnapshot()` and run cleanup logic on the same tick" (D9). True for synchronous post-`await start()` code, but **`dispatchClaudeWorkflow` does not await `attachment` lifecycle** — `main()` returns and the process is kept alive by the watchers themselves. Once `stop()` clears them, the process exits naturally (no `process.exit(0)` needed). This should be confirmed by adding an explicit "process exits when attachment.stop() finishes for terminal status" assertion in the new test file (or at minimum a smoke check).
+
+**Fix**: Plan should add a test or note clarifying:
+- The "Watching workflow..." log should be suppressed (or moved before `start()`) when initial-read shows terminal status. Easiest: check `attachment.getCurrentSnapshot()?.status` after `start()` returns and skip the "watching" log if terminal.
+- Document explicitly that for non-interactive mode, the process exits "naturally" when all watchers stop (no explicit `process.exit`). For interactive mode (P6 scope), this needs revisiting.
+
+### C2. Step 4 ordering claim vs `_startSubagentDirWatch` race
+Plan Step 2 says: "After the existing Step 3 subagent dir watch, BEFORE returning from `start()`". But the snapshot's initial onChange will synchronously fire `_handleSnapshotChange` → if terminal status, `queueMicrotask(stop)` is scheduled. Meanwhile `_startSubagentDirWatch` has already attached a `fs.watch`. If the workflow finished long ago, the dir watch will quickly see "no events" (good). But if the workflow is mid-completion and an `agent-*.jsonl` write fires during the microtask gap, `attachAgent` runs concurrently with `stop()`. The current `attachAgent` checks `knownAgentIds` but NOT `this.stopped`.
+
+Recommend the plan add to Step 3 implementation: `if (this.stopped) return;` at the very top of `attachAgent`, mirroring the guard at top of `_handleSnapshotChange`. Otherwise post-stop new agent files leak watchers.
+
+### C3. `onError` is invoked twice on ENOENT — once on `reload()` initial read, possibly again on `fs.watch` error
+Looking at `snapshot-watcher.ts:67-93`: `reload()` calls `reportError` on `readFile` failure. After that, `fs.watch` is still called and may also throw / emit error. Plan's `_handleSnapshotError` will see ENOENT twice and call `stop('directory-removed')` twice. `stop()` has a `stopped` guard so this is harmless, but the duplicate `outputHandler.warn` line is noise. Plan should either:
+- Latch ENOENT handling like `stopRequestReason` does, or
+- Note in D4 that duplicate warnings are acceptable since `stop()` is idempotent.
+
+## Plan patch (proposed edits)
+
+### Patch 1 (Step 3 — add `stopped` check to `attachAgent`, not just `_handleSnapshotChange`)
+Add to the `_handleSnapshotChange` Step 3 description: "Also add `if (this.stopped) return;` to `attachAgent()` at line 1 (before the `knownAgentIds.has` check) to prevent post-stop subagent-dir-watch events from spawning new watchers during the `queueMicrotask` gap between scheduling and executing `stop()`."
+
+### Patch 2 (Step 2 — handle the "watching" log race)
+Add to Step 2: "After `await this.snapshotWatcher.start()`, the caller (`startClaudeWorkflowMultiWatch` in `src/index.ts:818-826`) should check `attachment.getCurrentSnapshot()?.status` before printing the `Watching workflow... (Ctrl+C to stop)` log. If status is `'completed'` or `'failed'`, skip the misleading 'watching' message — auto-exit is already queued."
+
+This is a one-line change in `src/index.ts` and the plan currently says "no changes to index.ts" (Step 6) — this assertion needs to be amended to "one log-suppression line in `startClaudeWorkflowMultiWatch`."
+
+### Patch 3 (D5 — make the stop-reason decision more explicit and tested)
+The plan currently uses `stop('completed')` for both `completed` and `failed` snapshot statuses (your focus item 2). This is defensible but the status event line is the **only** way users see the actual `failed` status, and that line uses `chalk.gray`. Two options:
+- (Preferred, minimal) Keep the reason union as-is, but use `chalk.yellow` (or `chalk.red`) instead of `chalk.gray` for the status event line when `status !== 'running'`. This makes failed runs visually distinct without expanding the union.
+- (More invasive) Expand `WorkflowAttachmentStopReason` to include `'failed'`. This touches the stop signature already exported in `watch-builder.ts:110`. Higher blast radius (CLAUDE.md docs, tests, future callers).
+
+Recommendation: take the minimal path — color the status line by status — and add to D5: "Status event line uses `chalk.red` for `failed`, `chalk.green` for `completed`, `chalk.gray` for `running`."
+
+### Patch 4 (test #9 reachability — your focus item 3)
+"`_handleSnapshotChange` while stopped is no-op" is **technically unreachable** in normal flow because `stop()` calls `snapshotWatcher.stop()` first which clears the watcher / debounce. But it is reachable in two edge cases:
+- Concurrent `stop()` calls: snapshot debounce has already fired and queued `reload()` → reload reads file → onChange synchronously fires while another `stop()` is in flight.
+- Race between `queueMicrotask(stop)` scheduling and actual execution: if a second snapshot write triggers between scheduling and execution, the second `_handleSnapshotChange` runs after stop set `stopped = true` only if the snapshot-watcher.stop() lands later.
+
+Looking at `snapshot-watcher.ts:54-63`, `stop()` is synchronous and clears the debounce timer immediately. So unless `reload()` is already in flight (between `readFile` await and `onChange` call), this is unreachable. To test it reliably, the test would need to call `_handleSnapshotChange` directly via cast — which is ugly. **Recommendation**: drop this test as not worth the friction, OR keep it as a defensive guard test that calls a wrapped fake `onChange` after `stop()` finishes.
+
+### Patch 5 (Phase progress — your focus item 4)
+`_phaseProgress` uses `.at(-1)` on workflow_phase entries. Looking at the SPEC §3.2 sample data, `workflowProgress` is an append-only event log where each `workflow_phase` entry represents "entered phase N". So `.at(-1)` gives the most recently entered phase — correct.
+
+However, the cast `as { index: number; title: string } | undefined` is unsafe — if the type narrowing fails (e.g., Claude Code schema drift adds a new `type`), the runtime will succeed but emit garbage. Recommend:
+```typescript
+const phaseEvents = progress.filter((p): p is Extract&lt;WorkflowProgressItem, { type: 'workflow_phase' }&gt; =&gt; 
+  p.type === 'workflow_phase'
+);
+const currentPhase = phaseEvents.at(-1);
+```
+This uses the discriminated-union narrowing already in `types.ts` (no `as` cast).
+
+Also, the `snap.phases.length` denominator is correct (total phases), but should fall back to `'?'` when `snap.phases` is undefined or empty:
+```typescript
+const total = snap.phases?.length ? snap.phases.length : '?';
+return `(phase ${currentPhase.index}/${total}: ${currentPhase.title})`;
+```
+
+### Patch 6 (Test fixture reuse — your focus item 5)
+The plan says "extend the helper" but doesn't specify how. Looking at `tests/claude-workflow/workflow-attachment.test.ts:55-93`, the `setupFixture` helper is local to that file. Two options:
+- **Extract** `setupFixture` and helpers (`createHandler`, `captureOutput`, `rawFormatter`, `makeStartedJournalLine`, `makeAssistantLine`, `waitMs`) to a shared module like `tests/claude-workflow/_fixtures.ts`. Both files import from there.
+- **Copy** — quicker, but creates a maintenance burden.
+
+Recommendation: **Extract** is the right call. Add to plan: "Step 0 (test infra): Extract `setupFixture` + helpers from existing `workflow-attachment.test.ts` to a new `tests/claude-workflow/_fixtures.ts`, then update the existing test to import from there. Both new test files use the shared fixture, with snapshot tests extending `setupFixture` to accept a `snapshotContent` override option."
+
+### Patch 7 (Multi-runId concurrency — your focus item 6)
+P4 is pure single-instance. Each `WorkflowAttachment` has its own `SnapshotWatcher`, its own `knownAgentIds`, its own `stopped` flag. When P5 lands `Map&lt;runId, WorkflowAttachment&gt;`, each instance auto-exits independently — no shared state. **No P4 changes needed** for concurrency. Plan should add an explicit note: "Out of P4 scope: Multi-runId orchestration. Each `WorkflowAttachment` instance is fully encapsulated; P5 will manage the `Map&lt;runId&gt;` separately."
+
+### Patch 8 (Duplicate log lines on stop — your focus item 7)
+The plan has the status event line PLUS `outputHandler.info('[wf:runId] stopped (reason)')` from existing `stop()`. For `completed`/`failed` auto-exit, users see:
+```
+[wf:runId:journal] [snapshot] status=completed (phase 6/6: Finalize)
+[wf:runId] stopped (completed)
+```
+This is **two lines** for one event. Acceptable IMO — they convey different information:
+- Status event: WHAT changed in the workflow
+- Stop info: WHAT agent-tail decided to do as a result
+
+But for `directory-removed`, there's `outputHandler.warn` + `outputHandler.info(stopped)` = 2 lines, both about agent-tail behavior (not workflow state) → genuinely redundant. Recommend: when `stop('directory-removed')` is triggered by `_handleSnapshotError`, the warn message can be folded into the stop info line by passing a richer reason format, or just skip the warn since `stop()` will log immediately after.
+
+Patch: "In `_handleSnapshotError` ENOENT branch, drop the `outputHandler.warn` call — `stop('directory-removed')` immediately logs `outputHandler.info('[wf:runId] stopped (directory-removed)')` which conveys the same information without duplication."
+
+## Risks &amp; mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| `attachAgent` runs after `stop()` due to scheduled subagent-dir-watch events | Add `if (this.stopped) return;` to `attachAgent` (Patch 1) |
+| User sees "Watching workflow..." then immediate exit for already-completed workflows | Skip the log when initial snapshot is terminal (Patch 2) |
+| `failed` status visually indistinguishable from `completed` in status event line | Color by status (Patch 3) |
+| Test fixture drift between two test files | Extract helpers to shared module (Patch 6) |
+| Phase progress crashes on schema drift | Use type-guard filter, not `as` cast (Patch 5) |
+| Duplicate warn+info on directory-removed | Drop the warn in `_handleSnapshotError` (Patch 8) |
+
+## Test plan
+The plan's blueprint is largely solid. Concrete additions:
+1. **Process-exit smoke test** (for C1): construct attachment with `status: 'completed'`, call `start()`, await microtask via `await new Promise(r =&gt; queueMicrotask(r))`, assert `attachment` is stopped and no further onChange fires on subsequent writes.
+2. **`attachAgent` after stop** (for C2 / Patch 1): call `stop()`, then call `attachAgent(...)` directly, assert no FileWatcher is created (check `agentWatchers.size === 0`).
+3. **Phase progress with empty phases**: snapshot with `workflowProgress: [{type: 'workflow_phase', index: 1, title: 'Setup'}]` but `phases: undefined` → status event line contains `phase 1/?`.
+4. **Duplicate ENOENT** (for C3): force `readFile` ENOENT AND `fs.watch` error → assert `stop('directory-removed')` only called once (or assert `outputHandler.warn` not duplicated if Patch 8 lands).
+5. **Two-test file fixture sharing**: after Patch 6 extraction, `workflow-attachment.test.ts` continues to pass — regression check.
+
+## Open questions (if any)
+None blocking. Patches 1-8 are all mechanical; the plan can move to implementation once they're folded in.
+
+## Relevant files
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_18-42-30_workflow-p4.md` — the plan under review
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/watch-builder.ts` — target for all `WorkflowAttachment` changes
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/snapshot-watcher.ts` — already-shipped P1 component, no changes needed
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/types.ts` — `WorkflowSnapshot` / `WorkflowProgressItem` discriminated union (Patch 5)
+- `/Users/pc035860/code/agent-tail/src/index.ts` lines 784-827 — `startClaudeWorkflowMultiWatch` needs Patch 2 log suppression
+- `/Users/pc035860/code/agent-tail/tests/claude-workflow/workflow-attachment.test.ts` — source for extracted fixture helpers (Patch 6)
+- `/Users/pc035860/code/agent-tail/src/core/detector-interfaces.ts` — `OutputHandler` interface (warn/info/debug) used by the new handlers</result>
+<usage><total_tokens>107635</total_tokens><tool_uses>14</tool_uses><duration_ms>137849</duration_ms></usage>
+</task-notification>
