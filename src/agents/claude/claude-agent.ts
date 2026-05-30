@@ -165,19 +165,22 @@ export class ClaudeSessionFinder implements SessionFinder {
   }): Promise<SessionListItem[]> {
     const limit = options.limit ?? 20;
 
-    // 1. Enrich main sessions first (preserves existing slice→enrich→re-sort
-    //    bubble-up: sessions whose mtime is older than the limit cutoff but
-    //    whose lastActivityTime is newer still surface).
-    const mainItems = await this._collectAndEnrichMainSessions({
-      project: options.project,
-      limit,
-    });
-
-    // 2. Workflow items already carry snapshot metadata — no enrich needed.
-    const wfItems = await this.workflowFinder.listSessions({
-      project: options.project,
-      limit,
-    });
+    // Collect main + workflow in parallel (independent I/O).
+    // - Main: enrich-then-slice preserves the activity-time bubble-up
+    //   semantic (sessions with stale mtime but fresh lastActivityTime
+    //   still surface — see CLAUDE.md gotcha).
+    // - Workflow: snapshot metadata is already in the filename + JSON,
+    //   no enrich step needed.
+    const [mainItems, wfItems] = await Promise.all([
+      this._collectAndEnrichMainSessions({
+        project: options.project,
+        limit,
+      }),
+      this.workflowFinder.listSessions({
+        project: options.project,
+        limit,
+      }),
+    ]);
 
     // 3. Merge by activity time and slice to final limit.
     const merged: SessionListItem[] = [...mainItems, ...wfItems].sort(

@@ -193,6 +193,10 @@ export class DisplayController {
     const statusLine = workflowLine
       ? `${workflowLine}${chalk.dim(' • ')}${sessionLine}`
       : sessionLine;
+
+    // Same-content guard — interactive workflow mode polls this every 1s;
+    // skipping the rewrite avoids ~60 wasted TTY redraws/minute at idle.
+    if (statusLine === this.currentStatusLine) return;
     this.currentStatusLine = statusLine;
 
     if (this.persistentStatusLine && process.stdout.isTTY) {

@@ -78,3 +78,29 @@ export function parseWorkflowAgentFilename(filename: string): string | null {
   const match = filename.match(WORKFLOW_AGENT_FILENAME_REGEX);
   return match ? match[1]! : null;
 }
+
+/**
+ * Derive sessionDir + transcriptDir from a workflow snapshot path.
+ * Used by both startClaudeWorkflowMultiWatch and
+ * startClaudeWorkflowInteractiveWatch in src/index.ts.
+ * Returns null when the path doesn't fit the expected
+ * `{sessionDir}/workflows/wf_*.json` shape.
+ */
+export function deriveWorkflowDirs(
+  snapshotPath: string,
+  runId: string
+): { sessionDir: string; transcriptDir: string } | null {
+  const parts = snapshotPath.split('/');
+  const wfIdx = parts.indexOf('workflows');
+  if (wfIdx < 0) return null;
+  const sessionDir = parts.slice(0, wfIdx).join('/');
+  return {
+    sessionDir,
+    transcriptDir: `${sessionDir}/subagents/workflows/${runId}`,
+  };
+}
+
+/** Session-id form (no brackets) for workflow journal. P6/P7 tabs + pane key. */
+export function makeWorkflowJournalSessionId(runId: string): string {
+  return `wf:${runId}:journal`;
+}

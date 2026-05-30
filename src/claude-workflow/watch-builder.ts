@@ -14,7 +14,11 @@ import { drainParser } from '../utils/parser-drain.ts';
 import chalk from 'chalk';
 import { JournalLineParser } from './journal-parser.ts';
 import { SnapshotWatcher } from './snapshot-watcher.ts';
-import { parseWorkflowAgentFilename, isValidWorkflowAgentId } from './paths.ts';
+import {
+  parseWorkflowAgentFilename,
+  isValidWorkflowAgentId,
+  makeWorkflowJournalSessionId,
+} from './paths.ts';
 import type {
   DetectedWorkflow,
   WorkflowProgressItem,
@@ -59,7 +63,10 @@ export class WorkflowAttachment {
   private subagentDirWatcher: FSWatcher | null = null;
   private snapshotWatcher: SnapshotWatcher | null = null;
   private currentSnapshot: WorkflowSnapshot | null = null;
-  private stopRequestReason: 'completed' | 'failed' | null = null;
+  // One-shot latch — true once auto-exit (snapshot terminal status) is
+  // scheduled, so duplicate terminal-status snapshots don't schedule
+  // multiple stop() calls.
+  private autoStopScheduled = false;
   private readonly knownAgentIds = new Set<string>();
   private stopped = false;
 
@@ -156,10 +163,10 @@ export class WorkflowAttachment {
     for (const agentId of this.knownAgentIds) {
       this.config.sessionHandler?.markSessionDone?.(agentId);
     }
-    // Journal session id matches the dispatcher's `wf:{runId}:journal`
+    // Journal session id matches the dispatcher's session id
     // (P6 interactive) and the PaneManager pinned key (P7 --workflow-pane).
     this.config.sessionHandler?.markSessionDone?.(
-      `wf:${this.config.workflow.runId}:journal`
+      makeWorkflowJournalSessionId(this.config.workflow.runId)
     );
 
     this.config.outputHandler.info(
@@ -314,13 +321,14 @@ export class WorkflowAttachment {
     // stop() reason union is 'completed' | 'directory-removed' | 'user'.
     // The actual 'failed' status is conveyed via the colored event line above;
     // we stop with reason 'completed' (semantically: "workflow finished").
-    if (snap.status === 'completed' || snap.status === 'failed') {
-      if (!this.stopRequestReason) {
-        this.stopRequestReason = snap.status;
-        queueMicrotask(() => {
-          void this.stop('completed');
-        });
-      }
+    if (
+      (snap.status === 'completed' || snap.status === 'failed') &&
+      !this.autoStopScheduled
+    ) {
+      this.autoStopScheduled = true;
+      queueMicrotask(() => {
+        void this.stop('completed');
+      });
     }
   }
 

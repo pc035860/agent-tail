@@ -71,7 +71,12 @@ import {
 } from './cursor/watch-builder.ts';
 import { WorkflowSessionFinder } from './agents/claude/workflow-agent.ts';
 import { WorkflowAttachment } from './claude-workflow/watch-builder.ts';
-import { cwdToClaudeProjectFilter } from './claude-workflow/paths.ts';
+import {
+  cwdToClaudeProjectFilter,
+  deriveWorkflowDirs,
+  makeWorkflowJournalSessionId,
+  parseWorkflowSnapshotFilename,
+} from './claude-workflow/paths.ts';
 import { WorkflowDetector } from './claude-workflow/workflow-detector.ts';
 
 /**
@@ -867,16 +872,13 @@ async function dispatchClaudeWorkflow(
     snapshotPath = sessionFile.path;
   }
 
-  const m = basename(snapshotPath, '.json').match(
-    /^(wf_[0-9a-f]{8}-[0-9a-f]{3})$/
-  );
-  if (!m) {
+  const runId = parseWorkflowSnapshotFilename(basename(snapshotPath));
+  if (!runId) {
     console.error(
       chalk.red(`Error: failed to derive runId from ${snapshotPath}`)
     );
     process.exit(1);
   }
-  const runId = m[1]!;
 
   if (options.interactive) {
     await startClaudeWorkflowInteractiveWatch(
@@ -926,16 +928,14 @@ async function startClaudeWorkflowInteractiveWatch(
 
   // TTY-mode implementation: derive paths + build attachment with
   // SessionManager wiring. See SPEC §12 for the design contract.
-  const parts = snapshotPath.split('/');
-  const wfIdx = parts.indexOf('workflows');
-  if (wfIdx < 0) {
+  const dirs = deriveWorkflowDirs(snapshotPath, runId);
+  if (!dirs) {
     console.error(
       chalk.red(`Error: malformed workflow snapshot path: ${snapshotPath}`)
     );
     process.exit(1);
   }
-  const sessionDir = parts.slice(0, wfIdx).join('/');
-  const transcriptDir = `${sessionDir}/subagents/workflows/${runId}`;
+  const { transcriptDir } = dirs;
 
   const displayController = new DisplayController({
     persistentStatusLine: true,
@@ -948,7 +948,7 @@ async function startClaudeWorkflowInteractiveWatch(
   const outputHandler = new DisplayControllerOutputHandler(displayController);
 
   const journalLabel = `[wf:${runId}:journal]`;
-  const journalSessionId = `wf:${runId}:journal`;
+  const journalSessionId = makeWorkflowJournalSessionId(runId);
   sessionManager.addSession(journalSessionId, journalLabel, transcriptDir);
 
   const attachment = new WorkflowAttachment({
@@ -1015,19 +1015,15 @@ async function startClaudeWorkflowMultiWatch(
   formatter: Formatter,
   options: CliOptions
 ): Promise<void> {
-  // Derive transcriptDir from snapshotPath:
-  //   .../{enc}/{UUID}/workflows/wf_*.json
-  //   .../{enc}/{UUID}/subagents/workflows/wf_*/
-  const parts = snapshotPath.split('/');
-  const wfIdx = parts.indexOf('workflows');
-  if (wfIdx < 0) {
+  // Derive transcriptDir from snapshotPath via shared helper.
+  const dirs = deriveWorkflowDirs(snapshotPath, runId);
+  if (!dirs) {
     console.error(
       chalk.red(`Error: malformed workflow snapshot path: ${snapshotPath}`)
     );
     process.exit(1);
   }
-  const sessionDir = parts.slice(0, wfIdx).join('/');
-  const transcriptDir = `${sessionDir}/subagents/workflows/${runId}`;
+  const { transcriptDir } = dirs;
 
   const outputHandler = new ConsoleOutputHandler();
 
@@ -1052,7 +1048,7 @@ async function startClaudeWorkflowMultiWatch(
         },
         (msg) => log(options.quiet, chalk.gray(msg))
       );
-      const journalKey = `wf:${runId}:journal`;
+      const journalKey = makeWorkflowJournalSessionId(runId);
       await paneManager.openPane(
         journalKey,
         `${transcriptDir}/journal.jsonl`,
