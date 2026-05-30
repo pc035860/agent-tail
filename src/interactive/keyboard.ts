@@ -11,12 +11,6 @@
  *     dispatchKey and the session manager / cleanup
  */
 
-/** Subset of SessionManager surface used by the keyboard layer. */
-export interface KeyboardSessionManager {
-  switchNext(): void;
-  switchPrev(): void;
-}
-
 export interface KeyHandlers {
   onNext: () => void;
   onPrev: () => void;
@@ -53,16 +47,22 @@ export function dispatchKey(key: string, handlers: KeyHandlers): void {
 
 /**
  * Install stdin keyboard handlers for an interactive watch. No-op when
- * stdin is not a TTY (cleanup is still expected to be invoked elsewhere
- * via SIGINT). Caller's `cleanup` should restore terminal state, including
- * `setRawMode(false)` — keep that behavior in cleanup, not here, so it
- * survives non-TTY environments and matches the pattern of the existing
- * interactive watches.
+ * stdin is not a TTY (caller's SIGINT cleanup still runs).
+ *
+ * Handlers are passed as a `{ onNext, onPrev, onQuit }` bag so the caller
+ * controls binding semantics. This matters because some callers declare
+ * `let sessionManager!: SessionManager` and assign it later inside
+ * `buildInteractiveState`; reading `.switchNext` at install time would
+ * capture `undefined`. Wrapping the read inside an arrow (e.g.
+ * `() => sessionManager.switchNext()`) defers the property access to key-
+ * press time, after assignment. Const-bound callers (the workflow watch)
+ * are unaffected and may use the same shape.
+ *
+ * Restoring terminal state (`setRawMode(false)`) is the caller's
+ * responsibility — keeps a single source of truth in each watch's
+ * `cleanup`, which must already run on SIGINT in non-TTY environments.
  */
-export function installInteractiveKeyboard(
-  sessionManager: KeyboardSessionManager,
-  cleanup: () => void
-): void {
+export function installInteractiveKeyboard(handlers: KeyHandlers): void {
   if (!process.stdin.isTTY) return;
 
   process.stdin.setRawMode(true);
@@ -70,13 +70,6 @@ export function installInteractiveKeyboard(
   process.stdin.setEncoding('utf8');
 
   process.stdin.on('data', (key: string) => {
-    dispatchKey(key, {
-      onNext: () => sessionManager.switchNext(),
-      onPrev: () => sessionManager.switchPrev(),
-      onQuit: () => {
-        cleanup();
-        process.exit(0);
-      },
-    });
+    dispatchKey(key, handlers);
   });
 }

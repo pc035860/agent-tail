@@ -131,11 +131,12 @@ describe('dispatchKey — unhandled keys', () => {
 });
 
 describe('installInteractiveKeyboard — glue layer', () => {
-  test('exports a function with the expected name', () => {
-    // Smoke test: the glue layer exists. Behavior (TTY raw mode + listener
-    // registration) is exercised via integration when the actual interactive
-    // watches run; we don't try to mock process.stdin globally here.
+  test('exports a function that accepts a single handlers bag', () => {
+    // Smoke test: the glue layer exists with the documented signature.
+    // Behavior (TTY raw mode + listener registration) is exercised via
+    // integration when the actual interactive watches run; we don't try
+    // to mock process.stdin globally here.
     expect(typeof installInteractiveKeyboard).toBe('function');
-    expect(installInteractiveKeyboard.length).toBeGreaterThanOrEqual(2);
+    expect(installInteractiveKeyboard.length).toBe(1);
   });
 });

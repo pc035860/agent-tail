@@ -1028,7 +1028,14 @@ async function startClaudeWorkflowInteractiveWatch(
     process.exit(0);
   });
 
-  installInteractiveKeyboard(sessionManager, () => cleanup());
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
+  });
 
   await attachment.start();
 
@@ -1373,7 +1380,14 @@ async function startClaudeInteractiveWatch(
   };
 
   // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
-  installInteractiveKeyboard(sessionManager, () => cleanup());
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
+  });
 
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, initialSubagent, true);
@@ -1595,7 +1609,14 @@ async function startCodexInteractiveWatch(
   };
 
   // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
-  installInteractiveKeyboard(sessionManager, () => cleanup());
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
+  });
 
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, true);
@@ -2062,7 +2083,14 @@ async function startCursorInteractiveWatch(
   };
 
   // Keyboard listener (cleanup is declared later — wrap in thunk so TDZ resolves at key press time, not install time)
-  installInteractiveKeyboard(sessionManager, () => cleanup());
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
+  });
 
   // ========== Session Switch (Super-Follow) ==========
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
