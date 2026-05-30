@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "38a441416a88",
+  "strategy": "manual-commit",
+  "branch": "feat/workflow-support",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "specs/workflow-support/SPEC.md",
+    "src/claude-workflow/journal-parser.ts",
+    "src/claude-workflow/paths.ts",
+    "src/claude-workflow/snapshot-watcher.ts",
+    "src/claude-workflow/types.ts",
+    "src/core/types.ts",
+    "tests/claude-workflow/journal-parser.test.ts",
+    "tests/claude-workflow/paths.test.ts",
+    "tests/claude-workflow/snapshot-watcher.test.ts",
+    "tests/claude-workflow/types.compile.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/38/a441416a88/0/metadata.json",
+      "transcript": "/38/a441416a88/0/full.jsonl",
+      "content_hash": "/38/a441416a88/0/content_hash.txt",
+      "prompt": "/38/a441416a88/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8730,
+    "cache_creation_tokens": 679854,
+    "cache_read_tokens": 15121818,
+    "output_tokens": 83520,
+    "api_call_count": 85
+  }
+}

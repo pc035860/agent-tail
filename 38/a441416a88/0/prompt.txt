@@ -1,0 +1,217 @@
+@specs/workflow-support/SPEC.md
+
+---
+
+<task-notification>
+<task-id>a4a8e0facf186ac55</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a4a8e0facf186ac55.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P1 plan" completed</summary>
+<result>現在我有全部所需資訊，可以給出 review 結論。
+
+---
+
+## Verdict
+
+**PASS_WITH_CHANGES** — Plan 整體架構與 SPEC 對齊得很好，scope 控制精準（純基礎、無副作用），測試清單覆蓋面廣。但有 5 個 must-fix 點與幾個 should-fix 改進，主要集中在 (1) `WorkflowDetectorConfig` 與 SPEC §6.2 的欄位不一致、(2) `SnapshotWatcher.reload()` 的「先 update `lastJson` 再 parse」順序矛盾、(3) `JournalLineParser` constructor 簽名與 SPEC §8.1 對 `verbose` 的使用方式、(4) 缺少 `truncate` helper 來源／命名一致性檢查、(5) `cwdToClaudeProjectFilter` 屬於 SPEC R4-B1 而非 P1 路徑助手的「自然候選」需在 plan 明確標注。
+
+---
+
+## Critical issues (must fix)
+
+### C1 — `WorkflowDetectorConfig` 在 plan 漏掉 SPEC §6.2 的 `outputHandler: OutputHandler` 欄位
+
+Plan Step 3 的 `WorkflowDetectorConfig` 寫成：
+```typescript
+export interface WorkflowDetectorConfig {
+  sessionUuid: string;
+  sessionsRoot: string;
+  onNewWorkflow: (workflow: DetectedWorkflow) =&gt; void;
+  // OutputHandler import lives in src/core/detector-interfaces.ts; P3 will wire.
+}
+```
+但 SPEC §6.2（SPEC.md:343-350）明定：
+```typescript
+export interface WorkflowDetectorConfig {
+  sessionUuid: string;
+  sessionsRoot: string;
+  onNewWorkflow: (workflow: DetectedWorkflow) =&gt; void;
+  outputHandler: OutputHandler;   // ← MISSING in plan
+}
+```
+而且 §9.1 path B、§10.2 都呼叫 `this.config.outputHandler.debug(...)` / `.info(...)`，P3 一動工就會編譯錯。Plan 註解說「P3 will wire」是錯的——SPEC 已敲定該欄位，不該被 punt 到 P3。
+
+**Fix**: 直接在 P1 加入 `outputHandler: OutputHandler` 欄位並 import `OutputHandler` from `../core/detector-interfaces.ts`。這正是 plan 自己宣稱 D8「Forward-declare for stable shape」的初衷。
+
+### C2 — `SnapshotWatcher.reload()` lastJson 更新時機與 plan 文字矛盾
+
+Plan Step 6 implementation note (b) 寫：
+&gt; `JSON.parse(text)` in try/catch — JSON.parse failure calls `onError(err)`, does NOT call `onChange`
+&gt; update `lastJson = text` only after successful parse (so next valid write retries)
+
+但 SPEC §8.2 reference code（SPEC.md:688-697）是：
+```typescript
+const json = await readFile(this.config.path, 'utf8');
+if (json === this.lastJson) return;
+this.lastJson = json;                           // ← BEFORE JSON.parse
+const snapshot = JSON.parse(json) as ...;
+this.config.onChange(snapshot);
+```
+SPEC 是「先 update `lastJson`」，plan 寫「after successful parse」。兩者**行為不同**——關鍵是 plan 的 test case「Recovery after invalid JSON: Write valid JSON → onChange called」會驗證 plan 版本（正確的恢復語意），但 SPEC reference code 會**永久跳過該同樣 invalid text 的下一次相同寫入**（dedup 把無效輸入 cache 進去）。
+
+Plan 版本對使用者更友善（invalid → 不污染 dedup cache → 下次有效寫入會處理）。**建議 plan 採用「after successful parse」並在 D6 補一句註：偏離 SPEC §8.2 reference code，理由是無效 text 不應污染 dedup**。否則 P1 與 SPEC text matching review 會被質問。
+
+### C3 — `JournalLineParser` constructor 的 `verbose?: boolean` 沒有實際被使用，與 SPEC §8.1 不符
+
+Plan Step 5 寫 `new JournalLineParser({ fileMtime?: Date, verbose?: boolean } = {})`，但 SPEC §8.1（SPEC.md:609）只列 `constructor(opts: { fileMtime?: Date } = {})`——**沒有 verbose**。而且 plan 的 implementation 描述沒任何地方真的用到 `verbose`（truncation 是硬寫 100 字元 cap，不是 verbose-conditional）。
+
+**Fix**: 拿掉 constructor 的 `verbose?: boolean` 參數，**或者**保留但於 plan 中明確說明 truncation 應該在 `verbose === true` 時跳過（與 `src/utils/text.ts:truncate({ verbose })` 介面一致）。後者更實用、與既有 `ClaudeLineParser` 慣例對齊，但要更新 implementation 描述與 test cases。
+
+### C4 — Plan 提到的 `truncateLine` helper 在 codebase 不存在
+
+Plan Step 5 implementation 提到 `truncateLine(event.result, 100)`，但 `src/utils/text.ts` 只有 `truncate` 與 `truncateByLines`（兩者簽名都不是 `(str, n)`）。Plan 後面 D5 又說「inline 3-line `truncate(str, n)`」。**前後不一致**。
+
+**Fix**: 統一寫法。建議 P1 加一個 module-local helper：
+```typescript
+function truncateLine(str: string, max: number): string {
+  return str.length &lt;= max ? str : str.slice(0, max) + '…';
+}
+```
+並在 plan 中明確：「不重用 `src/utils/text.ts:truncate`（它走 head+tail+omitted-msg 路徑，與 journal 100-char cap 語意不同）」。
+
+### C5 — `parseWorkflowSnapshotFilename` 在 paths.ts 沒對應的 spec 來源，但 plan 的 ID 正則寬鬆
+
+Plan Step 2 的 `WORKFLOW_RUN_ID_REGEX = /^wf_[0-9a-f]{8}-[0-9a-f]{3}$/` 正確（與 SPEC §3.1、§7.2、§9.1.1 的 `wf_{8hex}-{3hex}` 一致）。**但 plan 沒驗證 SPEC §3.4 的 17-hex agentId 是 lowercase**——SPEC.md:83-84 與 §3.4 都隱含 lowercase hex（Claude Code 實際輸出皆為小寫），plan 的 `/^[0-9a-f]{17}$/` 正確，**但測試裡缺少「reject uppercase 17-hex」case**（reject uppercase 只在 `isValidWorkflowRunId` 出現一次）。
+
+**Fix**: 在 `tests/claude-workflow/paths.test.ts` 補一行 `isValidWorkflowAgentId('ADCA0C33EBE734C2D')` → `false` 的 case。順手在 `parseWorkflow*Filename` 的測試也補 uppercase 字串 → null。
+
+---
+
+## Plan patch (proposed edits)
+
+### Patch P1 (replace Step 3 fragment)
+```typescript
+// src/claude-workflow/types.ts
+import type { OutputHandler } from '../core/detector-interfaces.ts';
+
+export interface WorkflowDetectorConfig {
+  sessionUuid: string;
+  sessionsRoot: string;
+  onNewWorkflow: (workflow: DetectedWorkflow) =&gt; void;
+  outputHandler: OutputHandler;     // ← REQUIRED per SPEC §6.2
+}
+```
+並刪除 D8 註解「OutputHandler import lives in...; P3 will wire」。
+
+### Patch P2 (clarify Step 6 dedup-cache decision)
+在 D6 加註：
+&gt; **偏離 SPEC §8.2 reference code**：SPEC 是「先 set `lastJson`，再 `JSON.parse`」；plan 改成「parse 成功後才 set」。理由：避免「使用者誤寫一次 invalid JSON 後，相同 invalid text 被永久跳過」的污染情境。`tests/snapshot-watcher.test.ts` 的「Recovery after invalid JSON」case 驗證 plan 版本行為。
+
+### Patch P3 (Step 5 — JournalLineParser)
+- 移除 constructor 的 `verbose?: boolean` 參數（如果不打算用）— 或加上 `verbose` 在 truncation 條件中（推薦後者，與既有慣例一致；test case 對應補 verbose=true 不截斷的 case）
+- 將 `truncateLine` 改寫為 module-local helper（補 D5 後）
+- 補測試 case：`result` 為 `null` 或 `undefined` 時 formatted 不 crash（SPEC 沒約束，但實務 corner case）
+
+### Patch P4 (Step 4 — CliOptions defaults)
+Plan 目前定義
+```typescript
+withWorkflowAgents: boolean;
+workflowAttach: boolean;
+```
+皆為 **required boolean**，但 P1 不改 `src/cli/parser.ts`。**只要這個型別被 `parser.ts` 的 `parseArgs()` return statement 引用，TypeScript 就會編譯失敗**（因為現有 return 沒有這兩個欄位）。
+
+**Fix 選一**：
+- (a) 把這兩欄改成 `withWorkflowAgents?: boolean` / `workflowAttach?: boolean`（optional），P3 真的接 CLI 時再轉 required；**這是 P1 不破壞 build 的最小改動**。
+- (b) P1 同時 stub `src/cli/parser.ts`，在 `parseArgs` return 補 `withWorkflowAgents: true, workflowAttach: true, workflowPane: false`。但這就把 SPEC §11.1 的 CLI 工作部分挪到 P1，逾越 P1 scope。
+
+**推薦 (a)**——保持 P1 純粹，optional 欄位完全 backward-compatible；P3 寫 CLI parser 時改成 required 並補 defaults，配合 P3 的測試。
+
+`workflow?: string | true` 與 `workflowPane: boolean` 一樣要 optional 化（`workflowPane?: boolean`）。
+
+### Patch P5 (Step 2 — 加註 `cwdToClaudeProjectFilter` 屬 SPEC R4-B1)
+Plan 把它放進 paths.ts 是對的（SPEC.md:1128 也是這樣建議），但 plan 沒交代它的 caller 在哪。建議在 Step 2 末尾加一行：
+&gt; `cwdToClaudeProjectFilter` 在 P1 只是純函式 + 單元測試；其唯一 caller 是 P3 dispatcher 處理 `--workflow`（不帶 runId）的 cwd → fuzzy filter 轉換（SPEC §11.2 R4-B1）。
+
+並補測試 case：
+- `cwdToClaudeProjectFilter('/')` → `'-'`
+- `cwdToClaudeProjectFilter('Users/x')` → `'Users-x'`（無前綴 `/`）
+
+### Patch P6 (add new Step 2.5 — SessionListItem `project` field 已存在)
+Plan Step 4 在 `SessionListItem` 加 `logType` / `workflowRunId` / `workflowSessionUuid` / `workflowStatus`，但**沒提到 SPEC §7.2 R4-S2 要求 `project` 欄位對 workflow 來說要填 encoded project dir**。`project` 欄位本身已存在（plan 標「existing」）。
+
+P1 不需動 `project` 欄位本身，但建議在 plan 加一行註腳：
+&gt; Workflow 的 `project` 欄位由 P2 `WorkflowSessionFinder.listSessions` 透過 `deriveEncodedProjectDir(snapshotPath)` 填入（見 SPEC §7.2 R4-S2 偽碼）；P1 不涉及。
+
+---
+
+## Risks &amp; mitigations
+
+| Risk | Mitigation |
+|---|---|
+| **R1**: `node:fs.watch` 在 macOS 對 atomic rename 不穩定（CLAUDE.md gotcha §19.6） | SPEC 已明說「不額外處理」。P1 的 SnapshotWatcher 也不處理 rename；P4 / 整合測試再驗證。Plan 不需動作，但**測試裡別斷言 rename 後的行為**。Plan 目前 test cases 全是 in-place overwrite，OK。 |
+| **R2**: Plan 的 `SnapshotWatcher` 測試 timing 用 `debounceMs: 10` + `setTimeout` 等候 30ms，**CI 上仍可能 flaky** | Plan 自己提到「relaxed timing assertion」。建議改用 `await new Promise(r =&gt; setTimeout(r, debounceMs * 3 + 50))`（避免 raw `debounceMs + 30`），並在 plan tests 章節加一行「若 CI flake 則調高 slack」。 |
+| **R3**: `JournalLineParser.markLiveMode()` 把 `historyTimestamp = ''` 當哨兵；若 caller 忘記呼叫，所有 live 行會用 stale history timestamp | 已在 plan test cases 涵蓋（「Live-mode after markLiveMode()」）。**Should add**: 一個 case「在 history mode 連續 parse 多行」確保都拿到同一個 ISO timestamp。 |
+| **R4**: `WorkflowSnapshot` plan 把 `phases` / `workflowProgress` / `startTime` 改成 optional，但 SPEC §6.2（line 313-316）這幾個欄位是 required | Plan D3 已說明（「只有 `runId`、`status` 是必填」）。**這偏離 SPEC**，但 plan 的判斷是合理的（容錯未來 Claude Code 變動）。**Should add to D3**: 註明「偏離 SPEC §6.2；驗證僅限 runId + status 兩欄」。 |
+| **R5**: `WORKFLOW_AGENT_ID_REGEX` 是 17-hex；如果 Claude Code 未來改 16 或 18 hex，所有 detector / paths 都會壞 | 不可避免的 spec gamble。P1 只需確保**單一 regex source of truth**（`paths.ts`），其他模組 import；plan 已做到。 |
+| **R6**: `truncate` 在 result 為超長 object 的場景 — `JSON.stringify(event.result)` 可能 throw（cyclic ref） | 加一個 try/catch wrap：`try { return JSON.stringify(event.result); } catch { return '[object]'; }`。Plan 沒提，**加進 implementation note**。 |
+
+---
+
+## Test plan
+
+Plan 提供的 test list 覆蓋面已經很好（paths 19 cases + journal-parser 12 cases + snapshot-watcher 8 cases），建議**增補**：
+
+### `paths.test.ts` 補強
+- `isValidWorkflowAgentId('ADCA0C33EBE734C2D')` → `false`（uppercase 17-hex）
+- `cwdToClaudeProjectFilter('/')` → `'-'`
+- `cwdToClaudeProjectFilter('Users/x')` → `'Users-x'`（無前綴 `/`，相對路徑）
+- `getWorkflowAgentPath` 用 invalid agentId（短於 17 hex）— plan 沒約定要 throw 或 silently 接受。**建議 plan 明確**：路徑助手不做 ID 驗證（純字串拼接），caller 自負；測試以「接受任意字串只做拼接」驗證。
+
+### `journal-parser.test.ts` 補強
+- `result` 為 `null` → formatted 含 `null` 或 `''`（不 crash）
+- `result` 為 cyclic object → 不 crash（觸發 try/catch path，見 R6）
+- `result` 為 number `42` → `JSON.stringify(42) === '42'`，formatted 含 `: 42`
+- History mode 連續 parse 5 行 → 5 個 ParsedLine 的 `timestamp` 完全相同（驗證 historyTimestamp 不被誤清）
+- `markLiveMode()` 後 parse → timestamp ≠ history value（plan 已有，但加一個「parse 連續兩行間隔 5ms → 兩個 timestamp 不同」驗證 live mode 拿真實 wall clock）
+
+### `snapshot-watcher.test.ts` 補強
+- **`onChange` callback 拋例外** → SnapshotWatcher 不 crash 整個 process（用 try/catch 包 onChange 呼叫，或 plan 明確說「onChange must not throw — caller responsibility」）。
+- **`start()` 在路徑不存在時** → `onError` 被呼叫一次，不 throw。Plan 沒提路徑不存在情境。
+- **`onError` callback 缺省（undefined）** → invalid JSON 仍不 crash（plan 寫 `onError?:`，要有 case 驗證）。
+
+### 新增 `types.compile.test.ts`（plan 列為 optional）
+**建議升級為 required**——成本極低，但能在 P3+ 的 refactor 中早期捕捉 ParsedLine / SessionListItem optional field 被誤改 required 的 regression。
+
+---
+
+## Open questions (none — plan is unambiguous enough to proceed after patches)
+
+無關鍵阻塞性問題，但若 reviewer 想深挖：
+
+1. ~~P1 是否要 stub `src/cli/parser.ts`?~~ — 已在 Patch P4 給出 (a) 推薦答案。
+2. ~~`truncateLine` 100 chars 是否該 verbose-conditional?~~ — 已在 C3 / Patch P3 給出兩個選項，推薦 verbose-conditional。
+3. ~~`WorkflowDetectorConfig.outputHandler` 是否真該 P1 加?~~ — C1 明確要求加。
+
+---
+
+## 結論
+
+Plan 的 scope 控制非常好（5 個檔案、零整合、純單元測試）。架構決策（D1-D9）大多合理，但 **C1 / C4 是會直接造成 P3 編譯失敗或 implementation drift 的 must-fix 項目**，C2 / C3 / C5 屬於 spec-alignment 與 plan 內部一致性問題，Patch P4 是 P1 端的 TypeScript 編譯安全網。
+
+修完上述 5 個 critical issue + 落實 Patch P1/P3/P4 後即可 PASS 進入 implementation。
+
+---
+
+**Relevant absolute paths referenced in this review**:
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_17-40-18_workflow-p1.md`
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` (§3, §6, §8.1, §8.2, §11.1, §16)
+- `/Users/pc035860/code/agent-tail/src/core/types.ts`
+- `/Users/pc035860/code/agent-tail/src/core/detector-interfaces.ts`
+- `/Users/pc035860/code/agent-tail/src/core/file-watcher.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/agent.interface.ts`
+- `/Users/pc035860/code/agent-tail/src/cli/parser.ts`
+- `/Users/pc035860/code/agent-tail/src/utils/text.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude/custom-title.test.ts`</result>
+<usage><total_tokens>85179</total_tokens><tool_uses>15</tool_uses><duration_ms>161063</duration_ms></usage>
+</task-notification>
