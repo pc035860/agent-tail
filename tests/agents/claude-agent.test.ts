@@ -457,11 +457,7 @@ describe('ClaudeSessionFinder.findSubagent', () => {
 
   beforeEach(async () => {
     tempDir = await setupTempDir();
-    // 建立一個使用臨時目錄的 finder（需要 mock getBaseDir）
-    const agent = new ClaudeAgent({ verbose: false });
-    finder = agent.finder;
-    // 注入臨時目錄作為 baseDir（繞過型別檢查）
-    (finder as unknown as { baseDir: string }).baseDir = tempDir;
+    finder = new ClaudeAgent({ verbose: false, baseDir: tempDir }).finder;
   });
 
   afterAll(async () => {

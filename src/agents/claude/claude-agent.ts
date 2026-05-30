@@ -34,23 +34,12 @@ const CUSTOM_TITLE_TYPE = 'custom-title';
  * 目錄結構: ~/.claude/projects/{encoded-path}/{UUID}.jsonl
  */
 export class ClaudeSessionFinder implements SessionFinder {
-  private baseDir: string;
-  private _wf: WorkflowSessionFinder | null = null;
+  private readonly baseDir: string;
+  private readonly workflowFinder: WorkflowSessionFinder;
 
-  constructor() {
-    this.baseDir = join(homedir(), '.claude', 'projects');
-  }
-
-  /**
-   * Lazy workflow finder bound to current baseDir. Re-created when test
-   * code mutates `this.baseDir` after construction (existing test pattern
-   * uses `(finder as { baseDir: string }).baseDir = tempDir`).
-   */
-  private get workflowFinder(): WorkflowSessionFinder {
-    if (!this._wf || this._wf.getBaseDir() !== this.baseDir) {
-      this._wf = new WorkflowSessionFinder(this.baseDir);
-    }
-    return this._wf;
+  constructor(options?: { baseDir?: string }) {
+    this.baseDir = options?.baseDir ?? join(homedir(), '.claude', 'projects');
+    this.workflowFinder = new WorkflowSessionFinder(this.baseDir);
   }
 
   /**
@@ -811,8 +800,10 @@ export class ClaudeAgent implements Agent {
   readonly finder: SessionFinder;
   readonly parser: LineParser;
 
-  constructor(options: ParserOptions = { verbose: false }) {
-    this.finder = new ClaudeSessionFinder();
+  constructor(
+    options: ParserOptions & { baseDir?: string } = { verbose: false }
+  ) {
+    this.finder = new ClaudeSessionFinder({ baseDir: options.baseDir });
     this.parser = new ClaudeLineParser(options);
   }
 }

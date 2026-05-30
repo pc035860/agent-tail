@@ -6,16 +6,8 @@ import { ClaudeAgent } from '../../../src/agents/claude/claude-agent';
 import type { SessionFinder } from '../../../src/agents/agent.interface';
 import type { ClaudeSessionResult, SessionFile } from '../../../src/core/types';
 
-// IMPORTANT: Set baseDir IMMEDIATELY after constructing the agent and BEFORE
-// calling any finder method. The internal workflowFinder lazy-getter is bound
-// at first access. Mutating baseDir later still triggers re-binding (see
-// `ClaudeSessionFinder.workflowFinder` getter), but any call made between
-// construction and mutation would use the real `~/.claude/projects`.
 function makeFinder(baseDir: string): SessionFinder {
-  const agent = new ClaudeAgent({ verbose: false });
-  const finder = agent.finder;
-  (finder as unknown as { baseDir: string }).baseDir = baseDir;
-  return finder;
+  return new ClaudeAgent({ verbose: false, baseDir }).finder;
 }
 
 async function writeMainSession(
