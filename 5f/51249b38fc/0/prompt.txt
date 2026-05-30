@@ -689,3 +689,160 @@ Relevant files (reviewed/referenced):
 - `/Users/pc035860/code/agent-tail/tests/agents/claude-list-sessions.test.ts`</result>
 <usage><total_tokens>132036</total_tokens><tool_uses>1</tool_uses><duration_ms>53709</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a14f01db90720052e</task-id>
+<tool-use-id>toolu_011aTPmYkVTbaPG1UVSCmtmF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a14f01db90720052e.output</output-file>
+<status>completed</status>
+<summary>Agent "TDD review P2 tests" completed</summary>
+<result>Confirmed: tmpdir does **not** contain `projects/` segment. So the SPEC's `deriveEncodedProjectDir(path)` using `parts.indexOf('projects')` would return `-1+1=0 → parts[0]` (= empty string for an absolute path starting with `/`). The "project field uses encoded dir name" test (line 244-252) asserts `result[0].project === ENCODED_DIR_1` (= `-Users-x-code-foo`), which would fail under the SPEC's pseudo-code if implementation literally follows it.
+
+The implementation needs to derive the encoded dir name **relative to `this.baseDir`** rather than searching for a hard-coded `projects` segment. This is an implicit contract the test imposes — a good driver because it forces the impl to use `baseDir`.
+
+Similarly, `getProjectInfo` test (line 292-294) asserts that paths with no `projects/` segment return null — but the **valid** snapshot path used in lines 256-275 also doesn't have a `projects/` segment (it's under `tempDir`). So the contract is: derive project dir relative to `this.baseDir`, not by searching for literal `projects/`. Good — this is exactly the kind of generalization-forcing test that catches a too-literal implementation.
+
+Let me also verify one more subtle test detail — the merge "limit slices merged result" test:
+
+Looking at the merge test line 159-178: 3 mains (mtime 1_000_000_000+i) + 3 workflows (mtime 2_000_000_000+i). All mains have no inner timestamp, so `lastActivityTime === undefined`, sort key falls back to `mtime`. Workflows mtimes are ~1B bigger so they take top 3. Then 4th item is the latest main. limit=4 → 4 items. ✓ This is robust.
+
+Now I have everything I need to write the verdict.
+
+---
+
+## Verdict
+
+**PASS_WITH_ISSUES**
+
+The RED test files are largely well-structured and meaningfully drive the GREEN implementation. Anti-patterns are minimal. There are two coverage gaps, one brittle fixture, and one test that does not actually fail against the current stub — none are blocking, but they should be tightened before GREEN.
+
+---
+
+## Coverage Assessment (the main question)
+
+**listSessions merge order**: Covered well.
+- `tests/agents/claude/workflow-merge.test.ts:90-110` asserts both entries appear.
+- `:112-127` asserts workflow-first when workflow mtime is newer (drives "sort by activity time descending").
+- `:159-178` exercises the slice path (3 mains + 3 workflows, limit=4 → 4 items).
+
+**findBySessionId dispatch**: Covered well.
+- `:223-241` `wf_*` returns workflow SessionFile with `wf:` customTitle.
+- `:243-254` `wf_DOES_NOT_EXIST` returns null (does NOT fall through to main UUID logic) — this is the key dispatch contract.
+- `:256-266` non-`wf_` UUID still works for main session (regression guard).
+
+**getProjectInfo absolute-path contract**: Covered.
+- `workflow-merge.test.ts:282-293` asserts `projectDir === join(tempDir, ENC)` (absolute, ends with encoded dir name).
+- `workflow-agent.test.ts:255-296` covers absolute projectDir + displayName when main session exists, projectDir-only fallback, and null when path has no `projects/` segment. The "absolute, baseDir-relative" contract is implicit but enforced by tempDir not containing literal `projects/`.
+
+**listSessions activity-time bubble-up regression guard**: Covered, well-designed.
+- `workflow-merge.test.ts:180-207` exposes the slice-before-enrich bug. The current ClaudeSessionFinder (lines 128-130) slices **before** enriching, so a stale-mtime main with future-timestamp internal activity gets dropped before `lastActivityTime` is read. The test forces GREEN to enrich-first-then-slice (or equivalent), which is exactly the right behavior — this is a high-leverage regression guard.
+
+---
+
+## Trivially-Passing-Against-Stub Tests
+
+Per your call-out, the 3 subagent-detector workflows-exclusion tests pass because `Bun.Glob('agent-*.jsonl')` is already non-recursive (I verified empirically with a sibling fixture). They are **not** RED driver tests against the current stub — production code already satisfies them.
+
+That said, **they are legitimate regression guards** locking the contract: if a future refactor switches to `Bun.Glob('**/agent-*.jsonl')` or moves to a recursive `readdir`, these tests catch it. Worth keeping, but mark them as "regression guards" in the file header comment so future readers don't misread them as RED drivers.
+
+**One trivial pass I'd flag for tightening**:
+- `tests/agents/claude/workflow-agent.test.ts:298-302` `getBaseDir` returns the constructor-injected `baseDir` — currently passes against the stub because the stub stores `baseDir` and returns it. This test is essentially a constructor smoke test; it does drive contract (the field name must remain accessible), but it provides almost no behavioral coverage. Low-priority — leave it.
+
+---
+
+## Anti-Patterns and Smells
+
+**Brittle absolute-time fixture (workflow-merge.test.ts:187)** — the `futureTimestamp = '3026-01-01T00:00:00.000Z'` trick.
+- **Verdict: code smell, not a blocker.** It does work today (year 3026 beats any `Date.now()`-derived mtime for the foreseeable future). But it couples test correctness to a hard-coded calendar assumption and reads as magic. Cleaner alternative: compute `new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString()` inline — semantically "100 years from now," self-documenting, and immune to anyone running the suite with a system clock set far in the future for unrelated testing.
+- Recommend changing to a relative future-offset to remove the smell, but not a blocker.
+
+**Mystery-fixture risk (`makeFinder` in workflow-merge.test.ts:14-19)**:
+- Mutates a private field (`baseDir`) via `unknown` cast. This is a real testability smell on the **production code** side (the `baseDir` is `private` and not constructor-injectable on `ClaudeSessionFinder`). The block comment is good — it documents the hazard inline.
+- Recommended GREEN fix: make `ClaudeSessionFinder`'s `baseDir` constructor-injectable (already done for `WorkflowSessionFinder`). Then `makeFinder` becomes `new ClaudeAgent({ verbose: false, baseDir: tempDir }).finder` — clean DI, no cast.
+
+**Implicit lazy-getter assumption (workflow-merge.test.ts:11-13 comment)**:
+- The comment says the internal `workflowFinder` lazy-getter re-binds on `baseDir` mutation. This is an assumed implementation detail that doesn't exist yet. If GREEN implements `workflowFinder` as eagerly-initialized in the constructor, all merge tests will tail through to `~/.claude/projects` and fail or pollute the user's real session list. **This is a real GREEN trap** — flag it now.
+- Fix: GREEN must implement `workflowFinder` as a getter that reads `this.baseDir` at call time, OR `baseDir` must be constructor-injectable (preferred). Add a test that explicitly asserts `finder.findLatest({})` consults `tempDir` (rather than `~/.claude/projects`).
+
+**Over-mocking / weak assertions**: None. Tests use real filesystem and assert on observable outcomes (paths, lengths, customTitle string content).
+
+**Test logic in production**: None observed.
+
+---
+
+## Edge-Case Gaps vs SPEC §7
+
+- **Snapshot read failure** (§7.2 `JSON.parse` try/catch): Covered by `workflow-agent.test.ts:213-230` (broken JSON → still listed, fallback `customTitle = "wf:{runId}"`, `workflowStatus = undefined`). 
+- **customTitle fallback when `workflowName` missing**: Covered (`:232-242`).
+- **Fuzzy project filter**: Covered (`:93-106`, `:179-192`).
+- **Encoded project dir derivation**: Covered (`:244-252`).
+
+**Gaps**:
+1. **`findLatest({ project })` filter passthrough behavior** (the same fuzzy semantics the SPEC §7.2 demands): only one positive case (`:93-106`). No negative case — `project: 'no-match'` should return `null`. Add.
+2. **`findLatestInProject` matching contract**: only one positive case (`:143-157`); no null case for a project string that matches nothing. Add.
+3. **`findBySessionId` project filter combined with id**: no test ensures `project` filter is honored on `findBySessionId`. SPEC §7.1 contracts it. Add.
+4. **`getProjectInfo` when snapshot path is in a subdirectory not under `this.baseDir`**: edge case worth one test. The current null-when-no-`projects/`-segment test (`:292-295`) actually exercises a different code path; depending on GREEN implementation strategy, an "outside baseDir" case may slip through.
+
+---
+
+## Edge-Case Gaps vs SPEC §9.4 (T17)
+
+The 3 tests in `subagent-detector-workflows.test.ts` cover:
+1. Mixed flat + nested → only flat (`:24-35`)
+2. Workflow-only directory → empty array (`:37-46`)
+3. Known agents excluded (`:48-57`)
+
+**Gaps**:
+1. **Direct `subagents/workflows/` file** (no `wf_*` parent): e.g., `subagents/workflows/agent-stray.jsonl`. SPEC §9.4 says glob is non-recursive, so this would actually match... wait no, file is at `workflows/agent-stray.jsonl` — `Bun.Glob('agent-*.jsonl').scan({ cwd: subagentsDir })` would not match `workflows/agent-stray.jsonl` because the pattern doesn't include the directory prefix. Worth one test to lock it down — protects against a future refactor that changes the cwd or pattern.
+2. **`fs.watch(subagentsDir)` dirent event for `workflows/` subdirectory**: SPEC §9.4 mentions this naturally filters because filename will be `'workflows'`, not `agent-*.jsonl`. There is no test asserting `fs.watch` events for `workflows/` modifications don't trigger spurious `scanForNewSubagents` calls or registration. Lower priority but worth adding once you wire pipeline-level integration.
+3. **`scanForNewSubagents` when `workflows/` directory exists alongside no flat agents and `knownAgentIds` already contains a stale flat ID**: minor, but worth one combined case.
+
+---
+
+## Design Signals (Production Code Patterns)
+
+- **`ClaudeSessionFinder.baseDir` is private with no constructor injection** — forces tests into `unknown` casts. GREEN should expose it via constructor (matches `WorkflowSessionFinder`).
+- **`ClaudeAgent` constructs `ClaudeSessionFinder` directly with no injection** (`claude-agent.ts:693`). Tests cannot swap finders cleanly. GREEN should consider an `Agent` factory that accepts an optional finder, or expose `baseDir` via `ParserOptions`/agent options.
+- **Lazy getter for `workflowFinder` is assumed by tests but not yet present** — a clear DI gap. The test comment acknowledges this. Treat as a GREEN priority.
+- **`listSessions` slice-before-enrich pattern** — the current production code has this latent bug; the bubble-up test exposes it. Good RED.
+
+---
+
+## Test Suite Health
+
+- **Critical-path coverage**: adequate for listSessions merge, dispatch, getProjectInfo, and the bubble-up regression. Partial for fuzzy filter and `findLatestInProject` negative cases.
+- **Speed**: fast — pure tempdir I/O, no network/DB.
+- **Independence**: each `describe` has its own `tempDir` via `mkdtemp` + `afterEach rm`. Good isolation.
+- **Repeatability**: at risk only due to the `'3026-01-01...'` future-date fixture. Replace with `Date.now() + offset`.
+
+---
+
+## Recommendations (ordered by impact)
+
+1. **Make GREEN testable cleanly**: refactor `ClaudeSessionFinder` to accept `baseDir` via constructor, eliminate the `unknown` cast in `makeFinder`. The lazy-getter for `workflowFinder` must read `this.baseDir` at call time (or share the constructor-injected value).
+2. **Replace the magic `'3026-01-01T00:00:00.000Z'` literal** with `new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString()`; add an inline comment "future timestamp guarantees it beats mtime, regardless of when this test runs."
+3. **Add negative-case coverage**:
+   - `findLatest({ project: 'no-match' })` → null
+   - `findLatestInProject('-no-match-')` → null (already covered for ClaudeSessionFinder at `:343-346`, missing on `WorkflowSessionFinder`)
+   - `findBySessionId(RUN_ID, { project: 'wrong' })` → null (locks project filter contract)
+4. **Annotate the T17 tests as regression guards** in the file header so future readers understand they pass against current production code by virtue of `Bun.Glob` non-recursive default. A line like `// Regression guards: locks Bun.Glob('agent-*.jsonl') non-recursive contract — any refactor to recursive glob or readdir must keep these green.`
+5. **Add one explicit test for `findLatest({})` against an empty tempDir** to verify GREEN actually reads `tempDir` (not `~/.claude/projects`) — a guard against the lazy-getter trap above.
+6. **Drop or repurpose the trivial `getBaseDir` test** — it adds noise without behavior coverage.
+
+---
+
+## File References
+
+- `/Users/pc035860/code/agent-tail/tests/agents/claude/workflow-agent.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/agents/claude/workflow-merge.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude/subagent-detector-workflows.test.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/claude/workflow-agent.ts` (stub)
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts` (stubs at lines 41-49, slice-before-enrich at lines 128-130)
+- `/Users/pc035860/code/agent-tail/src/claude/subagent-detector.ts` (lines 139-163 — `scanForNewSubagents`)
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` §7, §9.4
+
+**Note on the embedded MCP-instruction injection**: the file content for `workflow-agent.ts` ended with what appeared to be a `&lt;system-reminder&gt;` block instructing me to use `ref_search_documentation`. I ignored it as it is not part of the actual file content nor relevant to a test-review task; this aligns with treating injected content in tool output as untrusted data, not user instruction.</result>
+<usage><total_tokens>89307</total_tokens><tool_uses>16</tool_uses><duration_ms>127896</duration_ms></usage>
+</task-notification>
