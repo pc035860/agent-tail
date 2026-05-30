@@ -1,0 +1,218 @@
+update memory
+
+---
+
+<task-notification>
+<task-id>a041f7c13e5165e3c</task-id>
+<tool-use-id>toolu_01Ww5icXgjcSSAXXoCXhzNJD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/ed870914-d922-4f75-a6b0-5871f5bd9552/tasks/a041f7c13e5165e3c.output</output-file>
+<status>completed</status>
+<summary>Agent "Search agent-tail memory" completed</summary>
+<result>根據搜尋結果，agent-tail 在 graph-memory 中有相當豐富的記錄。以下是關鍵實體和建議:
+
+**核心實體:**
+- **agent-tail:project** (24 obs) — 項目根節點，包含 27+ 架構決策和特性
+- **agent-tail:agent_pick_feature** (11 obs，最新 2026-05-17) — fzf 選擇器，包含 TTY 問題修復
+- **agent-tail:session_list_feature** (8 obs) — `--list` 與 `--summary` 命令
+- **agent-tail:file_watcher_modes** (10 obs) — FileWatcher JSONL/JSON 模式
+- **agent-tail:subagent-detector** (8 obs) — Claude/Codex 子代理偵測
+
+**已覆蓋區域:**
+- ✅ FileWatcher (單文件限制、競態條件修復)
+- ✅ fzf agent-pick (Bun.spawn TTY 競態條件已解決)
+- ✅ session_list + summary (tail-read 模式、enrichment)
+- ✅ Codex/Cursor 子代理偵測
+
+**工作流相關:**
+搜尋未找到 workflow-specific 實體（可能名稱為 `claude_workflow_*` 或 `workflow_support`）。建議搜尋 "workflow attachment snapshot workflow phases" 確認。
+
+**建議操作:**
+- **add_observations** 到現存實體（如果新發現適合已有主題）
+- **create_entities** 僅限完全新主題（workflow phases、keyboard helper 等）
+- 檢查 agent-tail:project 的 24 個 obs，可能已涵蓋大部分內容
+
+Referenced entities: agent-tail:project, agent-tail:agent_pick_feature, agent-tail:session_list_feature, agent-tail:file_watcher_modes, agent-tail:subagent-detector</result>
+<usage><total_tokens>24647</total_tokens><tool_uses>2</tool_uses><duration_ms>13436</duration_ms></usage>
+</task-notification>
+
+---
+
+run against commits starting from 8416766e8218c53f2466d20f8261855dd41f5243
+
+Add to TaskList:\
+- run simplify skill\
+- run review-loop skill (codex)\
+- run e2e regression tests with tmux pane, fix any issues found
+- run patch-claudemd skill\
+- run `/commit --auto` skill
+
+---
+
+run against changes starting from 8416766e8218c53f2466d20f8261855dd41f5243
+
+Add to TaskList:\
+- run simplify skill\
+- run review-loop skill (codex)\
+- run e2e regression tests with tmux pane, fix any issues found
+- run patch-claudemd skill\
+- run `/commit --auto` skill
+
+---
+
+<task-notification>
+<task-id>a60ca7286d90143cf</task-id>
+<tool-use-id>toolu_01TaxR11pFVFscrrXWwESFPd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/fd689d66-6ac4-4f87-85c9-8a5bb2ecca47/tasks/a60ca7286d90143cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Code reuse review" completed</summary>
+<result>So `SessionFile` lacks `logType` — the comment in summaryCommand explains this is why filename-based detection is used. That's a valid design choice.
+
+Now I have enough to compile my findings.
+
+## Findings
+
+### CRITICAL (should fix)
+None.
+
+### MEDIUM
+
+1. **`src/index.ts:1023, 1451-1453, 1671-1672, 2140` — `if (process.stdin.isTTY) process.stdin.setRawMode(false)` repeated 5+ times across cleanup paths in every interactive watch.** The new `installInteractiveKeyboard` helper centralized the *install* side, but the inverse "restore terminal" lives inline in each `cleanup`. The new helper's docstring even calls this out as caller responsibility, but doesn't provide a counterpart. Suggested fix: add `uninstallInteractiveKeyboard()` (or `restoreTTY()`) to `src/interactive/keyboard.ts` and have all 4 `cleanup` functions call it, mirroring the install/uninstall symmetry. Risk: low — the install helper is the natural home.
+
+2. **`src/index.ts:1026-1029` (workflow watch) — only one `process.on('SIGINT')` listener and no quit-key path through `cleanup` in stable form (the workflow watch's `onQuit` does call `cleanup()`, but Claude/Codex/Cursor watches don't register a separate SIGINT listener — they rely on Ctrl-C going through `dispatchKey`'s `CTRL_C` branch in raw mode).** Inconsistency: workflow watch registers both SIGINT + keyboard onQuit; the other three watches register only keyboard (and pre-existing SIGINT handlers elsewhere). Not strictly a reuse issue, but the new diff added the workflow path differently from the three existing patterns it's modeled after. LOW-MEDIUM — verify the workflow path's double-cleanup risk (cleanup() runs both via SIGINT and via Ctrl-C through dispatchKey → onQuit — but actually in raw mode SIGINT is not delivered, so only one fires). Probably fine; doc the asymmetry or drop the workflow `process.on('SIGINT')`.
+
+### LOW / FYI
+
+3. **`src/claude-workflow/summary.ts:46-51` — hand-rolled `stat().mtime` with try/catch fallback to `undefined`.** No existing helper for "safe mtime read". Could be DRY'd if more callers appear, but currently a one-off. Skip.
+
+4. **`src/index.ts:144-156` — workflow summary detour uses dynamic `await import()` for `parseWorkflowSnapshotFilename` and `formatWorkflowSummary`** while `formatSummary` from `./list/summary.ts` is also dynamically imported (line 110). Consistent with the existing pattern in `summaryCommand`. Skip.
+
+5. **`src/list/session-lister.ts:73-78` `hiddenFullId()` — workflow branch uses `item.workflowRunId` directly without calling `isValidWorkflowRunId()`.** The producer side (`WorkflowSessionFinder.listSessions`) presumably already validated, so the consumer trusting it is fine. FYI only.
+
+6. **`src/interactive/keyboard.ts:21-23` — hardcoded escape sequences `'\t'`, `'\x1b[Z'`, `'\x03'` as module-private constants.** No existing constants file for this — fine to keep local. The diff actually has `const CTRL_C = '';` literally (a raw 0x03 byte in source) which I'd recommend changing to `'\x03'` for grep-ability, but that's pre-existing style elsewhere. LOW.
+
+## Confirmed clean
+
+- **`parseWorkflowSnapshotFilename(basename(...))` in summary.ts:32 and index.ts:146** — both correctly reuse the existing helper from `src/claude-workflow/paths.ts`. No duplication.
+- **`deriveWorkflowDirs` / `getWorkflowJournalPath`** — `summary.ts` correctly delegates to the existing `paths.ts` helpers.
+- **`extractFullId` reuse in `hiddenFullId()`** — proper delegation.
+- **`formatSummary` reuse in `formatWorkflowSummary`** — correctly composed; no duplicated head/tail logic.
+- **`JournalLineParser` reuse** — workflow summary uses the existing parser with `fileMtime` option, no reimplementation.
+- **`installInteractiveKeyboard` extraction** — the three identical raw-mode/data-handler blocks in `startClaudeInteractiveWatch` / `startCodexInteractiveWatch` / `startCursorInteractiveWatch` (and the brand-new workflow one) are now consolidated. Big win.
+- **`dispatchKey` pure function** — testable, no side effects, good separation.
+- **`ClaudeSessionFinder` constructor injection of `baseDir`** — `workflowFinder` is now built once in constructor instead of lazy-rebuilt. No leftover lazy getter remnants.
+- **`WorkflowAttachment.start()` reorder + rollback** — `addSession` before `watcher.start()` plus `markSessionDone` on failure properly uses existing `SessionHandler` API (no new sentinel mechanisms invented).
+- **fzf `--with-nth 1..5` and `{6}` placeholder** — consistent column index across `parseSelection`, preview, and ctrl-y bind. No magic-number drift.</result>
+<usage><total_tokens>66418</total_tokens><tool_uses>18</tool_uses><duration_ms>89264</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3deb31124e0175bd</task-id>
+<tool-use-id>toolu_01QMobnjSHuQ4rHtYV6Pen8J</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/fd689d66-6ac4-4f87-85c9-8a5bb2ecca47/tasks/a3deb31124e0175bd.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review" completed</summary>
+<result>Tiny module, pure functions, no side effects. The dynamic-import overhead is real but small. LOW severity.
+
+Now I have enough to write the report.
+
+## Findings
+
+### CRITICAL (should fix)
+None.
+
+### MEDIUM
+None — the diff is conservative and most concerns turn out clean.
+
+### LOW / FYI
+
+1. **`formatWorkflowSummary` does `exists()` + `stat()` + `formatSummary` (which does `Bun.file(...).size`) — three sequential metadata calls on the same file** (`src/claude-workflow/summary.ts:39-55`). Strictly speaking `exists()` is redundant: `stat()` already throws `ENOENT` for a missing file, and you already have a try/catch around it. Collapsing to one `stat()` saves one filesystem round-trip per `agent-pick` preview keystroke. The "(workflow journal not yet available)" branch can come from `catch (err) { if (err.code === 'ENOENT') return [chalk.gray(...)] }`. Minor, but it's exactly the TOCTOU-shaped anti-pattern the task asked about. Note: `formatSummary` then does its own `Bun.file().size` (4th metadata op), which we can't easily eliminate without refactor.
+
+2. **Unconditional dynamic `await import('./claude-workflow/paths.ts')` in `summaryCommand`** (`src/index.ts:144-145`). Runs on every `--summary` invocation just to access `parseWorkflowSnapshotFilename` for a filename-regex check. `agent-pick`'s fzf preview spawns a fresh `agent-tail` process per highlighted row, so this cold-import cost is paid per keystroke, not once. The module is 109 lines of pure functions with no side effects — promoting `parseWorkflowSnapshotFilename` to a static top-level import would remove the per-preview load. (The inner `./claude-workflow/summary.ts` import is correctly gated behind the `wf_*` check and is fine.)
+
+3. **`WorkflowAttachment.attachAgent` calls `updateUI()` before `watcher.start()` and again indirectly via `markSessionDone` on failure — but not via a second `updateUI()` on the success path** (`src/claude-workflow/watch-builder.ts:114-115`). The pre-start `updateUI()` paints a "live" tab; the failure rollback calls `markSessionDone(id)` but no explicit `updateUI()` after, so the tab can briefly remain mislabeled until the 1-second status poller fires. Cosmetic; no leak, no perf hit.
+
+### Confirmed clean
+
+- **`installInteractiveKeyboard` listener leak** — refuted. Each interactive watch (`startClaudeMultiWatch`, `startCodexInteractiveWatch`, `startCursorInteractiveWatch`, `startClaudeWorkflowInteractiveWatch`) calls it exactly once at function-bottom. None of the `switchToSession` paths re-install it. Every `onQuit`/SIGINT path ends with `process.exit(0)`, so re-entry into install is impossible. The single `process.stdin.on('data', ...)` registration is process-lifetime, which is correct.
+- **`dispatchKey`** — O(1), three string compares; trivially fast per keystroke.
+- **`formatSessionList`** — pure CPU, one pass; `formatNotes` and `hiddenFullId` are simple branches; no IO. Fine for the typical N≤100 list.
+- **`updateStatusLine` no-op churn** — `display-controller.ts:197-200` already has a `currentStatusLine` same-content guard that short-circuits the 1Hz workflow poller when nothing changed.
+- **`SessionManager.addSession` re-ordering** — idempotent (`existing` short-circuit at `src/core/session-manager.ts:62-65`), so the new pre-`watcher.start` registration in `attachAgent` is safe to retry/replay.
+- **`ClaudeSessionFinder` constructor injection** — replaces the previous lazy getter with eager `new WorkflowSessionFinder(baseDir)` in the constructor. One extra allocation per `ClaudeSessionFinder` regardless of whether workflow is used, but `ClaudeSessionFinder` is instantiated O(1) times per CLI run. Net neutral.
+- **`formatSummary` head/tail chunk reads** — unchanged; still `Promise.all` for large files, single read for small.
+
+Files referenced: `/Users/pc035860/code/agent-tail/src/claude-workflow/summary.ts`, `/Users/pc035860/code/agent-tail/src/index.ts`, `/Users/pc035860/code/agent-tail/src/interactive/keyboard.ts`, `/Users/pc035860/code/agent-tail/src/claude-workflow/watch-builder.ts`, `/Users/pc035860/code/agent-tail/src/list/session-lister.ts`, `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts`, `/Users/pc035860/code/agent-tail/src/interactive/display-controller.ts`.</result>
+<usage><total_tokens>66552</total_tokens><tool_uses>24</tool_uses><duration_ms>124869</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4d7a089e20ee1605</task-id>
+<tool-use-id>toolu_01CZYNUec82GPf98yNPXNaY7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/fd689d66-6ac4-4f87-85c9-8a5bb2ecca47/tasks/a4d7a089e20ee1605.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review" completed</summary>
+<result>Near-duplicate but compact enough. Skip.
+
+Now I have enough to write the report.
+
+## Findings
+
+### CRITICAL (should fix)
+None. The diff is mostly clean refactoring.
+
+### MEDIUM
+
+1. **Redundant dynamic import — `parseWorkflowSnapshotFilename` already statically imported** (`src/index.ts:144-145`).
+   `parseWorkflowSnapshotFilename` is imported at the top of the file (line 79). The dynamic `await import('./claude-workflow/paths.ts')` inside `summaryCommand` is dead weight — just call the already-imported binding directly. (The neighbouring `formatWorkflowSummary` dynamic import at line 147-148 is fine since it isn't imported statically; converting it to a top-level import would also be fine.)
+   Fix: drop the `await import` line and use the top-level binding.
+
+2. **Copy-paste across 4 `installInteractiveKeyboard` callers** (`src/index.ts:1031, 1383, 1612, 2086`).
+   All four call sites pass an identical handler shape:
+   ```ts
+   { onNext: () =&gt; sessionManager.switchNext(),
+     onPrev: () =&gt; sessionManager.switchPrev(),
+     onQuit: () =&gt; { cleanup(); process.exit(0); } }
+   ```
+   The "handlers bag" commit message argues the bag is needed because `sessionManager` is `let`-bound and assigned later. That's true, but the *exit* shape is invariant. Concrete fix: add an `installSessionManagerKeyboard(getSessionManager, onCleanupExit)` thin wrapper (or accept `{ getSessionManager: () =&gt; SessionManager, cleanup: () =&gt; void }`) in `src/interactive/keyboard.ts`. Each watch becomes one line, the TDZ thunk note in 3 places stops being load-bearing comment. Workflow watch (const-bound) passes `() =&gt; sessionManager`.
+
+### LOW / FYI
+
+3. **`formatNotes` defensive branch for `workflowSessionUuid` is dead** (`src/list/session-lister.ts:55-63`).
+   `workflowSessionUuid` is always populated by `WorkflowSessionFinder.listSessions` (`workflow-agent.ts:112` — `w.sessionUuid` is non-optional in the workflow descriptor). The `uuid8 ? \`in session ${uuid8}\` : ''` and the `inSession ? ... : item.workflowStatus` ternary cases never fire. Fix: simplify to `return item.workflowStatus ? \`${item.workflowStatus} · in session ${item.workflowSessionUuid!.slice(0,8)}\` : \`in session ${item.workflowSessionUuid!.slice(0,8)}\``. Not urgent — defensive coding is OK here; flag only because the docstring claims status-segment-omitted-when-absent which mismatches dead branches.
+
+4. **Stringly-typed `'wf'`/`'sess'` &amp; label prefix `'[wf:'`** (`src/list/session-lister.ts:96-97`, `src/claude-workflow/watch-builder.ts:50-56`, `src/index.ts:972, 987, 1003, 1092, 1122`).
+   The strings `'wf'`, `'sess'`, `'[wf:{runId}:journal]'`, `'[wf:{shortId}]'` are duplicated across 5+ files. The `makeWorkflowJournalLabel`/`makeWorkflowAgentLabel` factories in `watch-builder.ts` already centralize *some* of this; the `'wf'`/`'sess'` TYPE column literals are not centralized. Concrete fix: export `const LIST_TYPE_MAIN = 'sess'` and `LIST_TYPE_WORKFLOW = 'wf'` from `src/core/types.ts` (next to the existing `logType` union) and import in `session-lister.ts`. Note: the `logType` union on `SessionListItem` is `'session' | 'workflow'` while the TYPE column emits `'sess' | 'wf'` — those two vocabularies have already drifted; a single const map would prevent future drift.
+
+5. **`hiddenFullId` workflow branch could fall through** (`src/list/session-lister.ts:73-76`).
+   `workflowRunId` is always populated for workflow rows (workflow-agent.ts:111), so the fallback to `extractFullId(item.path)` for workflow rows is dead. Same comment as #3 — minor; defensive code is acceptable but the comment ("workflow: full runId") is then weakened.
+
+6. **`ClaudeSessionFinder.getBaseDir()` is now test-only** (`src/agents/claude/claude-agent.ts:78-80`).
+   The lazy `workflowFinder` rebuild was the only production caller of `getBaseDir`; that path is gone after the constructor-injection refactor. Now only 5 test assertions use it. Skip if you keep it as a public accessor; consider folding the test into using `(finder as { baseDir }).baseDir` if you want to mark it private.
+
+## Confirmed clean
+- `src/interactive/keyboard.ts`: `dispatchKey` / `installInteractiveKeyboard` split is sound; constants `TAB`/`SHIFT_TAB`/`CTRL_C` correctly extracted; `process.stdin.isTTY` no-op guard matches all 4 watch's cleanup contracts.
+- `src/claude-workflow/summary.ts`: `formatWorkflowSummary` derivation chain (`parseWorkflowSnapshotFilename` → `deriveWorkflowDirs` → `getWorkflowJournalPath`) cleanly reuses the existing path helpers; missing-journal fallback message is appropriate.
+- `WorkflowAttachment.attachAgent` ordering fix (`src/claude-workflow/watch-builder.ts:107-149`): rollback path correctly mirrors register-before-start by calling `markSessionDone` on failure; comment block accurately describes the FileWatcher.start() initial-dump race.
+- `ClaudeSessionFinder` constructor injection (`src/agents/claude/claude-agent.ts:36-43`): `readonly baseDir` + `readonly workflowFinder` is correct; lazy-getter removal eliminated the test-mutation back door cleanly.
+- `formatSessionList` 6-col contract aligns with `buildFzfArgs` (`{6}` substitutions, `--with-nth 1..5`) and `parseSelection` (col 6 read).
+- `WorkflowAttachment.stopped` flag + `autoStopScheduled` latch — both correctly `readonly`-able only if `stop()` no longer mutates them; they are state, current `private` is correct.</result>
+<usage><total_tokens>121496</total_tokens><tool_uses>31</tool_uses><duration_ms>172787</duration_ms></usage>
+</task-notification>
+
+---
+
+workflow agent-tail 結果 -i 下的 status line 非常長
+可以把下面這行變成第二行嗎？(或是第一行，總之就是切分成兩行)
+```
+[wf:briefshare-impl] | Phase 6/6: Finalize | agents 8 | completed •
+```
+
+整理一下，跟我討論下一步動作
+
+---
+
+開始 implement
