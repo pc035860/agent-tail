@@ -1,0 +1,1125 @@
+@specs/workflow-support/SPEC.md
+
+---
+
+<task-notification>
+<task-id>a4a8e0facf186ac55</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a4a8e0facf186ac55.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P1 plan" completed</summary>
+<result>現在我有全部所需資訊，可以給出 review 結論。
+
+---
+
+## Verdict
+
+**PASS_WITH_CHANGES** — Plan 整體架構與 SPEC 對齊得很好，scope 控制精準（純基礎、無副作用），測試清單覆蓋面廣。但有 5 個 must-fix 點與幾個 should-fix 改進，主要集中在 (1) `WorkflowDetectorConfig` 與 SPEC §6.2 的欄位不一致、(2) `SnapshotWatcher.reload()` 的「先 update `lastJson` 再 parse」順序矛盾、(3) `JournalLineParser` constructor 簽名與 SPEC §8.1 對 `verbose` 的使用方式、(4) 缺少 `truncate` helper 來源／命名一致性檢查、(5) `cwdToClaudeProjectFilter` 屬於 SPEC R4-B1 而非 P1 路徑助手的「自然候選」需在 plan 明確標注。
+
+---
+
+## Critical issues (must fix)
+
+### C1 — `WorkflowDetectorConfig` 在 plan 漏掉 SPEC §6.2 的 `outputHandler: OutputHandler` 欄位
+
+Plan Step 3 的 `WorkflowDetectorConfig` 寫成：
+```typescript
+export interface WorkflowDetectorConfig {
+  sessionUuid: string;
+  sessionsRoot: string;
+  onNewWorkflow: (workflow: DetectedWorkflow) =&gt; void;
+  // OutputHandler import lives in src/core/detector-interfaces.ts; P3 will wire.
+}
+```
+但 SPEC §6.2（SPEC.md:343-350）明定：
+```typescript
+export interface WorkflowDetectorConfig {
+  sessionUuid: string;
+  sessionsRoot: string;
+  onNewWorkflow: (workflow: DetectedWorkflow) =&gt; void;
+  outputHandler: OutputHandler;   // ← MISSING in plan
+}
+```
+而且 §9.1 path B、§10.2 都呼叫 `this.config.outputHandler.debug(...)` / `.info(...)`，P3 一動工就會編譯錯。Plan 註解說「P3 will wire」是錯的——SPEC 已敲定該欄位，不該被 punt 到 P3。
+
+**Fix**: 直接在 P1 加入 `outputHandler: OutputHandler` 欄位並 import `OutputHandler` from `../core/detector-interfaces.ts`。這正是 plan 自己宣稱 D8「Forward-declare for stable shape」的初衷。
+
+### C2 — `SnapshotWatcher.reload()` lastJson 更新時機與 plan 文字矛盾
+
+Plan Step 6 implementation note (b) 寫：
+&gt; `JSON.parse(text)` in try/catch — JSON.parse failure calls `onError(err)`, does NOT call `onChange`
+&gt; update `lastJson = text` only after successful parse (so next valid write retries)
+
+但 SPEC §8.2 reference code（SPEC.md:688-697）是：
+```typescript
+const json = await readFile(this.config.path, 'utf8');
+if (json === this.lastJson) return;
+this.lastJson = json;                           // ← BEFORE JSON.parse
+const snapshot = JSON.parse(json) as ...;
+this.config.onChange(snapshot);
+```
+SPEC 是「先 update `lastJson`」，plan 寫「after successful parse」。兩者**行為不同**——關鍵是 plan 的 test case「Recovery after invalid JSON: Write valid JSON → onChange called」會驗證 plan 版本（正確的恢復語意），但 SPEC reference code 會**永久跳過該同樣 invalid text 的下一次相同寫入**（dedup 把無效輸入 cache 進去）。
+
+Plan 版本對使用者更友善（invalid → 不污染 dedup cache → 下次有效寫入會處理）。**建議 plan 採用「after successful parse」並在 D6 補一句註：偏離 SPEC §8.2 reference code，理由是無效 text 不應污染 dedup**。否則 P1 與 SPEC text matching review 會被質問。
+
+### C3 — `JournalLineParser` constructor 的 `verbose?: boolean` 沒有實際被使用，與 SPEC §8.1 不符
+
+Plan Step 5 寫 `new JournalLineParser({ fileMtime?: Date, verbose?: boolean } = {})`，但 SPEC §8.1（SPEC.md:609）只列 `constructor(opts: { fileMtime?: Date } = {})`——**沒有 verbose**。而且 plan 的 implementation 描述沒任何地方真的用到 `verbose`（truncation 是硬寫 100 字元 cap，不是 verbose-conditional）。
+
+**Fix**: 拿掉 constructor 的 `verbose?: boolean` 參數，**或者**保留但於 plan 中明確說明 truncation 應該在 `verbose === true` 時跳過（與 `src/utils/text.ts:truncate({ verbose })` 介面一致）。後者更實用、與既有 `ClaudeLineParser` 慣例對齊，但要更新 implementation 描述與 test cases。
+
+### C4 — Plan 提到的 `truncateLine` helper 在 codebase 不存在
+
+Plan Step 5 implementation 提到 `truncateLine(event.result, 100)`，但 `src/utils/text.ts` 只有 `truncate` 與 `truncateByLines`（兩者簽名都不是 `(str, n)`）。Plan 後面 D5 又說「inline 3-line `truncate(str, n)`」。**前後不一致**。
+
+**Fix**: 統一寫法。建議 P1 加一個 module-local helper：
+```typescript
+function truncateLine(str: string, max: number): string {
+  return str.length &lt;= max ? str : str.slice(0, max) + '…';
+}
+```
+並在 plan 中明確：「不重用 `src/utils/text.ts:truncate`（它走 head+tail+omitted-msg 路徑，與 journal 100-char cap 語意不同）」。
+
+### C5 — `parseWorkflowSnapshotFilename` 在 paths.ts 沒對應的 spec 來源，但 plan 的 ID 正則寬鬆
+
+Plan Step 2 的 `WORKFLOW_RUN_ID_REGEX = /^wf_[0-9a-f]{8}-[0-9a-f]{3}$/` 正確（與 SPEC §3.1、§7.2、§9.1.1 的 `wf_{8hex}-{3hex}` 一致）。**但 plan 沒驗證 SPEC §3.4 的 17-hex agentId 是 lowercase**——SPEC.md:83-84 與 §3.4 都隱含 lowercase hex（Claude Code 實際輸出皆為小寫），plan 的 `/^[0-9a-f]{17}$/` 正確，**但測試裡缺少「reject uppercase 17-hex」case**（reject uppercase 只在 `isValidWorkflowRunId` 出現一次）。
+
+**Fix**: 在 `tests/claude-workflow/paths.test.ts` 補一行 `isValidWorkflowAgentId('ADCA0C33EBE734C2D')` → `false` 的 case。順手在 `parseWorkflow*Filename` 的測試也補 uppercase 字串 → null。
+
+---
+
+## Plan patch (proposed edits)
+
+### Patch P1 (replace Step 3 fragment)
+```typescript
+// src/claude-workflow/types.ts
+import type { OutputHandler } from '../core/detector-interfaces.ts';
+
+export interface WorkflowDetectorConfig {
+  sessionUuid: string;
+  sessionsRoot: string;
+  onNewWorkflow: (workflow: DetectedWorkflow) =&gt; void;
+  outputHandler: OutputHandler;     // ← REQUIRED per SPEC §6.2
+}
+```
+並刪除 D8 註解「OutputHandler import lives in...; P3 will wire」。
+
+### Patch P2 (clarify Step 6 dedup-cache decision)
+在 D6 加註：
+&gt; **偏離 SPEC §8.2 reference code**：SPEC 是「先 set `lastJson`，再 `JSON.parse`」；plan 改成「parse 成功後才 set」。理由：避免「使用者誤寫一次 invalid JSON 後，相同 invalid text 被永久跳過」的污染情境。`tests/snapshot-watcher.test.ts` 的「Recovery after invalid JSON」case 驗證 plan 版本行為。
+
+### Patch P3 (Step 5 — JournalLineParser)
+- 移除 constructor 的 `verbose?: boolean` 參數（如果不打算用）— 或加上 `verbose` 在 truncation 條件中（推薦後者，與既有慣例一致；test case 對應補 verbose=true 不截斷的 case）
+- 將 `truncateLine` 改寫為 module-local helper（補 D5 後）
+- 補測試 case：`result` 為 `null` 或 `undefined` 時 formatted 不 crash（SPEC 沒約束，但實務 corner case）
+
+### Patch P4 (Step 4 — CliOptions defaults)
+Plan 目前定義
+```typescript
+withWorkflowAgents: boolean;
+workflowAttach: boolean;
+```
+皆為 **required boolean**，但 P1 不改 `src/cli/parser.ts`。**只要這個型別被 `parser.ts` 的 `parseArgs()` return statement 引用，TypeScript 就會編譯失敗**（因為現有 return 沒有這兩個欄位）。
+
+**Fix 選一**：
+- (a) 把這兩欄改成 `withWorkflowAgents?: boolean` / `workflowAttach?: boolean`（optional），P3 真的接 CLI 時再轉 required；**這是 P1 不破壞 build 的最小改動**。
+- (b) P1 同時 stub `src/cli/parser.ts`，在 `parseArgs` return 補 `withWorkflowAgents: true, workflowAttach: true, workflowPane: false`。但這就把 SPEC §11.1 的 CLI 工作部分挪到 P1，逾越 P1 scope。
+
+**推薦 (a)**——保持 P1 純粹，optional 欄位完全 backward-compatible；P3 寫 CLI parser 時改成 required 並補 defaults，配合 P3 的測試。
+
+`workflow?: string | true` 與 `workflowPane: boolean` 一樣要 optional 化（`workflowPane?: boolean`）。
+
+### Patch P5 (Step 2 — 加註 `cwdToClaudeProjectFilter` 屬 SPEC R4-B1)
+Plan 把它放進 paths.ts 是對的（SPEC.md:1128 也是這樣建議），但 plan 沒交代它的 caller 在哪。建議在 Step 2 末尾加一行：
+&gt; `cwdToClaudeProjectFilter` 在 P1 只是純函式 + 單元測試；其唯一 caller 是 P3 dispatcher 處理 `--workflow`（不帶 runId）的 cwd → fuzzy filter 轉換（SPEC §11.2 R4-B1）。
+
+並補測試 case：
+- `cwdToClaudeProjectFilter('/')` → `'-'`
+- `cwdToClaudeProjectFilter('Users/x')` → `'Users-x'`（無前綴 `/`）
+
+### Patch P6 (add new Step 2.5 — SessionListItem `project` field 已存在)
+Plan Step 4 在 `SessionListItem` 加 `logType` / `workflowRunId` / `workflowSessionUuid` / `workflowStatus`，但**沒提到 SPEC §7.2 R4-S2 要求 `project` 欄位對 workflow 來說要填 encoded project dir**。`project` 欄位本身已存在（plan 標「existing」）。
+
+P1 不需動 `project` 欄位本身，但建議在 plan 加一行註腳：
+&gt; Workflow 的 `project` 欄位由 P2 `WorkflowSessionFinder.listSessions` 透過 `deriveEncodedProjectDir(snapshotPath)` 填入（見 SPEC §7.2 R4-S2 偽碼）；P1 不涉及。
+
+---
+
+## Risks &amp; mitigations
+
+| Risk | Mitigation |
+|---|---|
+| **R1**: `node:fs.watch` 在 macOS 對 atomic rename 不穩定（CLAUDE.md gotcha §19.6） | SPEC 已明說「不額外處理」。P1 的 SnapshotWatcher 也不處理 rename；P4 / 整合測試再驗證。Plan 不需動作，但**測試裡別斷言 rename 後的行為**。Plan 目前 test cases 全是 in-place overwrite，OK。 |
+| **R2**: Plan 的 `SnapshotWatcher` 測試 timing 用 `debounceMs: 10` + `setTimeout` 等候 30ms，**CI 上仍可能 flaky** | Plan 自己提到「relaxed timing assertion」。建議改用 `await new Promise(r =&gt; setTimeout(r, debounceMs * 3 + 50))`（避免 raw `debounceMs + 30`），並在 plan tests 章節加一行「若 CI flake 則調高 slack」。 |
+| **R3**: `JournalLineParser.markLiveMode()` 把 `historyTimestamp = ''` 當哨兵；若 caller 忘記呼叫，所有 live 行會用 stale history timestamp | 已在 plan test cases 涵蓋（「Live-mode after markLiveMode()」）。**Should add**: 一個 case「在 history mode 連續 parse 多行」確保都拿到同一個 ISO timestamp。 |
+| **R4**: `WorkflowSnapshot` plan 把 `phases` / `workflowProgress` / `startTime` 改成 optional，但 SPEC §6.2（line 313-316）這幾個欄位是 required | Plan D3 已說明（「只有 `runId`、`status` 是必填」）。**這偏離 SPEC**，但 plan 的判斷是合理的（容錯未來 Claude Code 變動）。**Should add to D3**: 註明「偏離 SPEC §6.2；驗證僅限 runId + status 兩欄」。 |
+| **R5**: `WORKFLOW_AGENT_ID_REGEX` 是 17-hex；如果 Claude Code 未來改 16 或 18 hex，所有 detector / paths 都會壞 | 不可避免的 spec gamble。P1 只需確保**單一 regex source of truth**（`paths.ts`），其他模組 import；plan 已做到。 |
+| **R6**: `truncate` 在 result 為超長 object 的場景 — `JSON.stringify(event.result)` 可能 throw（cyclic ref） | 加一個 try/catch wrap：`try { return JSON.stringify(event.result); } catch { return '[object]'; }`。Plan 沒提，**加進 implementation note**。 |
+
+---
+
+## Test plan
+
+Plan 提供的 test list 覆蓋面已經很好（paths 19 cases + journal-parser 12 cases + snapshot-watcher 8 cases），建議**增補**：
+
+### `paths.test.ts` 補強
+- `isValidWorkflowAgentId('ADCA0C33EBE734C2D')` → `false`（uppercase 17-hex）
+- `cwdToClaudeProjectFilter('/')` → `'-'`
+- `cwdToClaudeProjectFilter('Users/x')` → `'Users-x'`（無前綴 `/`，相對路徑）
+- `getWorkflowAgentPath` 用 invalid agentId（短於 17 hex）— plan 沒約定要 throw 或 silently 接受。**建議 plan 明確**：路徑助手不做 ID 驗證（純字串拼接），caller 自負；測試以「接受任意字串只做拼接」驗證。
+
+### `journal-parser.test.ts` 補強
+- `result` 為 `null` → formatted 含 `null` 或 `''`（不 crash）
+- `result` 為 cyclic object → 不 crash（觸發 try/catch path，見 R6）
+- `result` 為 number `42` → `JSON.stringify(42) === '42'`，formatted 含 `: 42`
+- History mode 連續 parse 5 行 → 5 個 ParsedLine 的 `timestamp` 完全相同（驗證 historyTimestamp 不被誤清）
+- `markLiveMode()` 後 parse → timestamp ≠ history value（plan 已有，但加一個「parse 連續兩行間隔 5ms → 兩個 timestamp 不同」驗證 live mode 拿真實 wall clock）
+
+### `snapshot-watcher.test.ts` 補強
+- **`onChange` callback 拋例外** → SnapshotWatcher 不 crash 整個 process（用 try/catch 包 onChange 呼叫，或 plan 明確說「onChange must not throw — caller responsibility」）。
+- **`start()` 在路徑不存在時** → `onError` 被呼叫一次，不 throw。Plan 沒提路徑不存在情境。
+- **`onError` callback 缺省（undefined）** → invalid JSON 仍不 crash（plan 寫 `onError?:`，要有 case 驗證）。
+
+### 新增 `types.compile.test.ts`（plan 列為 optional）
+**建議升級為 required**——成本極低，但能在 P3+ 的 refactor 中早期捕捉 ParsedLine / SessionListItem optional field 被誤改 required 的 regression。
+
+---
+
+## Open questions (none — plan is unambiguous enough to proceed after patches)
+
+無關鍵阻塞性問題，但若 reviewer 想深挖：
+
+1. ~~P1 是否要 stub `src/cli/parser.ts`?~~ — 已在 Patch P4 給出 (a) 推薦答案。
+2. ~~`truncateLine` 100 chars 是否該 verbose-conditional?~~ — 已在 C3 / Patch P3 給出兩個選項，推薦 verbose-conditional。
+3. ~~`WorkflowDetectorConfig.outputHandler` 是否真該 P1 加?~~ — C1 明確要求加。
+
+---
+
+## 結論
+
+Plan 的 scope 控制非常好（5 個檔案、零整合、純單元測試）。架構決策（D1-D9）大多合理，但 **C1 / C4 是會直接造成 P3 編譯失敗或 implementation drift 的 must-fix 項目**，C2 / C3 / C5 屬於 spec-alignment 與 plan 內部一致性問題，Patch P4 是 P1 端的 TypeScript 編譯安全網。
+
+修完上述 5 個 critical issue + 落實 Patch P1/P3/P4 後即可 PASS 進入 implementation。
+
+---
+
+**Relevant absolute paths referenced in this review**:
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_17-40-18_workflow-p1.md`
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` (§3, §6, §8.1, §8.2, §11.1, §16)
+- `/Users/pc035860/code/agent-tail/src/core/types.ts`
+- `/Users/pc035860/code/agent-tail/src/core/detector-interfaces.ts`
+- `/Users/pc035860/code/agent-tail/src/core/file-watcher.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/agent.interface.ts`
+- `/Users/pc035860/code/agent-tail/src/cli/parser.ts`
+- `/Users/pc035860/code/agent-tail/src/utils/text.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude/custom-title.test.ts`</result>
+<usage><total_tokens>85179</total_tokens><tool_uses>15</tool_uses><duration_ms>161063</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a17bbf07ceab42946</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a17bbf07ceab42946.output</output-file>
+<status>completed</status>
+<summary>Agent "TDD review of P1 tests" completed</summary>
+<result>Now I have a complete picture. Let me deliver the verdict.
+
+---
+
+## Verdict
+**PASS_WITH_ISSUES**
+
+The RED phase is genuinely meaningful — the count of failures (38) tracks the count of "positive behavior" tests, and the planned implementation in the plan file directly drives every assertion. However, there are several **trivially-passing-against-stub** tests that produce false confidence in the GREEN transition, plus two minor SPEC-traceability gaps.
+
+---
+
+## Blocking Issues
+None — nothing here will produce false-positive GREEN. All trivially-passing tests have a sibling "accepts" test in the same describe block that *does* exercise the positive path, so a stub-shaped implementation can't fully pass.
+
+---
+
+## Warnings (should fix)
+
+### W1 — Trivially-passing "rejects" tests pair `expect(...).toBe(false)` / `.toBeNull()` with stubs that return `false` / `null`
+- `paths.test.ts:115,119,123,127,128` — every `isValidWorkflowRunId('...')).toBe(false)` line currently passes only because the stub returns `false`. The discriminator is **only** the single positive case at line 111.
+- `paths.test.ts:138,142,146,150` — same shape for `isValidWorkflowAgentId`.
+- `paths.test.ts:162,166,170,183,188,193` — every `parseWorkflow*Filename(...)).toBeNull()` passes trivially against stubs.
+- `journal-parser.test.ts:82–129` — six `parse(...)).toBeNull()` tolerance tests pass trivially.
+- **Why it matters**: When a GREEN candidate implementation lands, these tests do not differentiate between "correctly rejects bad input" and "incorrectly rejects everything". A naive impl that always returns `null` from `parseWorkflowAgentFilename` would pass 6/7 tests in that block.
+- **Rationale**: The positive cases (`paths.test.ts:111,134,156,176`; `journal-parser.test.ts:21–30`) still anchor the regex shape, so the situation isn't catastrophic, but the asymmetry is real (positive : negative = ~1:4 for several helpers).
+- **Recommendation**: For each pair, also assert one **boundary positive** that the stub would still fail (e.g., for `isValidWorkflowRunId`, add `wf_00000000-000` and `wf_ffffffff-fff` to lock both ends of the hex range; for `parseWorkflowSnapshotFilename`, assert two distinct runIds parse correctly so the positive isn't a single hardcoded constant). This buys mutation resistance for free.
+
+### W2 — `cwdToClaudeProjectFilter('')` returns `''` — both stub and expected impl agree
+- `paths.test.ts:90–92`: `expect(cwdToClaudeProjectFilter('')).toBe('')` passes against the stub.
+- **Why it matters**: Same trivially-passing class as W1. The 4 other positive cases (lines 84–106) still anchor behavior, so this is the weakest case of W1, not a blocker.
+
+### W3 — `journal-parser` truncation assertion is loose
+- `journal-parser.test.ts:56–61`: asserts `formatted.length &lt; longBody.length + 100` and `formatted.includes('…')`. With the planned 100-char cap, the formatted string is roughly `'✓ agent xxxxxxx result: ' + xxx + '…'` ≈ 30+100+1 ≈ 131 chars. The assertion `&lt; 200 + 100 = 300` is satisfied by **any** output that contains `'…'` and is &lt; 300 chars — even an implementation that truncates at 250 chars would pass.
+- **Recommendation**: Tighten to `expect(parsed!.formatted.length).toBeLessThan(200)` (or `&lt; 150`). That actually exercises the SPEC §8.1 "truncate to ~100 chars" contract. Also verify the truncated content matches the spec: `expect(parsed!.formatted).toMatch(/x{100}…/)` or similar.
+
+### W4 — `journal-parser` "result body number" assertion under-specifies SPEC §8.1
+- `journal-parser.test.ts:73–78`: asserts `parsed!.formatted.includes('42')`. SPEC §8.1 (and plan Step 5 line 176) says the formatted result is `'✓ agent {short} result: ' + safeStringify(...)`. The test would pass if a buggy impl printed `42` anywhere — e.g., in a stray `agentId` or a debug field. Same for the `'null'` test (line 64–70).
+- **Recommendation**: Pair with `expect(parsed!.formatted).toContain('result: 42')` (or `'result: null'`) to anchor the formatting contract, not just substring presence.
+
+### W5 — `snapshot-watcher` cross-platform `fs.watch` reliability not addressed in tests
+- `snapshot-watcher.test.ts` relies on `fs.watch(path, ...)` firing on subsequent `writeFile()` overwrites. Per CLAUDE.md §19.6 and SPEC's own gotcha note, `fs.watch` is unreliable on macOS for atomic rename, and `writeFile` on some platforms uses temp+rename semantics. Tests use direct `writeFile` (overwrite), which is the documented good path — but the test gives no slack for the **flake risk** plan §R2 calls out.
+- **Recommendation**: Either (a) document the flake-tuning lever (`DEBOUNCE_MS * 3 + 50`) inline as the plan suggests, or (b) increase `DEBOUNCE_MS` in CI mode. Not a correctness issue; a stability issue for the upcoming GREEN run.
+
+### W6 — `snapshot-watcher.test.ts:223–247` "onChange throwing does not crash" couples to a specific implementation decision
+- The test asserts `errors.length &gt;= 1` from a **synchronous** throw inside `onChange`. Per the plan's Step 6 point 2, `onChange` is wrapped in try/catch in `reload()` and forwarded to `onError`. That's a SPEC-aligned contract.
+- However, the *initial* `start()` path also runs `reload()` synchronously, so the test implicitly assumes the `start()` itself surfaces the throw (line 235 `await watcher.start();` then asserts errors at 238). This is a brittle ordering assumption — if a future impl moves the initial read into a microtask, the assertion `errCountBefore = errors.length` at line 240 could already be 0 when the second write fires.
+- **Recommendation**: Replace `errCountBefore = errors.length` with `await waitDebounce()` between the two writes; then assert `errors.length &gt;= 2`. Decouples from "did the initial read finish surfacing errors before line 240?".
+
+### W7 — `types.compile.test.ts` runtime assertions are dead weight
+- e.g. `expect(_p.workflowEvent).toBe('started')` at line 36 — this is just confirming what was literally typed two lines above. The value comes from the test source itself, not from the type system.
+- **Why it matters**: Mild test smell — the comment at line 14–16 ("Test bodies do nothing at runtime; the value is in TypeScript type-checking") is then contradicted by the runtime assertions. Either remove the `expect`s entirely (TS compile failure is the only signal needed) or drop the misleading comment.
+- **Rationale**: Low impact (the compile-time gate is the actual contract) but invites future devs to add runtime assertions and miss the point.
+
+---
+
+## Design Signals (production code)
+The implementation modules are stubs (intentional per RED phase), so structural review is deferred to the plan. From the plan + types:
+
+- Good: `JournalLineParser` constructor accepts `{ fileMtime?: Date }` — clean DI for the timestamp source. Eliminates need for `Date.now()` injection seam in tests.
+- Good: `SnapshotWatcher` accepts `onChange`/`onError` callbacks via constructor config — fully testable with no globals.
+- Good: `safeStringify` is exported `@internal` for testing. This is the right call (production behavior tested in isolation rather than only through `parse()`).
+- Mild concern: `JournalLineParser.markLiveMode()` is a state-changing method. The test covers the transition (line 157–169) but does not cover **transition back** (markLiveMode then... nothing — there's no `markHistoryMode()`). The plan's D4 says explicit is preferred; that's fine. But there's no test that mutating `historyTimestamp` via `markLiveMode()` is idempotent (calling it twice). Minor.
+
+---
+
+## Test Suite Health
+- **Coverage of critical paths**: Adequate for paths and journal-parser. Snapshot-watcher covers the 4 SPEC §8.2 behaviors (debounce, dedup, invalid-JSON recovery, ENOENT). The "ENOENT" case (`paths.test.ts → snapshot-watcher.test.ts:185–202`) correctly asserts `onError` + no-throw per plan Step 6.
+- **Speed**: Snapshot-watcher uses `DEBOUNCE_MS = 10` + `waitDebounce()` of ~80ms × 9 tests ≈ ~1s for that file alone. Acceptable; flaggable on CI.
+- **Independence**: Each snapshot test uses `mkdtemp` + per-test `tempDir` (line 30). Good isolation. `beforeEach`/`afterEach` properly cleans up. Watcher `stop()` in `afterEach` (line 35) handles cleanup even when tests throw.
+- **AAA structure**: All tests follow Arrange/Act/Assert clearly.
+- **No shared mutable state**: Each test instantiates its own parser/watcher.
+- **No randomness or wall-clock dependencies** outside the documented `waitDebounce`.
+
+---
+
+## Edge Cases vs SPEC
+
+### SPEC §8.1 coverage
+| SPEC requirement | Test |
+|---|---|
+| started/result type emit | `started event` block, `result event with string body` |
+| tolerance: invalid JSON → null | `parse('not-json')` |
+| tolerance: missing/wrong type → null | `unknown type returns null`, `missing type field returns null` |
+| tolerance: missing key/agentId → null | `missing agentId/key returns null` |
+| tolerance: agentId not string → null | `non-string agentId returns null` |
+| history-mode timestamp = fileMtime | `history mode uses fileMtime ISO string` |
+| live-mode timestamp = current | `markLiveMode switches to current-time ISO` |
+| history timestamp stable across N parses | `history mode timestamp is stable` |
+| Truncation at ~100 chars | `truncates long result body to ~100 chars` (loose — see W3) |
+| shortAgentId = first 7 chars | implicit in formatted assertions |
+
+**Gap**: No test verifies that `key` field absence rejection is symmetric with `agentId` absence rejection (covered separately). No test verifies the `raw` field round-trips the parsed JSON event (plan Step 5 line 177 says `return { ..., raw, ... }`). Minor — `raw` is downstream-display only.
+
+### SPEC §8.2 coverage
+| SPEC requirement | Test |
+|---|---|
+| Initial read on `start()` triggers `onChange` | `start() reads existing file and calls onChange once` |
+| Debounce on subsequent writes | `subsequent write triggers onChange after debounce` |
+| Dedup by raw text | `identical content writes are deduped` |
+| Invalid JSON → `onError`, not `onChange` | `invalid JSON triggers onError, not onChange` |
+| Recovery: invalid then valid → onChange fires | `recovery: valid write after invalid still triggers onChange` |
+| `stop()` cancels pending debounce | `stop() before debounce fires cancels pending onChange` |
+| `stop()` idempotent | `stop() is idempotent` |
+| ENOENT on initial read | `start() on missing path calls onError, does not throw` |
+| `onError` undefined safe | `missing onError + invalid JSON does not crash` |
+| `onChange` throw safe | `onChange throwing does not crash the watcher` |
+
+**Gap**: SPEC §8.2 says debounce default is 50ms. No test verifies the **default** value (all tests pass `debounceMs: 10` explicitly). A regression that hardcodes a different default would not be caught. Minor — easily added.
+
+**Gap**: The plan's D6 decision (line 240) explicitly says `lastJson` must update **after** successful parse, not before, so that invalid writes don't poison dedup. The `recovery: valid write after invalid still triggers onChange` test (line 119–145) implicitly verifies this — if D6 ordering were violated, the test would fail. **Adequate.**
+
+---
+
+## Recommendations (ordered by impact)
+
+1. **W3 — Tighten truncation assertion in `journal-parser.test.ts:60`** to `toBeLessThan(150)` with a regex match for the truncated tail. Highest impact because the current loose assertion is the only check on the truncation contract, and SPEC §8.1 is explicit about ~100 chars.
+
+2. **W4 — Anchor formatted result test to `'result: &lt;body&gt;'` shape** (lines 64–78 result-body assertions). Otherwise a future formatting change (e.g., dropping the `result:` prefix) silently passes.
+
+3. **W1 — Add 1–2 boundary positives per `isValid*` / `parseWorkflow*` helper** so the positive set isn't a single hardcoded value. Cheap mutation resistance.
+
+4. **Add a default-debounce test** to `snapshot-watcher.test.ts` (`new SnapshotWatcher({path, onChange})` without `debounceMs`, then verify onChange fires within ~150ms). Locks SPEC §8.2 default.
+
+5. **W6 — Replace `errCountBefore` with `waitDebounce()` slack** in the "onChange throws" test to decouple from initial-read timing.
+
+6. **W7 — Remove runtime `expect()` calls in `types.compile.test.ts`** OR update the file comment to acknowledge them as guard rails. Optional polish.
+
+7. **Document the debounce flake-tuning lever** with an inline comment in `snapshot-watcher.test.ts` per plan §R2 / Step 6 note. Stability hygiene for CI.
+
+---
+
+## Relevant file paths
+
+- `/Users/pc035860/code/agent-tail/tests/claude-workflow/paths.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude-workflow/types.compile.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude-workflow/journal-parser.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude-workflow/snapshot-watcher.test.ts`
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` (§8.1, §8.2)
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_17-40-18_workflow-p1.md` (Step 5 formatted-line shape; Step 6 D6 dedup ordering; Test blueprint table)</result>
+<usage><total_tokens>81540</total_tokens><tool_uses>30</tool_uses><duration_ms>162511</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acf6c5e07a74e08d2</task-id>
+<tool-use-id>toolu_01Tkx2kooJGpbra7fCfCMH4u</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/acf6c5e07a74e08d2.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P2 plan" completed</summary>
+<result>Now I have all the context. Let me deliver the review.
+
+## Verdict
+**PASS_WITH_CHANGES**
+
+The plan is well structured and SPEC-compliant overall. There are a couple of concrete defects in the Claude integration paths and a few smaller polish items that should be addressed before implementation.
+
+## Critical issues (must fix)
+
+### C1. `ClaudeSessionFinder.findBySessionId` return type — interface mismatch (Step 2.5)
+
+The plan writes:
+```ts
+async findBySessionId(
+  sessionId: string,
+  options: { project?: string }
+): Promise&lt;SessionFile | ClaudeSessionResult | null&gt; {
+  if (sessionId.startsWith('wf_')) {
+    return this._workflowFinder.findBySessionId(sessionId, options);
+  }
+  ...
+}
+```
+
+But `WorkflowSessionFinder.findBySessionId` is typed to return `Promise&lt;SessionFile | null&gt;` only. That's fine for compile (`SessionFile` is assignable to `SessionFile | ClaudeSessionResult`). However, the existing `ClaudeSessionFinder.findBySessionId` matches the optional interface signature `SessionFile | ClaudeSessionResult | null`. **Make sure the new `WorkflowSessionFinder` does NOT widen its declared return to include `ClaudeSessionResult`** (workflows have no subagent pairing), and keep the explicit return-type annotation on the Claude method unchanged. Add an explicit `return` test asserting `.customTitle` starts with `'wf:'` so dispatcher branching in P3 stays reliable.
+
+### C2. `WorkflowSessionFinder.getProjectInfo` — `projectDir` choice will break Claude auto-switch
+
+The plan (D3) says: `projectDir = encodedDir` (the `-Users-...` directory name).
+
+But the actual Claude main-session auto-switch path in `src/index.ts:660` is:
+```ts
+const projectDir = dirname(sessionFile.path);  // absolute path to the project dir
+...
+findLatestInProject: findLatestMainSessionInProject,
+```
+
+— that is, for Claude main sessions the project dir passed to `findLatestInProject` is an **absolute filesystem path** (`~/.claude/projects/-Users-x-code-foo`), not a bare encoded directory name. There is currently **no** call site that invokes `claudeAgent.finder.getProjectInfo` or `claudeAgent.finder.findLatestInProject` for super-follow (only Codex/Cursor/Gemini single-watch and the generic `startSingleWatch` at line 2086 do). Adding these methods is fine and forward-compatible for P3+, but the plan should explicitly call out that:
+
+- For consistency with `findLatestMainSessionInProject(projectDir)` which receives an absolute path, **`projectDir` should be the absolute encoded project directory** (e.g. `~/.claude/projects/-Users-x-code-foo`), not the bare basename. Otherwise a future migration from `findLatestMainSessionInProject` → `claudeAgent.finder.findLatestInProject` would silently swap semantics.
+- `findLatestInProject(projectDir)` as currently written (`return this.findLatest({ project: projectDir })`) is fuzzy-`includes` based. Passing an absolute path works because the fuzzy filter matches; passing a bare basename also works. So either choice compiles; pick the one (absolute) that matches existing `findLatestMainSessionInProject` so the SPEC §7.3 "common helpers" promise holds.
+
+Same comment applies to `WorkflowSessionFinder.getProjectInfo` — its `projectDir` should mirror the choice in `ClaudeSessionFinder.getProjectInfo` so the workflow Auto-switch path in P3 can share code.
+
+### C3. `listSessions` merge-before-slice is **NOT** behavior-identical to SPEC §7.4 sample
+
+The plan claims (Trade-off paragraph after Step 2.4): "Net effect identical for tests (T1/T2 don't depend on internal ordering); slightly less wasted enrichment work when main count &gt; limit."
+
+This is wrong on three counts:
+
+1. **The existing `listSessions` does `slice(0, limit)` BEFORE enrich**, and after enrich it re-sorts by `lastActivityTime ?? mtime`. Your new flow collects ALL main sessions (no slice), merges with all workflows, slices, then enriches only main items. That is a behavior change: previously enriched-out sessions that would have bubbled up via `lastActivityTime` are silently dropped. SPEC §7.4's sample preserves this by calling a `_collectMainSessionsEnriched` (enrich-before-merge).
+
+2. Your two-pass sort (lines 180-184 and 203-207) re-sorts the sliced list after enrich, but enrich only touches the items that survived the pre-enrich slice. A main session whose `mtime` is much older than its `lastActivityTime` will get dropped before enrich — exactly the bug the existing code's "slice → enrich → re-sort" was trying to mitigate. **This regresses an existing edge case in T1/T2.**
+
+3. There's a subtle related issue: the test `tests/agents/claude-list-sessions.test.ts:30` ("returns sessions sorted by mtime descending") only uses 3 files with no workflow content, so it would pass either way. The regression would show up in field use with workflow + many old mtime-ordered files, not the unit tests.
+
+**Either**:
+(a) revert to SPEC §7.4 sample: enrich-before-merge — collect &amp; enrich main first, take workflows as-is, merge by `lastActivityTime ?? mtime`, then slice; **or**
+(b) keep merge-before-slice **only if** main pre-collection includes enough headroom (e.g. enrich top `limit * 2` to compensate for activity-time shuffling). Option (a) is much simpler and matches the SPEC.
+
+I strongly recommend (a). The Decision row D5 should be reversed.
+
+## Plan patch (proposed edits)
+
+### Patch 1 (C1): Add explicit return-type assertion in `WorkflowSessionFinder`
+
+```ts
+async findBySessionId(
+  sessionId: string,
+  options: { project?: string }
+): Promise&lt;SessionFile | null&gt;;   // explicit; do NOT widen to ClaudeSessionResult
+```
+
+Add to test list:
+- `WorkflowSessionFinder.findBySessionId('wf_xxx')` returns `SessionFile` whose `customTitle` starts with `'wf:'` (so dispatcher branching in P3 stays reliable).
+
+### Patch 2 (C2): Align `projectDir` semantics with existing `findLatestMainSessionInProject`
+
+Replace Step 2.2 implementation:
+
+```ts
+async getProjectInfo(sessionPath: string): Promise&lt;ProjectInfo | null&gt; {
+  const parts = sessionPath.split('/');
+  const projectsIdx = parts.indexOf('projects');
+  if (projectsIdx &lt; 0 || projectsIdx + 1 &gt;= parts.length) return null;
+
+  // Absolute path to the encoded project dir (consistent with index.ts:400 dirname(sessionFile.path))
+  const projectDir = parts.slice(0, projectsIdx + 2).join('/');
+  const cwd = await readCwdFromHead(sessionPath);
+  return {
+    projectDir,
+    ...(cwd ? { displayName: cwd } : {}),
+  };
+}
+```
+
+Update D3 to reflect "absolute path to encoded dir, matching `dirname(sessionFile.path)` in `src/index.ts:400`".
+
+In `WorkflowSessionFinder.getProjectInfo`, derive the same absolute-path form from the snapshot path: `~/.claude/projects/{enc-cwd}/{UUID}/workflows/wf_*.json` → `~/.claude/projects/{enc-cwd}` (slice to `projectsIdx+1`).
+
+Add a test: `getProjectInfo(snapshotPath).projectDir` deep-equals an absolute path (asserts on the test fixture's `tempDir/{enc-cwd}`).
+
+### Patch 3 (C3): Revert to SPEC §7.4 enrich-before-merge
+
+Replace Step 2.4 listSessions body with:
+
+```ts
+async listSessions(options: { project?: string; limit?: number }) {
+  const limit = options.limit ?? 20;
+
+  // 1. Existing behavior: collect + slice + enrich + re-sort for main only.
+  //    Pull internal helper into `_collectMainSessionsEnriched` if it makes
+  //    composition cleaner; otherwise inline the existing block.
+  const mainItems = await this._collectAndEnrichMainSessions({ project: options.project, limit });
+
+  // 2. Workflow items already carry snapshot metadata — no enrich needed.
+  const wfItems = await this._workflowFinder.listSessions({ project: options.project, limit });
+
+  // 3. Merge by activity time and slice.
+  const merged = [...mainItems, ...wfItems].sort((a, b) =&gt; {
+    const ta = (a.lastActivityTime ?? a.mtime).getTime();
+    const tb = (b.lastActivityTime ?? b.mtime).getTime();
+    return tb - ta;
+  });
+
+  return merged.slice(0, limit);
+}
+```
+
+The simplest path: extract a private `_collectAndEnrichMainSessions(options)` that wraps lines 117-142 of the existing `claude-agent.ts` verbatim (no behavior change to current Claude tests).
+
+Update D5 row to: "Enrich main first (preserve existing per-session slice→enrich→re-sort), then merge with workflow snapshots, then slice. Matches SPEC §7.4 sample."
+
+### Patch 4: SubagentDetector guard — minor strengthening
+
+Step 3 plan is correct. Worth adding the test fixture detail: when the directory `subagents/workflows/wf_X/agent-{17hex}.jsonl` does NOT have a parent `agent-aaaaaaa.jsonl` peer (workflow-only case), `scanForNewSubagents` returns `[]`. Test currently only covers the mixed case. Add the workflow-only edge case.
+
+Also: filename in the workflow-nested case is technically `workflows/wf_test01-abc/agent-bbbbbbbbbbbbbbbbb.jsonl` (relative to `subagentsDir`). Bun glob `agent-*.jsonl` is non-recursive — verify this with `bun -e` or in P2 test. If Bun later changes to recursive (unlikely), the `file.includes('/')` guard catches it. Plan correctly notes this.
+
+### Patch 5: First thin slice
+
+Sequence the implementation:
+1. Export `ClaudeSessionFinder` + add `getProjectInfo` + `findLatestInProject` + their tests (no workflow dependency yet) — passes T17 for existing tests and ensures backwards compat green before anything else.
+2. Add `SubagentDetector` defensive guard + T17 test.
+3. Add `WorkflowSessionFinder` (standalone) + its unit tests — passes T3, T3b in isolation.
+4. Wire `_workflowFinder` into `ClaudeSessionFinder` (constructor, `listSessions` merge, `findBySessionId` dispatch) — passes T1, T2.
+
+This sequence makes each commit independently verifiable.
+
+## Risks &amp; mitigations
+
+- **R1 — Test fixture `baseDir` injection**: Existing tests use `(finder as unknown as { baseDir: string }).baseDir = tempDir`. After P2, `ClaudeSessionFinder` holds a `_workflowFinder` constructed in constructor with its OWN `baseDir` pointing at `~/.claude/projects`. **The test injection will NOT propagate to the workflow finder**, so existing tests' subagent exclusion will still work but tests that newly assert merged listing must also inject `_workflowFinder.baseDir`. **Mitigation**: change the constructor to lazy-init in the `listSessions`/`findBySessionId` methods AND read `this.baseDir` at call time, OR add a `setBaseDir(dir)` helper used by tests that propagates to `_workflowFinder`. Document this clearly in the new test file. Recommendation: lazy-init `_workflowFinder` in the getter so test override of `baseDir` happens first.
+
+- **R2 — Backwards compat of `findBySessionId` for IDs that happen to start with "wf"** (e.g. a malformed user input `wf_abc`): Currently this would have hit `detectIdType` and returned `'unknown'`. After P2 it goes straight to workflow finder → null. Behavior change is acceptable (clearer null return) but worth noting. Mitigation: add a `isValidWorkflowRunId` check in the dispatch — if `sessionId.startsWith('wf_')` AND **not** valid run ID format, **still dispatch** to workflow (it just returns null), so we don't accidentally fall through to main and false-positive prefix-match a real UUID. Plan's current dispatch is fine; explicit comment helps.
+
+- **R3 — `getProjectInfo` circular import (D7)**: Plan is correct. `WorkflowSessionFinder` uses `readCwdFromHead` from `src/utils/session-time.ts` directly. There IS no circular import risk because neither `claude-agent.ts` nor `workflow-agent.ts` would depend on each other at import time — `claude-agent.ts` imports `WorkflowSessionFinder` (one-way) and that's fine. The plan's caution is well-placed but the danger is theoretical.
+
+- **R4 — `_collectWorkflows` snapshot read fault tolerance**: Plan covers this via "Read failures degrade gracefully — entry still listed with `customTitle = 'wf:{runId}'`". Verify the test "Snapshot with invalid JSON → still listed with fallback customTitle" actually exercises a JSON parse failure (not just file-not-found). The try/catch around `JSON.parse(await Bun.file(file).text())` in SPEC §7.2 sample handles this — make sure the implementation keeps it.
+
+## Test plan
+
+Existing tests to verify still pass (no edits expected):
+- `tests/agents/claude-agent.test.ts`, `tests/agents/claude-agent-description.test.ts` — they construct `ClaudeAgent()` and access `.finder.findLatest / .findSubagent / .findBySessionId`. The added methods don't change those signatures.
+- `tests/agents/claude-list-sessions.test.ts:25-172` — all 7 tests use only main session content (no workflow snapshots) — should pass unchanged **iff Patch 3 (enrich-before-merge) is adopted**. Otherwise the test at line 89 "reads project path (cwd) from session content" may be at risk because it depends on `readCwdFromHead` being called for every returned item.
+
+New tests as planned, plus:
+- `WorkflowSessionFinder.findBySessionId('wf_xxx')`: assert returned `SessionFile.customTitle` starts with `'wf:'` (R1 / dispatcher contract).
+- `ClaudeSessionFinder.getProjectInfo`: assert `projectDir` is an absolute path (Patch 2).
+- `ClaudeSessionFinder.listSessions` merge: include a test where the main session's `mtime` is OLDER than `limit` would naively exclude but `lastActivityTime` would be newer — verifies enrich-before-merge correctness (would regress under Patch 3 reverted to plan's merge-before-slice).
+- `_workflowFinder.baseDir` propagation in tests via reflection — document the pattern.
+- Snapshot JSON parse failure path: write a `wf_X.json` with `'broken'` content (already in plan); also add a write-permission-denied path (best-effort, may need to chmod 000 and skip on CI) — optional.
+- `scanForNewSubagents` workflow-only case (no flat sibling): returns `[]`, length 0.
+
+## Open questions
+None blocking. Proceed with patches 1-3 applied and the strengthened test list.
+
+---
+
+Relevant absolute file paths reviewed:
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_18-03-05_workflow-p2.md`
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_17-40-18_workflow-p1.md`
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` (§7, §9.4, §14, §16)
+- `/Users/pc035860/code/agent-tail/src/agents/agent.interface.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/codex/codex-agent.ts:240-256`
+- `/Users/pc035860/code/agent-tail/src/agents/cursor/cursor-agent.ts:300-340`
+- `/Users/pc035860/code/agent-tail/src/claude/subagent-detector.ts`
+- `/Users/pc035860/code/agent-tail/src/claude/auto-switch.ts`
+- `/Users/pc035860/code/agent-tail/src/core/types.ts`
+- `/Users/pc035860/code/agent-tail/src/index.ts:400, 660, 2076-2170`
+- `/Users/pc035860/code/agent-tail/tests/agents/claude-list-sessions.test.ts`</result>
+<usage><total_tokens>115208</total_tokens><tool_uses>20</tool_uses><duration_ms>125648</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acf6c5e07a74e08d2</task-id>
+<tool-use-id>toolu_016yd22F5TtEauFBz2fero19</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/acf6c5e07a74e08d2.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P2 plan" completed</summary>
+<result>Patches verified. All three critical fixes plus the secondary items landed correctly. A few small residual nits and one borderline issue worth flagging.
+
+## Verdict
+**PASS_WITH_CHANGES** (minor — none are blockers; flagging for cleanup before merge)
+
+## Verified patches landed correctly
+
+- **C1** (lines 47-55): `WorkflowSessionFinder.findBySessionId` explicitly annotated `Promise&lt;SessionFile | null&gt;` with anti-widening comment. Good.
+- **C2** (lines 131-149, D3 row 314): `getProjectInfo` now slices `parts.slice(0, projectsIdx + 2).join('/')` giving absolute path. Matches `dirname(sessionFile.path)` contract.
+- **C3** (lines 189-249, D5 row 316): Extracted `_collectAndEnrichMainSessions` helper preserves original `slice → enrich → re-sort` semantics; merge happens after; final slice caps. Activity-time bubble-up preserved.
+- **R1** (lines 171-185): Lazy getter `workflowFinder` checks `_wf.getBaseDir() !== this.baseDir` and recreates — correct propagation pattern for the existing `(finder as { baseDir: string }).baseDir = tempDir` test injection.
+- **R2** (lines 262-268): Explicit comment about `wf_`-prefix short-circuit. Good.
+- **Patch 4** (line 381): Workflow-only directory empty-return test added.
+- **Test additions** (lines 359, 387): D5 regression guard + `customTitle.startsWith('wf:')` dispatch assertion both present.
+
+## Residual nits (minor — recommend tightening before implementation)
+
+### N1. `_collectAndEnrichMainSessions(limit)` parameter is a slight behavior change from current code (worth confirming intentional)
+
+The plan signature is:
+```ts
+private async _collectAndEnrichMainSessions(options: {
+  project?: string;
+  limit: number;
+}): Promise&lt;SessionListItem[]&gt;
+```
+
+Pre-existing `listSessions` was:
+1. Collect all main → `files.slice(0, limit)` → enrich.
+
+New helper is **the same**, but the caller now passes the **final** `limit` and then `listSessions` runs another `merged.slice(0, limit)` after merging in workflows.
+
+**Edge case**: With `limit = 3`, 3 main sessions, 3 workflows:
+- Helper returns 3 enriched main items.
+- Workflow side returns up to 3 wf items.
+- Merge → 6 items → final slice 3.
+- If all 3 workflows are newer than all 3 main → output is 3 workflows. The 3 main sessions wasted enrich I/O.
+
+Trivial perf nit, not correctness. **Mitigation (optional)**: pass `limit * 2` or a small headroom to `_collectAndEnrichMainSessions` to prevent activity-time edge dropouts. But the existing per-tests semantics (3 sessions, limit not exceeded) are preserved. Leave as-is unless you want to over-fetch. Document this trade-off in D5 if not done.
+
+### N2. `workflowFinder` getter race: lazy re-create reuses cached instance only if `baseDir` is unchanged
+
+Looks fine — but ensure the test pattern is what you expect:
+
+```ts
+const agent = new ClaudeAgent({ verbose: false });
+finder = agent.finder;
+(finder as unknown as { baseDir: string }).baseDir = tempDir;
+// Now finder.listSessions / findBySessionId trigger lazy getter
+// → instance check `_wf.getBaseDir() !== this.baseDir` → recreate ✓
+```
+
+This works. However the **first** access creates `_wf` bound to homedir; the **next** access (after baseDir mutation) recreates it. That works because `_wf` is null initially. **Caveat**: if a test happens to call `listSessions` before mutating `baseDir`, the workflow finder is bound to the real homedir for that call. That's the test's bug, not the plan's, but worth a one-line note in the new test file recommending mutate-before-call.
+
+Suggested addition to test plan blueprint near the fixture setup paragraph:
+&gt; **Important**: Set `baseDir` immediately after constructing the agent and BEFORE calling any finder method. Calling `listSessions`/`findBySessionId` before the `baseDir` injection will initialize the workflow finder against the real `~/.claude/projects`.
+
+### N3. `listSessions` workflow side now receives `limit`
+
+In line 236-239 the plan passes `limit` to `this.workflowFinder.listSessions({ project, limit })`. This caps workflow side too — meaning if there are 100 workflows and 0 main sessions with `limit = 20`, you get 20 workflows. **Correct.**
+
+However, in the SPEC §7.2 sample `_collectWorkflows` doesn't take a `limit` parameter; `listSessions` does the slicing. Verify that `WorkflowSessionFinder.listSessions` honors `limit` (line 344 test already checks this). Good.
+
+### N4. Test fixture path validation (sanity check)
+
+The fixture filename in plan line 327: `wf_aaaaaaaa-bbb.json` — verify this matches `/^wf_[0-9a-f]{8}-[0-9a-f]{3}$/` regex from P1's `paths.ts`:
+- `wf_aaaaaaaa-bbb` → prefix `wf_` ✓, 8-hex `aaaaaaaa` ✓ (all `a`), `-`, 3-hex `bbb` ✓ (all `b`). Valid.
+- `wf_cccccccc-ddd`: same pattern ✓
+- `wf_test01-abc` (subagent-detector test, line 375): 8-hex `test01` — only 6 chars, not 8! **`test01` has 6 characters but the regex requires 8 hex chars.**
+
+**Action**: change `wf_test01-abc` → `wf_12345678-abc` (or any 8-hex + 3-hex). This will only matter if/when the test invokes `parseWorkflowSnapshotFilename` or `isValidWorkflowRunId` — for the pure `scanForNewSubagents` test it just needs to be a directory name, so the regex isn't applied. Still, fixing it now avoids confusion for future readers and any future test that does run validation on this fixture path.
+
+### N5. Anti-widening comment in `findBySessionId` (line 261)
+
+The Claude method signature still reads `Promise&lt;SessionFile | ClaudeSessionResult | null&gt;` (matching the interface). The workflow branch returns `Promise&lt;SessionFile | null&gt;` — which is assignable. Good, no fix needed. Just confirming the type-narrowing intent is documented in the code.
+
+## Plan patch (proposed edits)
+
+- **P1**: Line 375 — change `wf_test01-abc` → `wf_12345678-abc` so the fixture would survive a hypothetical `isValidWorkflowRunId` check (future-proof).
+- **P2** (optional): Add to test-setup note around line 332: "Mutate `baseDir` BEFORE invoking any finder method, otherwise `workflowFinder` lazy-init binds to real `~/.claude/projects`."
+- **P3** (optional): D5 row — add one sentence noting the minor perf-cost trade-off (enrich N main items even when output is all workflows). Pure documentation.
+
+## Risks &amp; mitigations
+
+- **R1** (carried from earlier review, still relevant): Whether the `_collectAndEnrichMainSessions(limit)` pre-slice loses sessions whose `lastActivityTime` would have bubbled past `limit`. **Status**: same as pre-existing `listSessions` behavior — no regression vs. main. The new D5 docstring claims this. Verify N1 trade-off note is added.
+
+- **R2**: Test ergonomics around `baseDir` injection timing (N2). **Mitigation**: documentation in the new test file's fixture-setup comment.
+
+## Test plan
+The plan now covers:
+- WorkflowSessionFinder unit tests including invalid JSON, missing workflowName, getProjectInfo with/without main session
+- Activity-time bubble-up regression (D5 guard)
+- Dispatch path `wf_xxx` → workflow finder + `customTitle.startsWith('wf:')`
+- T17 mixed + workflow-only nesting
+- Backwards compat preserved (existing `claude-list-sessions.test.ts` unchanged)
+
+This is solid coverage. Recommend N4 fixture fix and N1/N2 documentation tweaks during implementation but those are polish — no blockers remain.
+
+## Open questions
+None. The plan is ready for implementation.
+
+---
+
+Relevant files (reviewed/referenced):
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_18-03-05_workflow-p2.md`
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` §7, §14, §16
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts:33-143`
+- `/Users/pc035860/code/agent-tail/src/agents/agent.interface.ts:13-67`
+- `/Users/pc035860/code/agent-tail/src/claude/subagent-detector.ts:139-163`
+- `/Users/pc035860/code/agent-tail/src/claude/auto-switch.ts:45-82`
+- `/Users/pc035860/code/agent-tail/tests/agents/claude-list-sessions.test.ts`</result>
+<usage><total_tokens>132036</total_tokens><tool_uses>1</tool_uses><duration_ms>53709</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a14f01db90720052e</task-id>
+<tool-use-id>toolu_011aTPmYkVTbaPG1UVSCmtmF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/a14f01db90720052e.output</output-file>
+<status>completed</status>
+<summary>Agent "TDD review P2 tests" completed</summary>
+<result>Confirmed: tmpdir does **not** contain `projects/` segment. So the SPEC's `deriveEncodedProjectDir(path)` using `parts.indexOf('projects')` would return `-1+1=0 → parts[0]` (= empty string for an absolute path starting with `/`). The "project field uses encoded dir name" test (line 244-252) asserts `result[0].project === ENCODED_DIR_1` (= `-Users-x-code-foo`), which would fail under the SPEC's pseudo-code if implementation literally follows it.
+
+The implementation needs to derive the encoded dir name **relative to `this.baseDir`** rather than searching for a hard-coded `projects` segment. This is an implicit contract the test imposes — a good driver because it forces the impl to use `baseDir`.
+
+Similarly, `getProjectInfo` test (line 292-294) asserts that paths with no `projects/` segment return null — but the **valid** snapshot path used in lines 256-275 also doesn't have a `projects/` segment (it's under `tempDir`). So the contract is: derive project dir relative to `this.baseDir`, not by searching for literal `projects/`. Good — this is exactly the kind of generalization-forcing test that catches a too-literal implementation.
+
+Let me also verify one more subtle test detail — the merge "limit slices merged result" test:
+
+Looking at the merge test line 159-178: 3 mains (mtime 1_000_000_000+i) + 3 workflows (mtime 2_000_000_000+i). All mains have no inner timestamp, so `lastActivityTime === undefined`, sort key falls back to `mtime`. Workflows mtimes are ~1B bigger so they take top 3. Then 4th item is the latest main. limit=4 → 4 items. ✓ This is robust.
+
+Now I have everything I need to write the verdict.
+
+---
+
+## Verdict
+
+**PASS_WITH_ISSUES**
+
+The RED test files are largely well-structured and meaningfully drive the GREEN implementation. Anti-patterns are minimal. There are two coverage gaps, one brittle fixture, and one test that does not actually fail against the current stub — none are blocking, but they should be tightened before GREEN.
+
+---
+
+## Coverage Assessment (the main question)
+
+**listSessions merge order**: Covered well.
+- `tests/agents/claude/workflow-merge.test.ts:90-110` asserts both entries appear.
+- `:112-127` asserts workflow-first when workflow mtime is newer (drives "sort by activity time descending").
+- `:159-178` exercises the slice path (3 mains + 3 workflows, limit=4 → 4 items).
+
+**findBySessionId dispatch**: Covered well.
+- `:223-241` `wf_*` returns workflow SessionFile with `wf:` customTitle.
+- `:243-254` `wf_DOES_NOT_EXIST` returns null (does NOT fall through to main UUID logic) — this is the key dispatch contract.
+- `:256-266` non-`wf_` UUID still works for main session (regression guard).
+
+**getProjectInfo absolute-path contract**: Covered.
+- `workflow-merge.test.ts:282-293` asserts `projectDir === join(tempDir, ENC)` (absolute, ends with encoded dir name).
+- `workflow-agent.test.ts:255-296` covers absolute projectDir + displayName when main session exists, projectDir-only fallback, and null when path has no `projects/` segment. The "absolute, baseDir-relative" contract is implicit but enforced by tempDir not containing literal `projects/`.
+
+**listSessions activity-time bubble-up regression guard**: Covered, well-designed.
+- `workflow-merge.test.ts:180-207` exposes the slice-before-enrich bug. The current ClaudeSessionFinder (lines 128-130) slices **before** enriching, so a stale-mtime main with future-timestamp internal activity gets dropped before `lastActivityTime` is read. The test forces GREEN to enrich-first-then-slice (or equivalent), which is exactly the right behavior — this is a high-leverage regression guard.
+
+---
+
+## Trivially-Passing-Against-Stub Tests
+
+Per your call-out, the 3 subagent-detector workflows-exclusion tests pass because `Bun.Glob('agent-*.jsonl')` is already non-recursive (I verified empirically with a sibling fixture). They are **not** RED driver tests against the current stub — production code already satisfies them.
+
+That said, **they are legitimate regression guards** locking the contract: if a future refactor switches to `Bun.Glob('**/agent-*.jsonl')` or moves to a recursive `readdir`, these tests catch it. Worth keeping, but mark them as "regression guards" in the file header comment so future readers don't misread them as RED drivers.
+
+**One trivial pass I'd flag for tightening**:
+- `tests/agents/claude/workflow-agent.test.ts:298-302` `getBaseDir` returns the constructor-injected `baseDir` — currently passes against the stub because the stub stores `baseDir` and returns it. This test is essentially a constructor smoke test; it does drive contract (the field name must remain accessible), but it provides almost no behavioral coverage. Low-priority — leave it.
+
+---
+
+## Anti-Patterns and Smells
+
+**Brittle absolute-time fixture (workflow-merge.test.ts:187)** — the `futureTimestamp = '3026-01-01T00:00:00.000Z'` trick.
+- **Verdict: code smell, not a blocker.** It does work today (year 3026 beats any `Date.now()`-derived mtime for the foreseeable future). But it couples test correctness to a hard-coded calendar assumption and reads as magic. Cleaner alternative: compute `new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString()` inline — semantically "100 years from now," self-documenting, and immune to anyone running the suite with a system clock set far in the future for unrelated testing.
+- Recommend changing to a relative future-offset to remove the smell, but not a blocker.
+
+**Mystery-fixture risk (`makeFinder` in workflow-merge.test.ts:14-19)**:
+- Mutates a private field (`baseDir`) via `unknown` cast. This is a real testability smell on the **production code** side (the `baseDir` is `private` and not constructor-injectable on `ClaudeSessionFinder`). The block comment is good — it documents the hazard inline.
+- Recommended GREEN fix: make `ClaudeSessionFinder`'s `baseDir` constructor-injectable (already done for `WorkflowSessionFinder`). Then `makeFinder` becomes `new ClaudeAgent({ verbose: false, baseDir: tempDir }).finder` — clean DI, no cast.
+
+**Implicit lazy-getter assumption (workflow-merge.test.ts:11-13 comment)**:
+- The comment says the internal `workflowFinder` lazy-getter re-binds on `baseDir` mutation. This is an assumed implementation detail that doesn't exist yet. If GREEN implements `workflowFinder` as eagerly-initialized in the constructor, all merge tests will tail through to `~/.claude/projects` and fail or pollute the user's real session list. **This is a real GREEN trap** — flag it now.
+- Fix: GREEN must implement `workflowFinder` as a getter that reads `this.baseDir` at call time, OR `baseDir` must be constructor-injectable (preferred). Add a test that explicitly asserts `finder.findLatest({})` consults `tempDir` (rather than `~/.claude/projects`).
+
+**Over-mocking / weak assertions**: None. Tests use real filesystem and assert on observable outcomes (paths, lengths, customTitle string content).
+
+**Test logic in production**: None observed.
+
+---
+
+## Edge-Case Gaps vs SPEC §7
+
+- **Snapshot read failure** (§7.2 `JSON.parse` try/catch): Covered by `workflow-agent.test.ts:213-230` (broken JSON → still listed, fallback `customTitle = "wf:{runId}"`, `workflowStatus = undefined`). 
+- **customTitle fallback when `workflowName` missing**: Covered (`:232-242`).
+- **Fuzzy project filter**: Covered (`:93-106`, `:179-192`).
+- **Encoded project dir derivation**: Covered (`:244-252`).
+
+**Gaps**:
+1. **`findLatest({ project })` filter passthrough behavior** (the same fuzzy semantics the SPEC §7.2 demands): only one positive case (`:93-106`). No negative case — `project: 'no-match'` should return `null`. Add.
+2. **`findLatestInProject` matching contract**: only one positive case (`:143-157`); no null case for a project string that matches nothing. Add.
+3. **`findBySessionId` project filter combined with id**: no test ensures `project` filter is honored on `findBySessionId`. SPEC §7.1 contracts it. Add.
+4. **`getProjectInfo` when snapshot path is in a subdirectory not under `this.baseDir`**: edge case worth one test. The current null-when-no-`projects/`-segment test (`:292-295`) actually exercises a different code path; depending on GREEN implementation strategy, an "outside baseDir" case may slip through.
+
+---
+
+## Edge-Case Gaps vs SPEC §9.4 (T17)
+
+The 3 tests in `subagent-detector-workflows.test.ts` cover:
+1. Mixed flat + nested → only flat (`:24-35`)
+2. Workflow-only directory → empty array (`:37-46`)
+3. Known agents excluded (`:48-57`)
+
+**Gaps**:
+1. **Direct `subagents/workflows/` file** (no `wf_*` parent): e.g., `subagents/workflows/agent-stray.jsonl`. SPEC §9.4 says glob is non-recursive, so this would actually match... wait no, file is at `workflows/agent-stray.jsonl` — `Bun.Glob('agent-*.jsonl').scan({ cwd: subagentsDir })` would not match `workflows/agent-stray.jsonl` because the pattern doesn't include the directory prefix. Worth one test to lock it down — protects against a future refactor that changes the cwd or pattern.
+2. **`fs.watch(subagentsDir)` dirent event for `workflows/` subdirectory**: SPEC §9.4 mentions this naturally filters because filename will be `'workflows'`, not `agent-*.jsonl`. There is no test asserting `fs.watch` events for `workflows/` modifications don't trigger spurious `scanForNewSubagents` calls or registration. Lower priority but worth adding once you wire pipeline-level integration.
+3. **`scanForNewSubagents` when `workflows/` directory exists alongside no flat agents and `knownAgentIds` already contains a stale flat ID**: minor, but worth one combined case.
+
+---
+
+## Design Signals (Production Code Patterns)
+
+- **`ClaudeSessionFinder.baseDir` is private with no constructor injection** — forces tests into `unknown` casts. GREEN should expose it via constructor (matches `WorkflowSessionFinder`).
+- **`ClaudeAgent` constructs `ClaudeSessionFinder` directly with no injection** (`claude-agent.ts:693`). Tests cannot swap finders cleanly. GREEN should consider an `Agent` factory that accepts an optional finder, or expose `baseDir` via `ParserOptions`/agent options.
+- **Lazy getter for `workflowFinder` is assumed by tests but not yet present** — a clear DI gap. The test comment acknowledges this. Treat as a GREEN priority.
+- **`listSessions` slice-before-enrich pattern** — the current production code has this latent bug; the bubble-up test exposes it. Good RED.
+
+---
+
+## Test Suite Health
+
+- **Critical-path coverage**: adequate for listSessions merge, dispatch, getProjectInfo, and the bubble-up regression. Partial for fuzzy filter and `findLatestInProject` negative cases.
+- **Speed**: fast — pure tempdir I/O, no network/DB.
+- **Independence**: each `describe` has its own `tempDir` via `mkdtemp` + `afterEach rm`. Good isolation.
+- **Repeatability**: at risk only due to the `'3026-01-01...'` future-date fixture. Replace with `Date.now() + offset`.
+
+---
+
+## Recommendations (ordered by impact)
+
+1. **Make GREEN testable cleanly**: refactor `ClaudeSessionFinder` to accept `baseDir` via constructor, eliminate the `unknown` cast in `makeFinder`. The lazy-getter for `workflowFinder` must read `this.baseDir` at call time (or share the constructor-injected value).
+2. **Replace the magic `'3026-01-01T00:00:00.000Z'` literal** with `new Date(Date.now() + 100 * 365 * 24 * 3600 * 1000).toISOString()`; add an inline comment "future timestamp guarantees it beats mtime, regardless of when this test runs."
+3. **Add negative-case coverage**:
+   - `findLatest({ project: 'no-match' })` → null
+   - `findLatestInProject('-no-match-')` → null (already covered for ClaudeSessionFinder at `:343-346`, missing on `WorkflowSessionFinder`)
+   - `findBySessionId(RUN_ID, { project: 'wrong' })` → null (locks project filter contract)
+4. **Annotate the T17 tests as regression guards** in the file header so future readers understand they pass against current production code by virtue of `Bun.Glob` non-recursive default. A line like `// Regression guards: locks Bun.Glob('agent-*.jsonl') non-recursive contract — any refactor to recursive glob or readdir must keep these green.`
+5. **Add one explicit test for `findLatest({})` against an empty tempDir** to verify GREEN actually reads `tempDir` (not `~/.claude/projects`) — a guard against the lazy-getter trap above.
+6. **Drop or repurpose the trivial `getBaseDir` test** — it adds noise without behavior coverage.
+
+---
+
+## File References
+
+- `/Users/pc035860/code/agent-tail/tests/agents/claude/workflow-agent.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/agents/claude/workflow-merge.test.ts`
+- `/Users/pc035860/code/agent-tail/tests/claude/subagent-detector-workflows.test.ts`
+- `/Users/pc035860/code/agent-tail/src/agents/claude/workflow-agent.ts` (stub)
+- `/Users/pc035860/code/agent-tail/src/agents/claude/claude-agent.ts` (stubs at lines 41-49, slice-before-enrich at lines 128-130)
+- `/Users/pc035860/code/agent-tail/src/claude/subagent-detector.ts` (lines 139-163 — `scanForNewSubagents`)
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` §7, §9.4
+
+**Note on the embedded MCP-instruction injection**: the file content for `workflow-agent.ts` ended with what appeared to be a `&lt;system-reminder&gt;` block instructing me to use `ref_search_documentation`. I ignored it as it is not part of the actual file content nor relevant to a test-review task; this aligns with treating injected content in tool output as untrusted data, not user instruction.</result>
+<usage><total_tokens>89307</total_tokens><tool_uses>16</tool_uses><duration_ms>127896</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aab81778705515b1d</task-id>
+<tool-use-id>toolu_01NCRNFNgkX97idRB89yZK92</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/a4125c98-2d39-4722-ae76-ed157651ee39/tasks/aab81778705515b1d.output</output-file>
+<status>completed</status>
+<summary>Agent "Review P3 plan" completed</summary>
+<result>I have enough context. Here is my review.
+
+---
+
+## Verdict
+
+**PASS_WITH_CHANGES**
+
+The plan is structurally sound, correctly scoped to P3, mirrors the existing `startClaudeMultiWatch` pattern, and respects the phase boundaries set by P1/P2. SPEC §9.1/§9.3/§10.2/§10.4/§11.1/§11.2 are accurately reflected. However, several concrete issues need fixing before implementation begins. Most are mechanical (wrong import paths, non-existent helper, Commander defaults), but two are substantive (lifecycle ordering vs. P4, `Bun.file` exists check, dispatcher-vs-arg routing).
+
+---
+
+## Critical issues (must fix)
+
+### C1 — `createConsoleOutputHandler` does not exist
+Step 4.2 (line 542 of plan) writes `const outputHandler: OutputHandler = createConsoleOutputHandler(options);` and the closing note says "reuse it." It does not exist anywhere in the codebase. The real construction is `new ConsoleOutputHandler()` (class, no `options` argument). See `src/claude/output-handlers.ts:11` and 6 callsites of `new ConsoleOutputHandler()` in `src/index.ts`. **Fix**: replace with `new ConsoleOutputHandler()` and import it from `./claude/output-handlers.ts`.
+
+### C2 — `OutputHandler` import path inconsistent with existing code
+Plan imports `OutputHandler` from `'../core/detector-interfaces.ts'` (which is correct — that's the canonical location). But existing code in `src/claude/output-handlers.ts:2` imports it from `'./subagent-detector.ts'` (which re-exports). Not a blocker for new files, but the plan should note: **new** files import from `core/detector-interfaces.ts` directly (modern path), not the legacy re-export. Already implicitly correct in the plan — just keep it that way.
+
+### C3 — `_waitForTranscriptDir` uses `Bun.file(dir).exists()` antipattern (then immediately abandons it)
+Plan code (line 286-289):
+```ts
+const dir = Bun.file(this.config.workflow.transcriptDir);
+// Bun.file().exists() returns false for dirs; use stat instead.
+const { stat } = await import('node:fs/promises');
+await stat(this.config.workflow.transcriptDir);
+```
+The `Bun.file(dir)` line is dead code with no effect. Remove the first line entirely; only the `stat()` call is needed. This is exactly the gotcha listed in CLAUDE.md ("`Bun.file(dir).exists()` returns false for directories. Use `stat(dir)` instead.").
+
+### C4 — Commander `--no-X` + positive `--with-X` flag collision risk
+The plan registers BOTH:
+```ts
+.option('--with-workflow-agents', '...', true)
+.option('--no-workflow-agents', '...')
+```
+Commander uses the **camelCase of the rightmost word after `--`** as the option key. `--with-workflow-agents` → `withWorkflowAgents`. `--no-workflow-agents` → flips `workflowAgents` (different key!). This is the same trap the existing code avoids by using `--with-subagents` + `--no-with-subagents` (matching keys, see parser.ts:52). **Fix**: use `--with-workflow-agents` + `--no-with-workflow-agents` (matching key `withWorkflowAgents`). Adjust SPEC §11.1 wording or update plan to match SPEC exactly: SPEC line 1106 says `--no-workflow-agents` is "（Commander 自動覆寫上一個鍵）" — but Commander **does not** auto-bridge `withWorkflowAgents` and `workflowAgents`. Same problem for `--no-workflow-attach` (the plan only registers the `--no-*` form, no positive form). That's actually fine for Commander (negation-only flag → default true, becomes false when set). But the result mapping line `workflowAttach: opts.workflowAttach !== false` is wrong if no positive `--workflow-attach` was registered — Commander stores `true` by default for negation-only options (so `opts.workflowAttach === true` by default; `=== false` only when `--no-workflow-attach` passed). The `!== false` check works, but I'd rewrite as `opts.workflowAttach ?? true` for clarity.
+
+### C5 — Result-mapping for `workflowAgents` won't match key
+Plan line 466 says `withWorkflowAgents: opts.workflowAgents !== false`. But if `--with-workflow-agents` is registered, the key is `withWorkflowAgents` (not `workflowAgents`). The current code in `parser.ts` will read `undefined` from `opts.workflowAgents` → result is `true`. Looks "right" by accident but is fragile. **Fix**: pick one canonical positive form and a matching negative form, then mirror exactly. Recommended pair: `--with-workflow-agents` (positive) + `--no-with-workflow-agents` (negation) → both map to `withWorkflowAgents`, and `opts.withWorkflowAgents !== false` works.
+
+### C6 — Dispatcher gating: `findBySessionId` returning a workflow `SessionFile` not handled
+Q5 from the review: yes, this is a real gap. P2 spec'd `ClaudeSessionFinder.findBySessionId('wf_xxx')` to return a workflow `SessionFile` with `customTitle.startsWith('wf:')`. SPEC §11.3 dispatcher line 1076 explicitly checks both:
+```ts
+const wantsWorkflowMode = options.workflow !== undefined ||
+  (sessionFile?.customTitle?.startsWith('wf:') === true);
+```
+P3 plan only checks `options.workflow !== undefined`. So `agent-tail claude wf_6f7d9da9` (positional arg, no `--workflow` flag) will fall through to `startClaudeMultiWatch` and try to tail a `wf_*.json` as if it were `*.jsonl` — broken. **Fix**: add the second clause to the dispatcher trigger; when triggered via positional path, derive `runId` from `sessionFile.path` (basename) and `snapshotPath = sessionFile.path` (skip the wfFinder call).
+
+### C7 — `prefillKnown` is dead in P3 (D8 framing is half-right)
+The plan exports `prefillKnown` but says (D8) "No `prefillKnown` call in P3 dispatcher". That's correct because P3 dispatcher doesn't start the detector at all. But then the prefill API has no caller in P3 and no test. Options:
+- (a) Drop `prefillKnown` from P3 entirely (lands in P5).
+- (b) Keep it (low cost), but add a unit test verifying behavior so P5 inherits a tested contract (the test row "prefillKnown suppresses dir-watch emission" is in the plan — keep it; that justifies landing the API now).
+
+**Recommended**: keep `prefillKnown` and the test; remove the dead `// Used by dispatchers...` comment that implies a current caller. Rephrase the docblock to "Used by P5 dispatcher (main-JSONL path A)…".
+
+### C8 — Lifecycle ordering: leaves no clear "snapshot wedge slot" for P4
+The question is "should snapshot watcher wedge BEFORE or AFTER step 3?" SPEC §10.2 R3-B4 is explicit: snapshot watcher is **Step 4**, after directory watch starts. The P3 plan's `start()` comment block says `// Step 4 — snapshot watcher: P4 scope (not wired here)` — that's correct placement. **However**, the plan does not preserve the SPEC's critical ordering invariant: `journalParser.markLiveMode()` must run **after** initial flush completes, **before** any future state-mutating callback. The current plan calls `markLiveMode()` immediately after `await watcher.start(journalPath, ...)`. That's fine for P3 (FileWatcher's `start()` awaits the initial read, see `file-watcher.ts:49`). But P4 needs to know that adding SnapshotWatcher AFTER markLiveMode is safe. **Recommendation**: add a comment in `_startJournalAndFlushHistory` documenting: "FileWatcher.start() awaits initial readAndProcess (see core/file-watcher.ts:49) so markLiveMode is safe to call synchronously after." This preserves the wedge slot for P4 without ambiguity.
+
+### C9 — Use `drainParser` helper, don't reimplement
+Q8: yes, swap `_handleAgentLine`'s hand-rolled guard=100 loop for `drainParser` from `src/utils/parser-drain.ts`. Existing codebase has 5 callsites already using it. Ad-hoc 100-iteration loops are exactly what that helper exists to replace. CLAUDE.md explicitly lists `drainParser` as the canonical pattern. **Note**: `DRAIN_GUARD_MAX` in the helper is 10000, not 100 — the helper's value is the production one. Use it.
+
+### C10 — `--workflow-attach` default mismatch
+SPEC §11.1 says `--no-workflow-attach` toggles `workflowAttach: true` default. The plan registers `--workflow-attach` (positive form, default `true`) and `--no-workflow-attach` (negation). But P3 dispatcher path never reads `workflowAttach` (it's a P5 main-session concern). So registering it in P3 is correct (locks flag set early), but the result-mapping `workflowAttach: opts.workflowAttach !== false` should be `opts.workflowAttach ?? true` for clarity and to match Commander's actual default storage semantics for negation-only flags. (Cosmetic but worth fixing now.)
+
+---
+
+## Plan patch (proposed edits)
+
+### Patch 1 — Step 1 (`workflow-detector.ts`)
+- **Update `prefillKnown` docblock**: rephrase to "Used by P5 path-A dispatcher (main-JSONL handleMainLine). P3 does not call this."
+
+### Patch 2 — Step 2 (`watch-builder.ts`)
+
+**2a** — Drop the dead `Bun.file(dir)` line in `_waitForTranscriptDir`:
+```ts
+private async _waitForTranscriptDir(retries: number, intervalMs: number): Promise&lt;void&gt; {
+  const { stat } = await import('node:fs/promises');
+  for (let i = 0; i &lt; retries; i++) {
+    if (this.stopped) return;
+    try {
+      await stat(this.config.workflow.transcriptDir);
+      return;
+    } catch {
+      await new Promise((r) =&gt; setTimeout(r, intervalMs));
+    }
+  }
+}
+```
+
+**2b** — Replace `_handleAgentLine` with `drainParser`:
+```ts
+private _handleAgentLine(agentId: string, line: string, label: string): void {
+  const parser = this.agentParsers.get(agentId);
+  if (!parser) return;
+  drainParser(parser, line, (parsed) =&gt; {
+    parsed.sourceLabel = label;
+    const formatted = this.config.formatter.format(parsed);
+    if (formatted) this.config.onOutput(formatted, label);
+  });
+}
+```
+(Import `drainParser` from `../utils/parser-drain.ts`.)
+
+**2c** — Document FileWatcher initial-read await in `_startJournalAndFlushHistory`:
+```ts
+await watcher.start(journalPath, { ... });
+// FileWatcher.start() awaits initial readAndProcess (file-watcher.ts:49),
+// so all history lines have been parsed by now. Safe to switch to live mode
+// before the live tail begins. P4 SnapshotWatcher must start AFTER this.
+this.journalParser.markLiveMode();
+```
+
+**2d** — `attachAgent` rollback should also clear `agentParsers` and `agentWatchers` if partially set. The current finally block deletes from `agentParsers` but not `agentWatchers`. Fix:
+```ts
+} finally {
+  if (!succeeded) {
+    this.knownAgentIds.delete(agentId);
+    this.agentParsers.delete(agentId);
+    this.agentWatchers.delete(agentId);
+    ...
+  }
+}
+```
+
+### Patch 3 — Step 3 (`parser.ts`)
+
+**3a** — Use matching positive/negative keys:
+```ts
+.option('--workflow [runId]', 'Tail workflow run (no value = latest)')
+.option('--with-workflow-agents',
+  'Include workflow subagent transcripts (default: true)', true)
+.option('--no-with-workflow-agents', 'Disable workflow subagent tailing')
+.option('--workflow-attach',
+  'Auto-attach detected workflows from main session (default: true)', true)
+.option('--no-workflow-attach', 'Disable workflow auto-attach')
+.option('--workflow-pane',
+  'Open tmux pane for workflow main + each subagent')
+.option('--no-workflow-pane', 'Disable workflow pane (default)');
+```
+
+**3b** — Result mapping with clear defaults:
+```ts
+workflow: opts.workflow,                              // string | true | undefined
+withWorkflowAgents: opts.withWorkflowAgents !== false, // default true
+workflowAttach: opts.workflowAttach !== false,         // default true
+workflowPane: Boolean(opts.workflowPane),              // default false
+```
+
+**3c** — Note in SPEC update sweep (out of P3 plan scope, but flag): SPEC §11.1 should be tweaked to show `--no-with-workflow-agents` (matching key) instead of `--no-workflow-agents`. This is a P3-introduced naming choice; document it.
+
+### Patch 4 — Step 4 (`index.ts`)
+
+**4a** — Replace `createConsoleOutputHandler(options)` with `new ConsoleOutputHandler()`:
+```ts
+import { ConsoleOutputHandler } from './claude/output-handlers.ts';
+// ...
+const outputHandler = new ConsoleOutputHandler();
+```
+
+**4b** — Expand dispatch trigger to handle positional-arg workflow:
+```ts
+const isWorkflowMode =
+  options.agentType === 'claude' &amp;&amp; (
+    options.workflow !== undefined ||
+    (sessionFile?.customTitle?.startsWith('wf:') === true)
+  );
+
+if (isWorkflowMode) {
+  let snapshotPath: string;
+  let runId: string;
+
+  if (options.workflow !== undefined) {
+    // --workflow [runId] path (existing logic)
+    // ... wfFinder.findBySessionId / findLatest
+  } else {
+    // Positional arg matched a workflow snapshot via ClaudeSessionFinder
+    snapshotPath = sessionFile.path;
+    const m = basename(snapshotPath, '.json').match(/^(wf_[0-9a-f]{8}-[0-9a-f]{3})$/);
+    if (!m) { /* exit 1 */ }
+    runId = m[1]!;
+  }
+
+  await startClaudeWorkflowMultiWatch(snapshotPath, runId, formatter, options);
+  return;
+}
+```
+
+**4c** — Derive `sessionDir` from `snapshotPath` more defensively (the plan uses `parts.indexOf('workflows')` — fine, but add a guard if `wfIdx &lt; 0`).
+
+### Patch 5 — Tests
+
+**5a** — Add a `parser.test.ts` row verifying the `--no-with-workflow-agents` form (matching the renamed flag):
+```
+| `--no-with-workflow-agents` | `claude --workflow wf_x --no-with-workflow-agents` | `withWorkflowAgents: false` |
+```
+
+**5b** — Add a `parser.test.ts` row for `--workflow-attach` default:
+```
+| (no workflow flag at all)   | `claude --list`                              | `workflowAttach: true` (default) |
+```
+
+**5c** — Add an integration test row (or unit-test row in dispatcher) for the **positional-arg → workflow** path:
+```
+| Positional wf_ arg routes to workflow dispatcher | `claude wf_abc12345-def` (via fzf flow) | startClaudeWorkflowMultiWatch invoked, NOT startClaudeMultiWatch |
+```
+
+**5d** — Mark `tests/integration/workflow-multi-watch.test.ts` as **recommended, not optional**. Without it, the dispatcher wiring isn't covered end-to-end and a unit test for `attachment.start()` can't catch the dispatcher path bug from C6. Cost is low (small fixture, no real fs.watch needed if you use the existing `MutableFakeFileSystem` from `tests/integration/`).
+
+---
+
+## Risks &amp; mitigations
+
+- **Risk**: `fs.watch` on `transcriptDir` fires before `agent-*.jsonl` is fully written → `attachAgent` reads empty file. **Mitigation**: `FileWatcher` retries on empty content via its internal polling (existing). But the plan's `attachAgent` doesn't retry on `watcher.start()` failure. The rollback path is there, but on failure no auto-retry happens — relying on the next fs.watch event. For P3 this is acceptable (matches Cursor's `tryAddSubagentFile` rollback pattern), but document this in the plan: "rollback only — retry depends on next fs.watch event."
+
+- **Risk**: Commander's `--no-X` semantics surprise. **Mitigation**: Patch 3a forces matching keys.
+
+- **Risk**: macOS `fs.watch` may not fire for files in a transcriptDir created milliseconds after dir watch starts (race). **Mitigation**: SPEC §19.6 acknowledges this is a known issue. P3 plan correctly does `_scanAndAttachInitialAgents` BEFORE `_startSubagentDirWatch`, which catches files already on disk before the watch races in.
+
+- **Risk**: P4 SnapshotWatcher integration might want to insert BEFORE step 3 (dir watch) if snapshot completion needs to suppress new agent attaches. **Mitigation**: SPEC §10.2 R3-B4 is explicit — snapshot is Step 4. P3 plan leaves correct slot. No action needed in P3; just document the wedge point.
+
+- **Risk**: `process.once('SIGINT')` in `startClaudeWorkflowMultiWatch` swallows SIGINT for the rest of the process. Other code paths register `SIGINT` handlers too (check `src/index.ts:1437+`). **Mitigation**: Use `process.on('SIGINT', ...)` and add `await attachment.stop` to the existing shutdown flow if one exists, or scope the handler with cleanup.
+
+---
+
+## Test plan
+
+Unit:
+- `WorkflowDetector` (per plan rows) — all 7 rows; add: "outputHandler.debug called when dir doesn't exist" (mock debug fn, assert call).
+- `WorkflowAttachment` (per plan rows) — all 8 rows; add: "attachAgent rollback clears agentWatchers + agentParsers + knownAgentIds" (regression for Patch 2d).
+- Parser — all plan rows + Patch 5a/5b additions.
+
+Integration:
+- `tests/integration/workflow-multi-watch.test.ts` — **promote from optional to required**. Minimum coverage: fixture writes journal + 2 agent jsonls + dispatch → assert output buffer contains 3 distinct labels and a journal line.
+
+Manual smoke (after P3 lands, on dev box):
+```bash
+agent-tail claude --workflow wf_&lt;existing&gt;     # T4
+echo '{"type":"started",...}' &gt;&gt; .../journal.jsonl  # T5
+touch .../agent-{17hex}.jsonl                  # T6
+agent-tail claude --workflow wf_&lt;x&gt; --no-with-workflow-agents  # T7
+```
+
+---
+
+## Open questions
+
+None — the review's 8 focus points are all answerable from spec/code as described above.
+
+---
+
+## Files referenced
+
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_18-24-50_workflow-p3.md` (plan under review)
+- `/Users/pc035860/code/agent-tail/specs/workflow-support/SPEC.md` (§9.1, §9.3, §10.2, §10.4, §11.1, §11.2, §16)
+- `/Users/pc035860/code/agent-tail/specs/auto-implement/plan-2026-05-30_18-03-05_workflow-p2.md` (P2 contracts — `findBySessionId` workflow dispatch)
+- `/Users/pc035860/code/agent-tail/src/cli/parser.ts` (existing Commander patterns — see `--with-subagents` / `--no-with-subagents` pair)
+- `/Users/pc035860/code/agent-tail/src/claude/output-handlers.ts` (`ConsoleOutputHandler` class — no factory function)
+- `/Users/pc035860/code/agent-tail/src/core/detector-interfaces.ts` (`OutputHandler` / `SessionHandler` / `RetryConfig`)
+- `/Users/pc035860/code/agent-tail/src/core/file-watcher.ts` (`WatchOptions`; `start()` awaits initial read)
+- `/Users/pc035860/code/agent-tail/src/utils/parser-drain.ts` (`drainParser` — use instead of guard=100 loop)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/paths.ts` (already shipped in P1; importable)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/journal-parser.ts` (already shipped in P1)
+- `/Users/pc035860/code/agent-tail/src/claude-workflow/types.ts` (`DetectedWorkflow`)
+- `/Users/pc035860/code/agent-tail/src/index.ts:394` (`startClaudeMultiWatch` — pattern to mirror)
+- `/Users/pc035860/code/agent-tail/src/core/types.ts:38-44` (`CliOptions.workflow*` fields — already shipped in P1)</result>
+<usage><total_tokens>105011</total_tokens><tool_uses>19</tool_uses><duration_ms>161999</duration_ms></usage>
+</task-notification>
