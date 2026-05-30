@@ -8,6 +8,7 @@ import {
   MAIN_LABEL,
   buildSubagentPath,
 } from './subagent-detector.ts';
+import type { WorkflowDetector } from '../claude-workflow/workflow-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
@@ -101,6 +102,12 @@ export interface OnLineHandlerConfig {
   shouldOutput?: (label: string) => boolean;
   /** Callback when a custom-title event is detected on MAIN session */
   onTitleUpdate?: (title: string) => void;
+  /**
+   * P5 — Workflow detector for path A (main-JSONL Workflow tool_result
+   * detection). Caller must construct the detector BEFORE invoking
+   * createOnLineHandler so the reference is live when initial-read replays.
+   */
+  workflowDetector?: WorkflowDetector;
 }
 
 /**
@@ -165,6 +172,12 @@ export function createOnLineHandler(
           config.detector.pushDescription(parsed.taskDescription);
         }
         config.detector.handleEarlyDetection();
+      }
+
+      // P5 — Workflow path A: main-JSONL Workflow tool_result triggers
+      // auto-attach when --workflow-attach is enabled (default).
+      if (label === MAIN_LABEL && parsed.workflowAsyncLaunch) {
+        config.workflowDetector?.handleMainLine(parsed);
       }
 
       // 備援機制：從主 session 的 toolUseResult 檢查新 subagent

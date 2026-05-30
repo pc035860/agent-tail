@@ -235,6 +235,35 @@ bun start claude --all --no-with-subagents
 
 Negation flags override the preset, giving you fine-grained control while keeping the shortcut convenient.
 
+## Workflow Mode (Claude only)
+
+Tail a Claude Code **Workflow** run (multi-agent orchestration) — a workflow has its own journal (event stream) plus N parallel subagent transcripts.
+
+```bash
+# Tail the latest workflow in the current cwd
+agent-tail claude --workflow
+
+# Tail a specific workflow by runId
+agent-tail claude --workflow wf_6f7d9da9-37e
+agent-tail claude wf_6f7d9da9-37e          # positional shortcut
+
+# Interactive mode (Tab switches journal ↔ each subagent)
+agent-tail claude --workflow wf_<runId> -i
+
+# Tmux pane mode: journal pane (pinned) + subagent panes (FIFO eviction)
+agent-tail claude --workflow wf_<runId> --workflow-pane
+
+# Auto-attach is ON by default in plain `agent-tail claude` — opt out:
+agent-tail claude --no-workflow-attach
+```
+
+When tailing a normal `agent-tail claude` main session, workflow runs detected in
+the JSONL (path A: `tool_result.toolUseResult.status="async_launched"`) or the
+filesystem (path B: `~/.claude/projects/.../workflows/wf_*.json`) are
+**auto-attached**: their journal + agent transcripts stream into the same tail
+output with `[wf:...]` labels. `--list` shows workflow runs mixed with main
+sessions (sorted by activity time).
+
 ## CLI Options
 
 | Option | Short | Description |
@@ -259,6 +288,10 @@ Negation flags override the preset, giving you fine-grained control while keepin
 | `--all` | `-a` | Claude/Codex/Cursor: show all content (verbose + subagents + auto-switch) |
 | `--pane` | | Claude/Codex/Cursor: auto-open tmux pane for each new subagent |
 | `--no-pane` | | Disable pane auto-open (default) |
+| `--workflow [runId]` | | Claude: tail a Workflow run (no runId = latest in cwd) |
+| `--no-with-workflow-agents` | | Claude: skip workflow subagent transcripts (`--with-workflow-agents` is the default) |
+| `--no-workflow-attach` | | Claude: disable workflow auto-attach in main session mode |
+| `--workflow-pane` | | Claude: open tmux pane for workflow journal (pinned) + each subagent (FIFO eviction) |
 
 **Positional Arguments:**
 | Argument | Description |

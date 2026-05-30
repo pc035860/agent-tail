@@ -668,4 +668,169 @@ describe('parseArgs', () => {
       expect(options?.withSubagents).toBe(true);
     });
   });
+
+  // ============================================================
+  // P3: Workflow flags
+  // ============================================================
+
+  describe('workflow flags (Claude)', () => {
+    test('defaults when no workflow flags', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude']);
+      expect(options.workflow).toBeUndefined();
+      expect(options.withWorkflowAgents).toBe(true);
+      expect(options.workflowAttach).toBe(true);
+      expect(options.workflowPane).toBe(false);
+    });
+
+    test('--workflow <runId> sets workflow string', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--workflow',
+        'wf_12345678-abc',
+      ]);
+      expect(options.workflow).toBe('wf_12345678-abc');
+    });
+
+    test('--workflow with no value sets workflow=true', () => {
+      const options = parseArgs(['node', 'agent-tail', 'claude', '--workflow']);
+      expect(options.workflow).toBe(true);
+    });
+
+    test('--no-with-workflow-agents flips withWorkflowAgents to false', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--workflow',
+        'wf_x',
+        '--no-with-workflow-agents',
+      ]);
+      expect(options.withWorkflowAgents).toBe(false);
+    });
+
+    test('--no-workflow-attach flips workflowAttach to false', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--no-workflow-attach',
+      ]);
+      expect(options.workflowAttach).toBe(false);
+    });
+
+    test('--workflow-pane sets workflowPane=true', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        '--workflow',
+        'wf_x',
+        '--workflow-pane',
+      ]);
+      expect(options.workflowPane).toBe(true);
+    });
+
+    test('positional wf_* arg sets sessionId', () => {
+      const options = parseArgs([
+        'node',
+        'agent-tail',
+        'claude',
+        'wf_12345678-abc',
+      ]);
+      expect(options.sessionId).toBe('wf_12345678-abc');
+      expect(options.workflow).toBeUndefined();
+    });
+
+    test('--workflow + non-claude exits 1', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs([
+          'node',
+          'agent-tail',
+          'codex',
+          '--workflow',
+          'wf_12345678-abc',
+        ])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--workflow + --subagent exits 1', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs([
+          'node',
+          'agent-tail',
+          'claude',
+          '--workflow',
+          'wf_x',
+          '--subagent',
+          'abc',
+        ])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--workflow-pane + -i exits 1', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs([
+          'node',
+          'agent-tail',
+          'claude',
+          '--workflow',
+          'wf_x',
+          '--workflow-pane',
+          '-i',
+        ])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+
+    test('--workflow-pane + --pane exits 1', () => {
+      process.exit = ((code?: number) => {
+        exitCode = code;
+        throw new Error('process.exit called');
+      }) as typeof process.exit;
+      const consoleSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(() =>
+        parseArgs([
+          'node',
+          'agent-tail',
+          'claude',
+          '--workflow',
+          'wf_x',
+          '--workflow-pane',
+          '--pane',
+        ])
+      ).toThrow('process.exit called');
+      expect(exitCode).toBe(1);
+
+      consoleSpy.mockRestore();
+    });
+  });
 });

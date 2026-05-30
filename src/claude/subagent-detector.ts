@@ -145,6 +145,10 @@ export async function scanForNewSubagents(
   try {
     const glob = new Glob('agent-*.jsonl');
     for await (const file of glob.scan({ cwd: subagentsDir })) {
+      // Defensive: skip anything under a subdirectory (e.g. nested
+      // workflows/wf_*/agent-*.jsonl). Bun.Glob is non-recursive by
+      // default but this guard protects against future behavior changes.
+      if (file.includes('/')) continue;
       // 從檔名 "agent-{id}.jsonl" 提取 id（支援 7-40 位 hex）
       const match = file.match(/^agent-([0-9a-f]{7,40})\.jsonl$/i);
       if (match && match[1]) {

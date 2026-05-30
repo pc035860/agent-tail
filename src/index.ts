@@ -8,6 +8,11 @@ import {
 } from './core/multi-file-watcher.ts';
 import { SessionManager, type WatcherSession } from './core/session-manager.ts';
 import { DisplayController } from './interactive/display-controller.ts';
+import {
+  installInteractiveKeyboard,
+  uninstallInteractiveKeyboard,
+  registerInteractiveCleanup,
+} from './interactive/keyboard.ts';
 import type { Agent, LineParser } from './agents/agent.interface.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
@@ -69,6 +74,15 @@ import {
   buildCursorSubagentPath,
   makeCursorAgentLabel,
 } from './cursor/watch-builder.ts';
+import { WorkflowSessionFinder } from './agents/claude/workflow-agent.ts';
+import { WorkflowAttachment } from './claude-workflow/watch-builder.ts';
+import {
+  cwdToClaudeProjectFilter,
+  deriveWorkflowDirs,
+  makeWorkflowJournalSessionId,
+  parseWorkflowSnapshotFilename,
+} from './claude-workflow/paths.ts';
+import { WorkflowDetector } from './claude-workflow/workflow-detector.ts';
 
 /**
  * 條件式日誌輸出 - 在 quiet 模式下抑制非錯誤訊息
@@ -125,6 +139,25 @@ async function summaryCommand(
     process.exit(1);
   }
 
+  const tailLines = options.lines ?? 15;
+
+  // Workflow snapshot path: a `wf_*.json` is a single JSON object (not JSONL),
+  // so the JSONL summary path produces empty output. Detour to a journal-
+  // based summary keyed off the snapshot path. Detect via filename shape so
+  // we don't depend on SessionListItem-only fields on the SessionFile.
+  if (parseWorkflowSnapshotFilename(basename(sessionFile.path))) {
+    const { formatWorkflowSummary } =
+      await import('./claude-workflow/summary.ts');
+    const lines = await formatWorkflowSummary(sessionFile.path, formatter, {
+      headLines: 5,
+      tailLines,
+    });
+    for (const line of lines) {
+      console.log(line);
+    }
+    return;
+  }
+
   if (options.agentType === 'agy') {
     const uuid = basename(sessionFile.path, '.pb');
     agent.parser.setConversationId?.(uuid);
@@ -134,7 +167,7 @@ async function summaryCommand(
     options.agentType === 'gemini' || options.agentType === 'agy';
   const lines = await formatSummary(sessionFile.path, agent.parser, formatter, {
     headLines: 5,
-    tailLines: options.lines ?? 15,
+    tailLines,
     jsonMode,
   });
 
@@ -335,6 +368,21 @@ async function main(): Promise<void> {
   if (!sessionFile) {
     console.error(chalk.red('No session file found'));
     process.exit(1);
+  }
+
+  // Workflow mode dispatch (Claude only). Triggered by either:
+  // (a) explicit --workflow flag, OR
+  // (b) positional wf_* arg → ClaudeSessionFinder.findBySessionId dispatched
+  //     to WorkflowSessionFinder, producing a SessionFile whose customTitle
+  //     starts with 'wf:'.
+  const isWorkflowMode =
+    options.agentType === 'claude' &&
+    (options.workflow !== undefined ||
+      sessionFile?.customTitle?.startsWith('wf:') === true);
+
+  if (isWorkflowMode) {
+    await dispatchClaudeWorkflow(sessionFile, formatter, options);
+    return;
   }
 
   // 監控模式判斷：
@@ -545,6 +593,46 @@ async function startClaudeMultiWatch(
   });
   detector.startDirectoryWatch();
 
+  // P5 — Workflow auto-attach (default on; --no-workflow-attach disables)
+  const wfAttachments = new Map<string, WorkflowAttachment>();
+  let workflowDetector: WorkflowDetector | undefined;
+  if (options.workflowAttach !== false) {
+    const wfOutputHandler = new ConsoleOutputHandler();
+    workflowDetector = new WorkflowDetector({
+      sessionUuid: basename(sessionFile.path, '.jsonl'),
+      sessionDir: dirname(sessionFile.path),
+      outputHandler: wfOutputHandler,
+      onNewWorkflow: async (workflow) => {
+        if (wfAttachments.has(workflow.runId)) return;
+        const attachment = new WorkflowAttachment({
+          workflow,
+          withAgents: options.withWorkflowAgents !== false,
+          verbose: options.verbose,
+          follow: options.follow,
+          pollInterval: options.sleepInterval,
+          initialLines: options.lines,
+          formatter,
+          onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
+          outputHandler: wfOutputHandler,
+          onStop: () => {
+            wfAttachments.delete(workflow.runId);
+          },
+        });
+        wfAttachments.set(workflow.runId, attachment);
+        try {
+          await attachment.start();
+        } catch (err) {
+          wfOutputHandler.debug(
+            `[wf:${workflow.runId}] attachment start failed: ${err}`
+          );
+          wfAttachments.delete(workflow.runId);
+          throw err;
+        }
+      },
+    });
+    await workflowDetector.start();
+  }
+
   // ========== Non-Interactive Super-Follow ==========
   let currentSessionPath = sessionFile.path;
 
@@ -553,6 +641,15 @@ async function startClaudeMultiWatch(
   ): Promise<void> => {
     // 停止現有監控
     detector?.stop();
+    // P5 — super-follow swap: the old detector is bound to the old
+    // sessionDir; stop it AND clear out any in-flight workflow
+    // attachments before binding a new detector for the new session.
+    workflowDetector?.stop();
+    workflowDetector = undefined;
+    for (const att of wfAttachments.values()) {
+      void att.stop('user');
+    }
+    wfAttachments.clear();
     multiWatcher.stop();
 
     // 更新當前 session 路徑
@@ -637,6 +734,46 @@ async function startClaudeMultiWatch(
     multiWatcher = newMultiWatcher;
     detector = newDetector;
 
+    // P5 — re-bind WorkflowDetector to the new session (path A/B both
+    // need the new sessionDir to derive correct snapshot/transcript
+    // paths). Same construction as the initial branch above.
+    if (options.workflowAttach !== false) {
+      const wfOutputHandler = new ConsoleOutputHandler();
+      workflowDetector = new WorkflowDetector({
+        sessionUuid: basename(nextSessionFile.path, '.jsonl'),
+        sessionDir: dirname(nextSessionFile.path),
+        outputHandler: wfOutputHandler,
+        onNewWorkflow: async (workflow) => {
+          if (wfAttachments.has(workflow.runId)) return;
+          const attachment = new WorkflowAttachment({
+            workflow,
+            withAgents: options.withWorkflowAgents !== false,
+            verbose: options.verbose,
+            follow: options.follow,
+            pollInterval: options.sleepInterval,
+            initialLines: options.lines,
+            formatter,
+            onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
+            outputHandler: wfOutputHandler,
+            onStop: () => {
+              wfAttachments.delete(workflow.runId);
+            },
+          });
+          wfAttachments.set(workflow.runId, attachment);
+          try {
+            await attachment.start();
+          } catch (err) {
+            wfOutputHandler.debug(
+              `[wf:${workflow.runId}] attachment start failed: ${err}`
+            );
+            wfAttachments.delete(workflow.runId);
+            throw err;
+          }
+        },
+      });
+      await workflowDetector.start();
+    }
+
     // 重新啟動監控
     await multiWatcher.start(newFiles, {
       follow: options.follow,
@@ -649,6 +786,7 @@ async function startClaudeMultiWatch(
         onOutput: (formatted) => console.log(formatted),
         verbose: options.verbose,
         shouldOutput,
+        workflowDetector,
       }),
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
@@ -669,6 +807,14 @@ async function startClaudeMultiWatch(
     superFollow.stop();
     console.log(chalk.gray('\nStopping...'));
     detector?.stop();
+    workflowDetector?.stop();
+    // P5: stop any in-flight workflow attachments (best-effort; SIGINT
+    // exits immediately so we don't await — onStop callbacks may not
+    // run, but PID death cleans up watchers).
+    for (const att of wfAttachments.values()) {
+      void att.stop('user');
+    }
+    wfAttachments.clear();
     multiWatcher.stop();
     // best-effort 清理所有 pane（async 但不等待，因為即將 exit）
     paneManager?.closeAll();
@@ -686,6 +832,7 @@ async function startClaudeMultiWatch(
       onOutput: (formatted) => console.log(formatted),
       verbose: options.verbose,
       shouldOutput,
+      workflowDetector,
     }),
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
@@ -702,6 +849,313 @@ async function startClaudeMultiWatch(
 
   // 保持程式運行
   log(options.quiet, chalk.gray('Watching for changes... (Ctrl+C to stop)'));
+}
+
+/**
+ * Workflow mode dispatch (SPEC §10.4) — resolves the snapshot path from
+ * either --workflow flag or positional wf_* arg, then hands off to
+ * startClaudeWorkflowMultiWatch.
+ */
+async function dispatchClaudeWorkflow(
+  sessionFile: SessionFile,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  let snapshotPath: string;
+
+  if (options.workflow !== undefined) {
+    const wfFinder = new WorkflowSessionFinder();
+    let result: SessionFile | null;
+    if (typeof options.workflow === 'string') {
+      result = await wfFinder.findBySessionId(options.workflow, {
+        project: options.project,
+      });
+      if (!result) {
+        console.error(
+          chalk.red(`Error: workflow run not found: ${options.workflow}`)
+        );
+        process.exit(1);
+      }
+    } else {
+      // --workflow (no runId) — scope to current cwd
+      const filter = cwdToClaudeProjectFilter(process.cwd());
+      result = await wfFinder.findLatest({ project: filter });
+      if (!result) {
+        console.error(
+          chalk.red(
+            'Error: no workflow runs found in current cwd. Use --list or --workflow <runId>.'
+          )
+        );
+        process.exit(1);
+      }
+    }
+    snapshotPath = result.path;
+  } else {
+    // Positional-arg path — sessionFile already resolved by
+    // ClaudeSessionFinder.findBySessionId dispatching wf_* to workflow finder.
+    snapshotPath = sessionFile.path;
+  }
+
+  const runId = parseWorkflowSnapshotFilename(basename(snapshotPath));
+  if (!runId) {
+    console.error(
+      chalk.red(`Error: failed to derive runId from ${snapshotPath}`)
+    );
+    process.exit(1);
+  }
+
+  if (options.interactive) {
+    await startClaudeWorkflowInteractiveWatch(
+      snapshotPath,
+      runId,
+      formatter,
+      options
+    );
+  } else {
+    await startClaudeWorkflowMultiWatch(
+      snapshotPath,
+      runId,
+      formatter,
+      options
+    );
+  }
+}
+
+/**
+ * P6 — Workflow Interactive mode. TTY fallback delegates to
+ * startClaudeWorkflowMultiWatch (non-interactive). In TTY mode, builds
+ * SessionManager tabs (journal + agents) and a workflow-aware status line.
+ */
+async function startClaudeWorkflowInteractiveWatch(
+  snapshotPath: string,
+  runId: string,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // TTY fallback — non-interactive environments cannot drive Tab key
+  // switching; fall back to standard workflow multi-watch.
+  if (!process.stdin.isTTY) {
+    console.warn(
+      chalk.yellow(
+        'Warning: Interactive mode not available in non-TTY environment.\n' +
+          'Switching to standard workflow watch mode.'
+      )
+    );
+    await startClaudeWorkflowMultiWatch(
+      snapshotPath,
+      runId,
+      formatter,
+      options
+    );
+    return;
+  }
+
+  // TTY-mode implementation: derive paths + build attachment with
+  // SessionManager wiring. See SPEC §12 for the design contract.
+  const dirs = deriveWorkflowDirs(snapshotPath, runId);
+  if (!dirs) {
+    console.error(
+      chalk.red(`Error: malformed workflow snapshot path: ${snapshotPath}`)
+    );
+    process.exit(1);
+  }
+  const { transcriptDir } = dirs;
+
+  // Register SIGINT early so Ctrl-C during init/await still runs cleanup
+  // (otherwise terminal scroll region / status line stays dirty on exit).
+  const { setCleanup } = registerInteractiveCleanup();
+
+  const displayController = new DisplayController({
+    persistentStatusLine: true,
+    historyLines: 50,
+    // Workflow mode: reserve two status rows — session tabs on top,
+    // workflow segment below. Other interactive watches keep the default
+    // single-row layout.
+    statusRows: 2,
+  });
+  displayController.init();
+  displayController.setWorkflowStatus(runId, null);
+
+  const sessionManager = createInteractiveSessionManager(displayController);
+  const outputHandler = new DisplayControllerOutputHandler(displayController);
+
+  const journalLabel = `[wf:${runId}:journal]`;
+  const journalSessionId = makeWorkflowJournalSessionId(runId);
+  sessionManager.addSession(journalSessionId, journalLabel, transcriptDir);
+
+  const attachment = new WorkflowAttachment({
+    workflow: { runId, transcriptDir, snapshotPath },
+    withAgents: options.withWorkflowAgents !== false,
+    verbose: options.verbose,
+    follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
+    formatter,
+    onOutput: (formatted, label) => {
+      // SessionManager routes by label match (see handleOutput). Workflow
+      // labels match the addSession label exactly: journal gets
+      // `[wf:{runId}:journal]`; agents get `[wf:{shortId}]`.
+      sessionManager.handleOutput(label, formatted);
+    },
+    outputHandler,
+    sessionHandler: {
+      addSession: (id, label, path) =>
+        sessionManager.addSession(id, label, path),
+      markSessionDone: (id) => sessionManager.markSessionDone(id),
+      updateUI: () =>
+        displayController.updateStatusLine(
+          sessionManager.getAllSessions(),
+          sessionManager.getActiveIndex()
+        ),
+    },
+    onStop: () => {
+      displayController.write(
+        chalk.gray(`[wf:${runId}] stopped — Ctrl+C to exit`)
+      );
+    },
+  });
+
+  // Poll snapshot every 1s to refresh workflow status line.
+  const statusInterval = setInterval(() => {
+    displayController.setWorkflowStatus(runId, attachment.getCurrentSnapshot());
+    displayController.updateStatusLine(
+      sessionManager.getAllSessions(),
+      sessionManager.getActiveIndex()
+    );
+  }, 1000);
+
+  const cleanup = (): void => {
+    clearInterval(statusInterval);
+    // attachment.stop is async; fire-and-forget so we don't block the exit
+    // path. Other interactive watches follow the same sync-cleanup pattern.
+    attachment.stop('user').catch(() => {});
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
+  };
+  setCleanup(cleanup);
+
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
+  });
+
+  await attachment.start();
+
+  displayController.setWorkflowStatus(runId, attachment.getCurrentSnapshot());
+  displayController.updateStatusLine(
+    sessionManager.getAllSessions(),
+    sessionManager.getActiveIndex()
+  );
+
+  displayController.write(
+    chalk.gray('Watching for changes... (Tab to switch, q to quit)')
+  );
+}
+
+async function startClaudeWorkflowMultiWatch(
+  snapshotPath: string,
+  runId: string,
+  formatter: Formatter,
+  options: CliOptions
+): Promise<void> {
+  // Derive transcriptDir from snapshotPath via shared helper.
+  const dirs = deriveWorkflowDirs(snapshotPath, runId);
+  if (!dirs) {
+    console.error(
+      chalk.red(`Error: malformed workflow snapshot path: ${snapshotPath}`)
+    );
+    process.exit(1);
+  }
+  const { transcriptDir } = dirs;
+
+  const outputHandler = new ConsoleOutputHandler();
+
+  // P7 — --workflow-pane: open tmux pane for journal (pinned) + subagents
+  let paneManager: PaneManager | null = null;
+  if (options.workflowPane) {
+    const controller = createTerminalController();
+    if (controller.isAvailable()) {
+      paneManager = new PaneManager(
+        controller,
+        (_agentId, path) => {
+          // Workflow agents live in nested `subagents/workflows/{runId}/`
+          // paths — ClaudeSessionFinder.findSubagent's `**/*/subagents/
+          // agent-*.jsonl` glob does NOT match nested workflow paths. Use
+          // `tail -F` directly on the known transcript path (also handles
+          // file rotation gracefully on macOS/Linux).
+          // Shell-escape via single quotes (escape embedded single quotes
+          // with `'\''`) so paths containing `"`, `$`, backticks, etc.
+          // don't break the command.
+          const escaped = `'${path.replaceAll(`'`, `'\\''`)}'`;
+          return `tail -F ${escaped}`;
+        },
+        (msg) => log(options.quiet, chalk.gray(msg))
+      );
+      const journalKey = makeWorkflowJournalSessionId(runId);
+      await paneManager.openPane(
+        journalKey,
+        `${transcriptDir}/journal.jsonl`,
+        `wf:${runId}`
+      );
+      paneManager.pinAgent(journalKey);
+    } else {
+      console.warn(
+        chalk.yellow('Warning: --workflow-pane requires tmux; ignoring flag')
+      );
+    }
+  }
+
+  const attachment = new WorkflowAttachment({
+    workflow: { runId, transcriptDir, snapshotPath },
+    withAgents: options.withWorkflowAgents !== false,
+    verbose: options.verbose,
+    follow: options.follow,
+    pollInterval: options.sleepInterval,
+    initialLines: options.lines,
+    formatter,
+    onOutput: (formatted) => process.stdout.write(`${formatted}\n`),
+    outputHandler,
+    sessionHandler: paneManager
+      ? {
+          addSession: (agentId, _label, path) => {
+            void paneManager?.openPaneEvictIfNeeded(
+              agentId,
+              path,
+              `wf:${agentId.slice(0, 7)}`
+            );
+          },
+          markSessionDone: (agentId) => {
+            void paneManager?.closePaneByAgentId(agentId);
+          },
+          updateUI: () => {},
+        }
+      : undefined,
+  });
+
+  log(options.quiet, chalk.cyan(`[wf:${runId}] starting workflow watch`));
+  await attachment.start();
+
+  // TODO(P6): coordinate SIGINT with interactive shutdown path
+  process.once('SIGINT', () => {
+    void attachment.stop('user').then(async () => {
+      await paneManager?.closeAll();
+      process.exit(0);
+    });
+  });
+
+  // Skip the "Watching workflow..." log when the initial snapshot already
+  // shows terminal status — the auto-exit is queued via microtask and the
+  // process will end before a real watch begins.
+  const initialStatus = attachment.getCurrentSnapshot()?.status;
+  const isTerminal =
+    initialStatus === 'completed' || initialStatus === 'failed';
+  if (!isTerminal) {
+    log(options.quiet, chalk.gray('Watching workflow... (Ctrl+C to stop)'));
+  }
 }
 
 /**
@@ -814,10 +1268,22 @@ async function startClaudeInteractiveWatch(
 
   const lockedProjectDir = dirname(sessionFile.path);
 
+  // Register SIGINT early so Ctrl-C during the init/await window still
+  // runs cleanup (otherwise displayController scroll region stays dirty).
+  const { setCleanup } = registerInteractiveCleanup();
+
   // 建立 DisplayController
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+  });
+
+  // Stage-1 minimal cleanup — covers Ctrl-C during the init/await window
+  // before all deps (superFollow / multiWatcher / detector) are bound.
+  // Replaced below with the full cleanup once everything is ready.
+  setCleanup(() => {
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
   });
 
   let sessionManager!: SessionManager;
@@ -931,42 +1397,6 @@ async function startClaudeInteractiveWatch(
     });
   };
 
-  // 設定鍵盤監聽
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', (key: string) => {
-      // Ctrl+C
-      if (key === '\u0003') {
-        cleanup();
-        process.exit(0);
-      }
-      // q - quit
-      if (key === 'q' || key === 'Q') {
-        cleanup();
-        process.exit(0);
-      }
-      // Tab - switch next
-      if (key === '\t') {
-        sessionManager.switchNext();
-      }
-      // Shift+Tab (varies by terminal, common: \u001b[Z)
-      if (key === '\u001b[Z') {
-        sessionManager.switchPrev();
-      }
-      // n - switch next (alternative)
-      if (key === 'n' || key === 'N') {
-        sessionManager.switchNext();
-      }
-      // p - switch prev (alternative)
-      if (key === 'p' || key === 'P') {
-        sessionManager.switchPrev();
-      }
-    });
-  }
-
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, initialSubagent, true);
 
@@ -1026,18 +1456,23 @@ async function startClaudeInteractiveWatch(
     displayController.destroy();
     detector?.stop();
     log(options.quiet, chalk.gray('\nStopping...'));
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
+    uninstallInteractiveKeyboard();
     if (multiWatcher) {
       multiWatcher.stop();
     }
   };
+  setCleanup(cleanup);
 
-  // 處理中斷信號
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
+  // Keyboard listener — install AFTER sessionManager + cleanup are bound and
+  // initial buildInteractiveState completed, so an early keypress can't hit
+  // an undefined sessionManager or cleanup TDZ (would leave TTY in raw mode).
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
   });
 
   // 保持程式運行（interactive 模式必須是 follow）
@@ -1074,10 +1509,20 @@ async function startCodexInteractiveWatch(
     : null;
   const projectDir = projectInfo?.projectDir ?? dirname(sessionFile.path);
 
+  // Register SIGINT early so Ctrl-C during init/await still runs cleanup.
+  const { setCleanup } = registerInteractiveCleanup();
+
   // 建立 DisplayController
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+  });
+
+  // Stage-1 minimal cleanup — covers the init/await window. Full cleanup
+  // (incl. superFollow/multiWatcher) replaces this once deps are bound.
+  setCleanup(() => {
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
   });
 
   let sessionManager!: SessionManager;
@@ -1186,36 +1631,6 @@ async function startCodexInteractiveWatch(
     });
   };
 
-  // 設定鍵盤監聽
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', (key: string) => {
-      if (key === '\u0003') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === 'q' || key === 'Q') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === '\t') {
-        sessionManager.switchNext();
-      }
-      if (key === '\u001b[Z') {
-        sessionManager.switchPrev();
-      }
-      if (key === 'n' || key === 'N') {
-        sessionManager.switchNext();
-      }
-      if (key === 'p' || key === 'P') {
-        sessionManager.switchPrev();
-      }
-    });
-  }
-
   // 初始化狀態並啟動監控
   await buildInteractiveState(currentSessionFile, true);
 
@@ -1266,16 +1681,21 @@ async function startCodexInteractiveWatch(
     displayController.destroy();
     detector?.stop();
     log(options.quiet, chalk.gray('\nStopping...'));
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
-    }
+    uninstallInteractiveKeyboard();
     multiWatcher?.stop();
   };
+  setCleanup(cleanup);
 
-  // 處理中斷信號
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
+  // Keyboard listener — install AFTER sessionManager + cleanup are bound,
+  // so an early keypress can't hit an undefined sessionManager or cleanup
+  // TDZ (would leave TTY in raw mode).
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
   });
 
   // 保持程式運行（interactive 模式必須是 follow）
@@ -1580,9 +2000,20 @@ async function startCursorInteractiveWatch(
     ? await cursorAgent.finder.getProjectInfo(sessionFile.path)
     : null;
 
+  // Register SIGINT early so Ctrl-C during init/await still runs cleanup.
+  const { setCleanup } = registerInteractiveCleanup();
+
   const displayController = new DisplayController({
     persistentStatusLine: true,
     historyLines: 50,
+  });
+
+  // Stage-1 minimal cleanup — covers the init/await window. Full cleanup
+  // (incl. superFollow/multiWatcher/detector) replaces this once deps are
+  // bound.
+  setCleanup(() => {
+    displayController.destroy();
+    uninstallInteractiveKeyboard();
   });
 
   let sessionManager!: SessionManager;
@@ -1680,28 +2111,6 @@ async function startCursorInteractiveWatch(
     });
   };
 
-  // ========== Keyboard Handling ==========
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-
-    process.stdin.on('data', (key: string) => {
-      if (key === '\u0003') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === 'q' || key === 'Q') {
-        cleanup();
-        process.exit(0);
-      }
-      if (key === '\t') sessionManager.switchNext();
-      if (key === '\u001b[Z') sessionManager.switchPrev(); // Shift+Tab
-      if (key === 'n' || key === 'N') sessionManager.switchNext();
-      if (key === 'p' || key === 'P') sessionManager.switchPrev();
-    });
-  }
-
   // ========== Session Switch (Super-Follow) ==========
   const switchToSession = async (nextFile: SessionFile): Promise<void> => {
     detector?.stop();
@@ -1747,13 +2156,21 @@ async function startCursorInteractiveWatch(
     superFollow.stop();
     displayController.destroy();
     detector?.stop();
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    uninstallInteractiveKeyboard();
     multiWatcher?.stop();
   };
+  setCleanup(cleanup);
 
-  process.on('SIGINT', () => {
-    cleanup();
-    process.exit(0);
+  // Keyboard listener — install AFTER sessionManager + cleanup are bound,
+  // so an early keypress can't hit an undefined sessionManager or cleanup
+  // TDZ (would leave TTY in raw mode).
+  installInteractiveKeyboard({
+    onNext: () => sessionManager.switchNext(),
+    onPrev: () => sessionManager.switchPrev(),
+    onQuit: () => {
+      cleanup();
+      process.exit(0);
+    },
   });
 
   superFollow.start();

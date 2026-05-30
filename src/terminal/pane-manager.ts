@@ -45,6 +45,10 @@ export class PaneManager {
   private pendingCloseAgentIds: Set<string> = new Set();
   /** applyLayout debounce timer */
   private layoutTimer: ReturnType<typeof setTimeout> | null = null;
+  /** P7 — agentIds in insertion order (used by FIFO eviction in workflow mode) */
+  private insertionOrder: string[] = [];
+  /** P7 — agentIds excluded from FIFO eviction (workflow main pane) */
+  private pinnedAgentIds: Set<string> = new Set();
 
   constructor(
     controller: TerminalController,
@@ -79,6 +83,7 @@ export class PaneManager {
       const pane = await this.controller.createPane(cmd, agentId);
       if (pane) {
         this.panes.set(agentId, pane);
+        this.insertionOrder.push(agentId);
 
         // Best-effort pane naming (before pendingClose check)
         if (description && this.controller.renamePane) {
@@ -123,6 +128,8 @@ export class PaneManager {
     await Promise.all(closePromises);
     this.panes.clear();
     this.pendingCloseAgentIds.clear();
+    this.insertionOrder.length = 0;
+    this.pinnedAgentIds.clear();
   }
 
   /**
@@ -177,12 +184,53 @@ export class PaneManager {
 
     // 立刻移除，防止並行呼叫重複觸發 closePane
     this.panes.delete(agentId);
+    const idx = this.insertionOrder.indexOf(agentId);
+    if (idx >= 0) this.insertionOrder.splice(idx, 1);
+    this.pinnedAgentIds.delete(agentId);
 
     try {
       await this.controller.closePane(pane.id);
     } catch {
       // 靜默忽略關閉失敗（pane 可能已經關閉）
     }
+  }
+
+  /** P7 — mark agent's pane as pinned (survives FIFO eviction in workflow mode). */
+  pinAgent(agentId: string): void {
+    this.pinnedAgentIds.add(agentId);
+  }
+
+  /** P7 — clear pin so subsequent FIFO can evict this pane normally. */
+  unpinAgent(agentId: string): void {
+    this.pinnedAgentIds.delete(agentId);
+  }
+
+  /**
+   * P7 — open a pane, evicting the oldest non-pinned pane if at MAX_PANES.
+   * If all panes are pinned, treats the cap as "full" and skips quietly.
+   */
+  async openPaneEvictIfNeeded(
+    agentId: string,
+    subagentPath: string,
+    description?: string
+  ): Promise<void> {
+    if (this.panes.has(agentId)) return;
+    if (this.pendingAgentIds.has(agentId)) return;
+
+    if (this.panes.size + this.pendingAgentIds.size >= MAX_PANES) {
+      const oldest = this.insertionOrder.find(
+        (id) => !this.pinnedAgentIds.has(id) && this.panes.has(id)
+      );
+      if (!oldest) {
+        this.logger?.(
+          `[pane] All ${MAX_PANES} panes pinned; skipping open for ${agentId}`
+        );
+        return;
+      }
+      await this.closePaneByAgentId(oldest);
+    }
+
+    await this.openPane(agentId, subagentPath, description);
   }
 
   /**

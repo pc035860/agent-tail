@@ -22,6 +22,9 @@ import {
   readCustomTitleFromTail,
   readCwdFromHead,
 } from '../../utils/session-time.ts';
+import { WorkflowSessionFinder } from './workflow-agent.ts';
+import type { ProjectInfo } from '../../core/types.ts';
+import { isValidWorkflowRunId } from '../../claude-workflow/paths.ts';
 
 /** JSONL event type for Claude /rename command */
 const CUSTOM_TITLE_TYPE = 'custom-title';
@@ -30,11 +33,46 @@ const CUSTOM_TITLE_TYPE = 'custom-title';
  * Claude Code Session Finder
  * 目錄結構: ~/.claude/projects/{encoded-path}/{UUID}.jsonl
  */
-class ClaudeSessionFinder implements SessionFinder {
-  private baseDir: string;
+export class ClaudeSessionFinder implements SessionFinder {
+  private readonly baseDir: string;
+  private readonly workflowFinder: WorkflowSessionFinder;
 
-  constructor() {
-    this.baseDir = join(homedir(), '.claude', 'projects');
+  constructor(options?: { baseDir?: string }) {
+    this.baseDir = options?.baseDir ?? join(homedir(), '.claude', 'projects');
+    this.workflowFinder = new WorkflowSessionFinder(this.baseDir);
+  }
+
+  /**
+   * Returns absolute path to the encoded project dir (matches
+   * `dirname(sessionFile.path)` semantics in src/index.ts and
+   * src/claude/auto-switch.ts). `displayName` is the decoded cwd read
+   * from the session JSONL head.
+   *
+   * Derivation is relative to `this.baseDir` (works with both the real
+   * `~/.claude/projects` and test fixtures). Returns null when the
+   * sessionPath isn't under baseDir.
+   */
+  async getProjectInfo(sessionPath: string): Promise<ProjectInfo | null> {
+    const baseDirSlash = this.baseDir.endsWith('/')
+      ? this.baseDir
+      : `${this.baseDir}/`;
+    if (!sessionPath.startsWith(baseDirSlash)) return null;
+    const rel = sessionPath.slice(baseDirSlash.length).split('/');
+    // expected: [encodedDir, '{UUID}.jsonl'] (subagent / workflow paths
+    // have additional segments — caller's responsibility)
+    if (rel.length < 1) return null;
+    const encodedDir = rel[0]!;
+    if (!encodedDir) return null;
+    const projectDir = join(this.baseDir, encodedDir);
+    const cwd = await readCwdFromHead(sessionPath);
+    return {
+      projectDir,
+      ...(cwd ? { displayName: cwd } : {}),
+    };
+  }
+
+  async findLatestInProject(projectDir: string): Promise<SessionFile | null> {
+    return this.findLatest({ project: projectDir });
   }
 
   getBaseDir(): string {
@@ -114,13 +152,55 @@ class ClaudeSessionFinder implements SessionFinder {
     project?: string;
     limit?: number;
   }): Promise<SessionListItem[]> {
-    const files = await this._collectMainSessions(options);
     const limit = options.limit ?? 20;
-    const sliced = files.slice(0, limit);
 
-    // Enrich with tail-read metadata (parallel I/O, 8KB per file)
+    // Collect main + workflow in parallel (independent I/O).
+    // - Main: enrich-then-slice preserves the activity-time bubble-up
+    //   semantic (sessions with stale mtime but fresh lastActivityTime
+    //   still surface — see CLAUDE.md gotcha).
+    // - Workflow: snapshot metadata is already in the filename + JSON,
+    //   no enrich step needed.
+    const [mainItems, wfItems] = await Promise.all([
+      this._collectAndEnrichMainSessions({
+        project: options.project,
+        limit,
+      }),
+      this.workflowFinder.listSessions({
+        project: options.project,
+        limit,
+      }),
+    ]);
+
+    // 3. Merge by activity time and slice to final limit.
+    const merged: SessionListItem[] = [...mainItems, ...wfItems].sort(
+      (a, b) => {
+        const ta = (a.lastActivityTime ?? a.mtime).getTime();
+        const tb = (b.lastActivityTime ?? b.mtime).getTime();
+        return tb - ta;
+      }
+    );
+
+    return merged.slice(0, limit);
+  }
+
+  /**
+   * Collect main sessions and enrich with tail-read metadata (last
+   * timestamp, custom title, cwd). Enriches ALL collected sessions
+   * before slicing so sessions whose `lastActivityTime` is newer than
+   * their `mtime` still bubble into the top-N — fixes a latent slice-
+   * before-enrich bug in the previous implementation.
+   *
+   * Total I/O cost: 3 × 8KB tail reads per session. For typical user
+   * populations (~500 sessions) this is ≈ 12MB total, sub-second on SSD.
+   */
+  private async _collectAndEnrichMainSessions(options: {
+    project?: string;
+    limit: number;
+  }): Promise<SessionListItem[]> {
+    const files = await this._collectMainSessions({ project: options.project });
+
     await Promise.all(
-      sliced.map(async (item) => {
+      files.map(async (item) => {
         const [lastTs, title, cwd] = await Promise.all([
           readLastTimestampFromJSONL(item.path),
           readCustomTitleFromTail(item.path),
@@ -132,14 +212,13 @@ class ClaudeSessionFinder implements SessionFinder {
       })
     );
 
-    // Re-sort by lastActivityTime (more accurate than mtime)
-    sliced.sort((a, b) => {
+    files.sort((a, b) => {
       const ta = (a.lastActivityTime ?? a.mtime).getTime();
       const tb = (b.lastActivityTime ?? b.mtime).getTime();
       return tb - ta;
     });
 
-    return sliced;
+    return files.slice(0, options.limit);
   }
 
   /**
@@ -204,6 +283,14 @@ class ClaudeSessionFinder implements SessionFinder {
     sessionId: string,
     options: { project?: string }
   ): Promise<SessionFile | ClaudeSessionResult | null> {
+    // Workflow runId prefix → always dispatches to workflow finder.
+    // Even malformed `wf_*` input short-circuits here (returns null) rather
+    // than falling through to main UUID logic — a `wf_`-prefixed string
+    // can't be a valid UUID-formatted Claude session anyway.
+    if (sessionId.startsWith('wf_')) {
+      return this.workflowFinder.findBySessionId(sessionId, options);
+    }
+
     const idType = this.detectIdType(sessionId);
 
     // 如果是主 session UUID 或未知類型，先嘗試找主 session
@@ -587,6 +674,7 @@ class ClaudeLineParser implements LineParser {
 
     if (part.type === 'tool_use' && part.name) {
       const isTask = isSubagentTool(part.name);
+      const isWorkflow = part.name === 'Workflow';
       const taskDescription =
         isTask && typeof part.input?.description === 'string'
           ? part.input.description
@@ -601,6 +689,7 @@ class ClaudeLineParser implements LineParser {
         }),
         toolName: part.name,
         isTaskToolUse: isTask,
+        ...(isWorkflow ? { isWorkflowToolUse: true } : {}),
         taskDescription,
       };
     }
@@ -622,6 +711,12 @@ class ClaudeLineParser implements LineParser {
       totalDurationMs?: number;
       totalTokens?: number;
       totalToolUseCount?: number;
+      // Workflow async_launched extension fields
+      taskId?: string;
+      runId?: string;
+      summary?: string;
+      transcriptDir?: string;
+      scriptPath?: string;
     };
 
     if (!toolUseResult) return null;
@@ -639,12 +734,39 @@ class ClaudeLineParser implements LineParser {
 
     const formatted = parts.length > 0 ? `(${parts.join(', ')})` : '';
 
-    return {
+    const result: ParsedLine = {
       type: 'tool_result',
       timestamp,
       raw: data,
       formatted,
     };
+
+    // Workflow async_launched detection (SPEC §9.1 / §11.1 P5).
+    // Discriminator: runId matching wf_*hex pattern AND transcriptDir
+    // present. scriptPath/summary/taskId are decoration — populated when
+    // available but missing values don't reject the payload (CI-2).
+    if (
+      status === 'async_launched' &&
+      typeof toolUseResult.runId === 'string' &&
+      isValidWorkflowRunId(toolUseResult.runId) &&
+      typeof toolUseResult.transcriptDir === 'string'
+    ) {
+      result.workflowAsyncLaunch = {
+        runId: toolUseResult.runId,
+        transcriptDir: toolUseResult.transcriptDir,
+        ...(typeof toolUseResult.scriptPath === 'string'
+          ? { scriptPath: toolUseResult.scriptPath }
+          : {}),
+        ...(typeof toolUseResult.summary === 'string'
+          ? { summary: toolUseResult.summary }
+          : {}),
+        ...(typeof toolUseResult.taskId === 'string'
+          ? { taskId: toolUseResult.taskId }
+          : {}),
+      };
+    }
+
+    return result;
   }
 
   private format(data: Record<string, unknown>): string {
@@ -678,8 +800,10 @@ export class ClaudeAgent implements Agent {
   readonly finder: SessionFinder;
   readonly parser: LineParser;
 
-  constructor(options: ParserOptions = { verbose: false }) {
-    this.finder = new ClaudeSessionFinder();
+  constructor(
+    options: ParserOptions & { baseDir?: string } = { verbose: false }
+  ) {
+    this.finder = new ClaudeSessionFinder({ baseDir: options.baseDir });
     this.parser = new ClaudeLineParser(options);
   }
 }

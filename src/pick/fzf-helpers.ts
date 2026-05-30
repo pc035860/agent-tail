@@ -37,11 +37,14 @@ export function buildFzfArgs(config: {
   if (limit) listParts.push('-n', String(limit));
   const listCmd = 'FORCE_COLOR=1 ' + listParts.map((p) => `"${p}"`).join(' ');
 
-  // Preview uses --summary for head+tail view (first 5 + last 15 lines)
+  // Preview uses --summary for head+tail view (first 5 + last 15 lines).
+  // SPEC §11.4 R4-S3: take col 6 (HIDDEN_FULL_ID) unambiguously rather than
+  // the visible short id — workflow rows would otherwise pass the runId
+  // through agent-tail's partial-match path differently from main sessions.
   const previewParts = [
     `"${agentTailPath}"`,
     `"${agentType}"`,
-    '{1}',
+    '{6}',
     '--summary',
   ];
   if (project) previewParts.push('-p', `"${project}"`);
@@ -51,8 +54,10 @@ export function buildFzfArgs(config: {
     '--ansi',
     '--delimiter',
     '\t',
+    // SPEC §11.4: show TYPE/ID/TIME/TITLE/NOTES (cols 1..5); col 6 stays
+    // hidden and carries the full id for parser / bindings.
     '--with-nth',
-    '3..',
+    '1..5',
     '--preview',
     previewCmd,
     '--preview-window',
@@ -70,21 +75,21 @@ export function buildFzfArgs(config: {
     '--bind',
     'ctrl-u:preview-page-up',
     '--bind',
-    'ctrl-y:execute-silent(printf %s {2} | pbcopy)+change-header(✓ Copied session ID: {2})',
+    'ctrl-y:execute-silent(printf %s {6} | pbcopy)+change-header(✓ Copied session ID: {6})',
   ];
 
   return args;
 }
 
 /**
- * Parse fzf selection output
- * @returns shortId if selection made, null if user cancelled
+ * Parse fzf selection output and return the hidden full id (col 6 per
+ * SPEC §11.4). Returns null if input is empty or col 6 is missing.
  */
 export function parseSelection(output: string): string | null {
   const trimmed = output.trim();
   if (!trimmed) return null;
-
-  // First field is shortId (tab-separated)
-  const shortId = trimmed.split('\t')[0];
-  return shortId || null;
+  const parts = trimmed.split('\t');
+  if (parts.length < 6) return null;
+  const hiddenId = parts[5];
+  return hiddenId || null;
 }

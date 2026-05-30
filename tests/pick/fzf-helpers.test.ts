@@ -32,17 +32,17 @@ describe('buildFzfArgs', () => {
     expect(args[delimIdx + 1]).toBe('\t');
   });
 
-  test('includes --with-nth 3.. (skips shortId + fullId hidden cols)', () => {
+  test('includes --with-nth 1..5 (shows first 5 cols, hides col 6 = HIDDEN_ID)', () => {
     const args = buildFzfArgs({
       agentType: 'claude',
       agentTailPath: '/usr/local/bin/agent-tail',
     });
     expect(args).toContain('--with-nth');
     const idx = args.indexOf('--with-nth');
-    expect(args[idx + 1]).toBe('3..');
+    expect(args[idx + 1]).toBe('1..5');
   });
 
-  test('includes ctrl-y copy bind that pipes {2} to pbcopy', () => {
+  test('includes ctrl-y copy bind that pipes {6} (HIDDEN_FULL_ID) to pbcopy', () => {
     const args = buildFzfArgs({
       agentType: 'claude',
       agentTailPath: '/path/to/agent-tail',
@@ -51,10 +51,10 @@ describe('buildFzfArgs', () => {
     const copyBind = binds.find((b) => b.startsWith('ctrl-y:'));
     expect(copyBind).toBeDefined();
     expect(copyBind).toContain('pbcopy');
-    expect(copyBind).toContain('{2}');
+    expect(copyBind).toContain('{6}');
   });
 
-  test('includes --preview with agent-tail command', () => {
+  test('includes --preview with agent-tail command using {6} (HIDDEN_FULL_ID)', () => {
     const args = buildFzfArgs({
       agentType: 'claude',
       agentTailPath: '/path/to/agent-tail',
@@ -64,7 +64,7 @@ describe('buildFzfArgs', () => {
     const previewCmd = args[previewIdx + 1]!;
     expect(previewCmd).toContain('/path/to/agent-tail');
     expect(previewCmd).toContain('claude');
-    expect(previewCmd).toContain('{1}');
+    expect(previewCmd).toContain('{6}');
     expect(previewCmd).toContain('--summary');
   });
 
@@ -117,10 +117,18 @@ describe('buildFzfArgs', () => {
   });
 });
 
-describe('parseSelection', () => {
-  test('extracts shortId from tab-separated line', () => {
-    const result = parseSelection('abc12345\t3m ago\tclaude\tmy-project\n');
-    expect(result).toBe('abc12345');
+describe('parseSelection (col 6 = HIDDEN_FULL_ID per SPEC §11.4)', () => {
+  test('extracts full UUID from col 6 of a main session row', () => {
+    // 6 cols: TYPE \t ID \t TIME \t TITLE \t NOTES \t HIDDEN_FULL_ID
+    const line =
+      'sess\tabc12345\t3m ago\t(no custom title)\tmy-project\tabc12345-1234-1234-1234-123456789abc\n';
+    expect(parseSelection(line)).toBe('abc12345-1234-1234-1234-123456789abc');
+  });
+
+  test('extracts full runId from col 6 of a workflow row', () => {
+    const line =
+      'wf\twf_abcd1234-37e\t7m ago\twf:briefshare-impl\tcompleted · in session 5fe53568\twf_abcd1234-37e\n';
+    expect(parseSelection(line)).toBe('wf_abcd1234-37e');
   });
 
   test('returns null for empty output (user pressed Esc)', () => {
@@ -128,9 +136,10 @@ describe('parseSelection', () => {
     expect(parseSelection('\n')).toBeNull();
   });
 
-  test('handles output with trailing newline', () => {
-    const result = parseSelection('def67890\t1h ago\tcodex\tapi-server\n');
-    expect(result).toBe('def67890');
+  test('returns null when col 6 is missing (defensive)', () => {
+    // only 5 cols — no HIDDEN_ID
+    const line = 'sess\tabc12345\t3m ago\t(no custom title)\tmy-project\n';
+    expect(parseSelection(line)).toBeNull();
   });
 });
 

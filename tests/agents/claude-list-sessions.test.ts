@@ -11,9 +11,7 @@ describe('ClaudeSessionFinder.listSessions', () => {
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'claude-list-'));
-    const agent = new ClaudeAgent({ verbose: false });
-    finder = agent.finder;
-    (finder as unknown as { baseDir: string }).baseDir = tempDir;
+    finder = new ClaudeAgent({ verbose: false, baseDir: tempDir }).finder;
   });
 
   afterEach(async () => {

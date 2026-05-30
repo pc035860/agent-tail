@@ -66,7 +66,35 @@ function createProgram(): Command {
     )
     .option('--no-pane', 'Disable pane auto-open (default)')
     .option('-l, --list', 'List recent sessions instead of tailing')
-    .option('--summary', 'Show session summary (first lines + last lines)');
+    .option('--summary', 'Show session summary (first lines + last lines)')
+    // Workflow flags (Claude only) — matching positive/negative key pairs.
+    .option(
+      '--workflow [runId]',
+      'Claude: tail workflow run (no runId = latest in cwd)'
+    )
+    .option(
+      '--with-workflow-agents',
+      'Claude: include workflow subagent transcripts (default: true)',
+      true
+    )
+    .option(
+      '--no-with-workflow-agents',
+      'Claude: disable workflow subagent tailing'
+    )
+    .option(
+      '--workflow-attach',
+      'Claude: auto-attach detected workflows from main session (default: true)',
+      true
+    )
+    .option(
+      '--no-workflow-attach',
+      'Claude: disable workflow auto-attach in main session mode'
+    )
+    .option(
+      '--workflow-pane',
+      'Claude: open tmux pane for workflow main + each subagent'
+    )
+    .option('--no-workflow-pane', 'Claude: disable workflow pane (default)');
 
   return program;
 }
@@ -163,6 +191,36 @@ export function parseArgs(args: string[]): CliOptions {
       'Error: --subagent option is only available for "claude", "codex", and "cursor" agent types.'
     );
     process.exit(1);
+  }
+
+  // --workflow 互斥驗證 (SPEC §11.2)
+  if (opts.workflow !== undefined) {
+    if (agentTypeArg !== 'claude') {
+      console.error(
+        'Error: --workflow is only supported for "claude" agent type.'
+      );
+      process.exit(1);
+    }
+    if (opts.subagent !== undefined) {
+      console.error(
+        'Error: --workflow and --subagent options cannot be used together.'
+      );
+      process.exit(1);
+    }
+  }
+  if (opts.workflowPane) {
+    if (opts.interactive) {
+      console.error(
+        'Error: --workflow-pane and --interactive options cannot be used together.'
+      );
+      process.exit(1);
+    }
+    if (opts.pane) {
+      console.error(
+        'Error: --workflow-pane and --pane options cannot be used together.'
+      );
+      process.exit(1);
+    }
   }
 
   // --all preset 選項對 claude、codex、cursor 有效（需要在展開前驗證）
@@ -312,5 +370,9 @@ export function parseArgs(args: string[]): CliOptions {
     sessionId: sessionIdArg,
     list: finalList,
     summary: finalSummary,
+    workflow: opts.workflow,
+    withWorkflowAgents: opts.withWorkflowAgents !== false,
+    workflowAttach: opts.workflowAttach !== false,
+    workflowPane: Boolean(opts.workflowPane),
   };
 }
