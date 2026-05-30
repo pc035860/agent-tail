@@ -135,6 +135,27 @@ async function summaryCommand(
     process.exit(1);
   }
 
+  const tailLines = options.lines ?? 15;
+
+  // Workflow snapshot path: a `wf_*.json` is a single JSON object (not JSONL),
+  // so the JSONL summary path produces empty output. Detour to a journal-
+  // based summary keyed off the snapshot path. Detect via filename shape so
+  // we don't depend on SessionListItem-only fields on the SessionFile.
+  const { parseWorkflowSnapshotFilename } =
+    await import('./claude-workflow/paths.ts');
+  if (parseWorkflowSnapshotFilename(basename(sessionFile.path))) {
+    const { formatWorkflowSummary } =
+      await import('./claude-workflow/summary.ts');
+    const lines = await formatWorkflowSummary(sessionFile.path, formatter, {
+      headLines: 5,
+      tailLines,
+    });
+    for (const line of lines) {
+      console.log(line);
+    }
+    return;
+  }
+
   if (options.agentType === 'agy') {
     const uuid = basename(sessionFile.path, '.pb');
     agent.parser.setConversationId?.(uuid);
@@ -144,7 +165,7 @@ async function summaryCommand(
     options.agentType === 'gemini' || options.agentType === 'agy';
   const lines = await formatSummary(sessionFile.path, agent.parser, formatter, {
     headLines: 5,
-    tailLines: options.lines ?? 15,
+    tailLines,
     jsonMode,
   });
 
