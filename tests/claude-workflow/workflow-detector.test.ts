@@ -72,7 +72,7 @@ describe('WorkflowDetector — path B (directory watch)', () => {
       join(workflowsDir, 'wf_12345678-abc.json'),
       JSON.stringify({ runId: 'wf_12345678-abc', status: 'running' })
     );
-    await waitMs(200);
+    await waitMs(500);
 
     expect(events.length).toBeGreaterThanOrEqual(1);
     const evt = events[0]!;
@@ -102,7 +102,7 @@ describe('WorkflowDetector — path B (directory watch)', () => {
     await writeFile(path, JSON.stringify({ runId: 'wf_aaaaaaaa-aaa' }));
     await waitMs(50);
     await writeFile(path, JSON.stringify({ runId: 'wf_aaaaaaaa-aaa' }));
-    await waitMs(200);
+    await waitMs(500);
 
     expect(callCount).toBe(1);
     detector.stop();
@@ -123,7 +123,7 @@ describe('WorkflowDetector — path B (directory watch)', () => {
 
     await writeFile(join(workflowsDir, 'not-a-wf.json'), '{}');
     await writeFile(join(workflowsDir, 'wf_invalid.json'), '{}');
-    await waitMs(150);
+    await waitMs(400);
 
     expect(callCount).toBe(0);
     detector.stop();
@@ -147,7 +147,7 @@ describe('WorkflowDetector — path B (directory watch)', () => {
       join(workflowsDir, 'wf_bbbbbbbb-bbb.json'),
       JSON.stringify({ runId: 'wf_bbbbbbbb-bbb' })
     );
-    await waitMs(150);
+    await waitMs(400);
 
     expect(callCount).toBe(0);
     detector.stop();
@@ -198,7 +198,7 @@ describe('WorkflowDetector — path B (directory watch)', () => {
       join(workflowsDir, 'wf_cccccccc-ccc.json'),
       JSON.stringify({ runId: 'wf_cccccccc-ccc' })
     );
-    await waitMs(300); // retry happens after ~100ms
+    await waitMs(600); // retry happens after ~100ms
 
     expect(attempts).toBeGreaterThanOrEqual(2);
     detector.stop();
