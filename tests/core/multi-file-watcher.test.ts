@@ -170,6 +170,68 @@ describe('MultiFileWatcher', () => {
     });
   });
 
+  describe('removeFile', () => {
+    test('should stop and remove the watcher for the given file', async () => {
+      const file1 = join(tempDir, 'file1.jsonl');
+      const file2 = join(tempDir, 'file2.jsonl');
+      await writeFile(file1, '{"line": 1}\n');
+      await writeFile(file2, '{"line": 2}\n');
+
+      await watcher.start(
+        [
+          { path: file1, label: '[1]' },
+          { path: file2, label: '[2]' },
+        ],
+        {
+          follow: true,
+          onLine: () => {},
+        }
+      );
+
+      expect(watcher.fileCount).toBe(2);
+      expect(watcher.hasFile(file1)).toBe(true);
+
+      watcher.removeFile(file1);
+
+      expect(watcher.hasFile(file1)).toBe(false);
+      expect(watcher.hasFile(file2)).toBe(true);
+      expect(watcher.fileCount).toBe(1);
+    });
+
+    test('should not emit further lines after removal', async () => {
+      const file1 = join(tempDir, 'file1.jsonl');
+      await writeFile(file1, '{"line": 1}\n');
+
+      const lines: string[] = [];
+
+      await watcher.start([{ path: file1, label: '[1]' }], {
+        follow: true,
+        pollInterval: 50,
+        onLine: (line) => {
+          lines.push(line);
+        },
+      });
+
+      // Initial read
+      expect(lines).toHaveLength(1);
+
+      watcher.removeFile(file1);
+
+      // Append after removal — should NOT be picked up
+      await writeFile(file1, '{"line": 1}\n{"line": 2}\n');
+      // Wait longer than pollInterval
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(lines).toHaveLength(1);
+    });
+
+    test('should be a no-op for unknown paths', () => {
+      // No watcher started; just sanity-check no throw
+      expect(() => watcher.removeFile('/non-existent/path')).not.toThrow();
+      expect(watcher.fileCount).toBe(0);
+    });
+  });
+
   describe('stop', () => {
     test('should clear all watchers', async () => {
       const file1 = join(tempDir, 'file1.jsonl');

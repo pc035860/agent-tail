@@ -53,6 +53,17 @@ export class MultiFileWatcher {
   }
 
   /**
+   * 停止監控指定檔案並從清單移除
+   * 適用於 subagent 結束、檔案被刪除等情境，避免 watcher leak
+   */
+  removeFile(path: string): void {
+    const watcher = this.watchers.get(path);
+    if (!watcher) return;
+    watcher.stop();
+    this.watchers.delete(path);
+  }
+
+  /**
    * 檢查檔案是否已在監控中
    */
   hasFile(path: string): boolean {
