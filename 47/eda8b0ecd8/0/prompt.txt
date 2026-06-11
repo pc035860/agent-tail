@@ -1,0 +1,114 @@
+agent tail 有更新，幫我依更新內容做對應調整
+
+---
+
+<task-notification>
+<task-id>a14b4dcb768de11c0</task-id>
+<tool-use-id>toolu_01HgBJJDtGUobC19Rte8d3QN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-git-agent-tail/ca507549-7258-4fcf-8f7c-9417804d11f4/tasks/a14b4dcb768de11c0.output</output-file>
+<status>completed</status>
+<summary>Agent "驗證文件更新內容" completed</summary>
+<result>完美！現在我有所有必要的信息來生成完整的驗證報告。讓我整理：
+
+## "Claim vs Code" 驗證報告
+
+根據對實際程式碼的逐一對照，以下是完整的 ✅/❌/⚠️ 清單：
+
+---
+
+### ✅ **Claim 1: README.md:278 CLI Options 表 `--sleep-interval` 預設值**
+- **Claim**: "default: 2000"
+- **Code Evidence**:
+  - `README.md:278`: `Set file polling interval (100-60000ms, default: 2000)` ✓
+  - `src/cli/parser.ts:363`: `sleepInterval: opts.sleepInterval ?? 2000` ✓
+  - `src/core/file-watcher.ts:32,52`: `private pollInterval = 2000` 和 `this.pollInterval = options.pollInterval || 2000` ✓
+- **Status**: **Verified**
+
+---
+
+### ✅ **Claim 2: README.md:20 Prerequisites "Bun &gt;=1.3.13" 並引用 oven-sh/bun#28234**
+- **Claim**: Prerequisites 寫 "Bun &gt;=1.3.13" 並引用 `oven-sh/bun#28234`，issue 編號與 git log 032409e 一致
+- **Code Evidence**:
+  - `README.md:20`: `You need [Bun](https://bun.sh) **&gt;=1.3.13** installed (older versions leak memory on macOS Apple Silicon during long-running tails — see [oven-sh/bun#28234](https://github.com/oven-sh/bun/issues/28234))` ✓
+  - `package.json:48`: `"bun": "&gt;=1.3.13"` ✓
+  - `git commit 032409e`: Message 確實提及 `oven-sh/bun#28234、#28318`，issue 編號與 README 一致 ✓
+- **Status**: **Verified**
+
+---
+
+### ✅ **Claim 3: CLAUDE.md:35 附近 `-s 200 ... (default: 2000)`**
+- **Claim**: CLAUDE.md 第 35 行寫 `-s 200 ... (default: 2000)`
+- **Code Evidence**:
+  - `CLAUDE.md:35`: `agent-tail &lt;agent-type&gt; -s 200     # set polling interval to 200ms (default: 2000)` ✓
+  - 同 Claim 1 的程式碼依據均相同 ✓
+- **Status**: **Verified**
+
+---
+
+### ✅ **Claim 4: CLAUDE.md Gotchas 第一條 FileWatcher hot path 聲明**
+- **Claim**: "(a) src/core/file-watcher.ts:40-43 確實是 fileHandle/readBuffer 宣告; (b) truncate 與 atomic replace 路徑確實 closeFileHandle 後重開; (c) package.json engines bun &gt;=1.3.13"
+- **Code Evidence**:
+  - **(a)** `src/core/file-watcher.ts:40-43`:
+    ```typescript
+    private fileHandle: FileHandle | null = null;
+    private readBuffer: Buffer = Buffer.alloc(64 * 1024);
+    ```
+    ✓ 確實是 fileHandle + readBuffer 宣告
+  - **(b)** `src/core/file-watcher.ts:220-228` (truncate 路徑):
+    ```typescript
+    if (currentSize &lt; this.lastReadOffset) {
+      // ...
+      await this.closeFileHandle();  // 第 224 行
+      handle = await this.ensureFileHandle(filePath);  // 第 225 行重開
+    ```
+    ✓ 確實 close 後重開
+  - **(b)** `src/core/file-watcher.ts:307-331` (atomic replace/restartWatcher 路徑):
+    ```typescript
+    await this.closeFileHandle();  // 第 321 行
+    // 之後 scheduleRead → ensureFileHandle 自動重開
+    ```
+    ✓ 確實 close 後重開
+  - **(c)** `package.json:48`: `"bun": "&gt;=1.3.13"` ✓
+  - **(c)** `CLAUDE.md:223`: 正式 Gotchas 條目確實完整記錄了此內容並正確引用檔案位置與 oven-sh/bun#28234 ✓
+- **Status**: **Verified** (新加 Gotchas 條目完整且準確)
+
+---
+
+### ✅ **Claim 5: CLAUDE.md:237 附近 "Auto-switch polling runs every 500ms" 未被改動**
+- **Claim**: CLAUDE.md:237 保持正確描述（未被誤改為 2000 或其他值）
+- **Code Evidence**:
+  - `CLAUDE.md:238`: `Auto-switch polling runs every 500ms. Reading JSONL content for title would be wasteful.` ✓
+  - `src/claude/watch-builder.ts:13`: `export const SUPER_FOLLOW_POLL_MS = 500;` ✓
+  - `src/claude/watch-builder.ts:279`: `pollTimer = setTimeout(poll, SUPER_FOLLOW_POLL_MS);` ✓
+- **Status**: **Verified** (此行保留正確，未被誤改)
+
+---
+
+### ⚠️ **Claim 6: 檢查 README.md 與 CLAUDE.md 中其他過期描述**
+- **Claim**: 搜查是否還有「polling default 500」或類似過期描述
+- **Code Evidence**:
+  - `grep "default: 500|500ms"` 結果: **僅 1 處** `CLAUDE.md:238` 
+    - 內容: `Auto-switch polling runs every 500ms` — 這是**正確的描述**（Super Follow 確實用 500ms，非檔案 polling）
+    - 不是過期、不需修正
+- **Status**: **No stale descriptions found** — 唯一的 "500ms" 是正確的 Super Follow polling，與檔案 polling interval (2000ms default) 無關
+
+---
+
+## 最終總結
+
+| # | Claim | 狀態 | 備註 |
+|---|-------|------|------|
+| 1 | README.md:278 `--sleep-interval` 預設值 | ✅ | sleepInterval 預設 2000ms，與 file-watcher pollInterval 一致 |
+| 2 | README.md:20 Prerequisites "Bun &gt;=1.3.13" + issue#28234 | ✅ | 版本號與 issue 編號均正確，git commit 032409e 確認 |
+| 3 | CLAUDE.md:35 `-s 200 (default: 2000)` | ✅ | 與 Claim 1 程式碼依據相同 |
+| 4 | CLAUDE.md Gotchas 第一條 FileWatcher 宣告 + closeFileHandle 邏輯 + engines | ✅ | 檔案位置準確 (40-43)；truncate + atomic replace 路徑確實 close + reopen；package.json engines 正確 |
+| 5 | CLAUDE.md:237 "Auto-switch polling 500ms" 未被誤改 | ✅ | Super Follow 確實 500ms，SUPER_FOLLOW_POLL_MS 常數驗證 |
+| 6 | 搜查其他過期描述 (default: 500 或類似) | ✅ | 無過期描述；唯一的 "500ms" 是正確的 Super Follow polling，與檔案 polling 無關 |
+
+**所有 claims 均已驗證無誤。文檔與程式碼完全一致。**</result>
+<usage><subagent_tokens>42777</subagent_tokens><tool_uses>19</tool_uses><duration_ms>56238</duration_ms></usage>
+</task-notification>
+
+---
+
+幫我升級 bun, 然後看一下有沒有還在跑的 agent tail process 都關掉
