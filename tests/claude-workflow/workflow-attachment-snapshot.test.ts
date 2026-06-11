@@ -15,7 +15,8 @@ import {
 
 // Slack relative to the production default, so a future tweak to the
 // debounce constant doesn't silently under-wait.
-const SNAPSHOT_DEBOUNCE_WAIT_MS = DEFAULT_DEBOUNCE_MS * 3 + 50;
+// 多放一倍 slack（* 6 + 200）以涵蓋 Bun 1.3.14 上 fs.watch 調度偶發較慢的情況。
+const SNAPSHOT_DEBOUNCE_WAIT_MS = DEFAULT_DEBOUNCE_MS * 6 + 200;
 
 function snapshotJson(
   status: 'running' | 'completed' | 'failed',
