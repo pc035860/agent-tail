@@ -1,0 +1,36 @@
+/takeover
+
+---
+
+說明一下這幾個 out of scope 的項目
+
+  Deferred (out of P1-P7 scope)
+
+  - agent-pick 6-column fzf rework (workflow rows already visible in --list via existing customTitle
+  indicator)
+  - --list strict SPEC §11.3 TYPE/NOTES column format
+  - ClaudeSessionFinder baseDir constructor injection (current lazy getter is the stop-gap)
+  - macOS fs.watch polling fallback (SPEC §19.6 explicitly accepts the flake)
+
+---
+
+說明一下這幾個 out of scope 的項目
+
+  Deferred (out of P1-P7 scope)
+
+  - agent-pick 6-column fzf rework (workflow rows already visible in --list via existing customTitle
+  indicator)
+  - --list strict SPEC §11.3 TYPE/NOTES column format
+  - ClaudeSessionFinder baseDir constructor injection (current lazy getter is the stop-gap)
+  - macOS fs.watch polling fallback (SPEC §19.6 explicitly accepts the flake)
+
+整理一下，跟我討論下一步動作
+
+- Conduct the first round of exploration to identify directions for further investigation, data collection, or research needed for the task (if directions already exist, proceed to the next step)\
+- Use the TaskList tool to reasonably organize sequential or parallel subagents for subsequent tasks to achieve the best result for user's interest\
+- Prefer running subagents in parallel to speed up the task (could also provide broader context)
+
+---
+
+1. 目前專案中是怎麼做的？ 
+2. OK

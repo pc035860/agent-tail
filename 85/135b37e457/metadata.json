@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "85135b37e457",
+  "strategy": "manual-commit",
+  "branch": "feat/session-list",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "specs/brainstorm/session-list.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/85/135b37e457/0/metadata.json",
+      "transcript": "/85/135b37e457/0/full.jsonl",
+      "content_hash": "/85/135b37e457/0/content_hash.txt",
+      "prompt": "/85/135b37e457/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 397,
+    "cache_creation_tokens": 473710,
+    "cache_read_tokens": 37658314,
+    "output_tokens": 86405,
+    "api_call_count": 228
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "17218f0a49e5",
+  "strategy": "manual-commit",
+  "branch": "feat/cursor-roadmap--phase2-phase3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/cursor/subagent-detector.ts",
+    "src/cursor/watch-builder.ts",
+    "src/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/218f0a49e5/0/metadata.json",
+      "transcript": "/17/218f0a49e5/0/full.jsonl",
+      "content_hash": "/17/218f0a49e5/0/content_hash.txt",
+      "prompt": "/17/218f0a49e5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2572,
+    "cache_creation_tokens": 371268,
+    "cache_read_tokens": 24231830,
+    "output_tokens": 55212,
+    "api_call_count": 177
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "880c43c89f42",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "CLAUDE.md",
+    "src/agents/cursor/cursor-agent.ts",
+    "src/index.ts",
+    "tests/agents/cursor-agent.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/88/0c43c89f42/0/metadata.json",
+      "transcript": "/88/0c43c89f42/0/full.jsonl",
+      "content_hash": "/88/0c43c89f42/0/content_hash.txt",
+      "prompt": "/88/0c43c89f42/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 115,
+    "cache_creation_tokens": 103181,
+    "cache_read_tokens": 8088774,
+    "output_tokens": 43532,
+    "api_call_count": 35
+  }
+}

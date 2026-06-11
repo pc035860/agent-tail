@@ -1,0 +1,751 @@
+你先說明一下，現在和 list 有關的功能，能做到什麼樣的程度？
+
+---
+
+/team:brainstorm  -n 4, 我現在碰到一個問題，就是有時候我想要回去看之前不在電腦旁時，程式跑的某個 session log。
+
+在這樣的情況下，我需要的功能如下：
+1. 列出最近的 session：系統能夠顯示最近執行過的 session 列表。
+2. 預覽內容：提供一個介面，讓我可以透過上下箭頭或數字鍵來選取。
+3. 即時預覽：當我選到某個 session 時，介面能自動預覽該 session 的 agent-tail 內容。
+
+大概是這樣子，我才能決定要不要把它整個展開來看。
+
+---
+
+/team:brainstorm  -n 4, 我現在碰到一個問題，就是有時候我想要回去看之前不在電腦旁時，程式跑的某個 session log。
+
+在這樣的情況下，我需要的功能如下：
+1. 列出最近的 session：系統能夠顯示最近執行過的 session 列表。
+2. 預覽內容：提供一個介面，讓我可以透過上下箭頭或數字鍵來選取。
+3. 即時預覽：當我選到某個 session 時，介面能自動預覽該 session 的 agent-tail 內容。
+
+大概是這樣子，我才能決定要不要把它整個展開來看。
+
+---
+
+<task-notification>
+<task-id>a7df05a57a01306f8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/3a6ba1e2-57a6-44a1-bedc-25bbd199f0b0/tasks/a7df05a57a01306f8.output</output-file>
+<status>completed</status>
+<summary>Agent "Search memory for context" completed</summary>
+<result>已搜尋圖記憶。這是快速模式的摘要：
+
+**agent-tail 計畫有多項交互和會話管理相關的記憶：**
+
+核心發現：
+- **Interactive Mode** (`agent-tail:interactive_mode`、`agent-tail:phase-2-interactive-mode`) 已實現，使用 `SessionManager` 和 `DisplayController`
+- **Session Management** (`agent-tail:session-manager-design`) 支援會話切換（Tab）和排序
+- **Multi-file Watching** 用於監控主會話和子代理會話
+- **Subagent Sorting** (`agent-tail:subagent_sorting_requirement`) 增強了交互模式的體驗
+
+相關記憶中提到：
+- Claude、Codex、Cursor 會話結構規格
+- Cursor 會話格式（含子代理檢測）
+- Pane 管理（用於 tmux）
+
+**未發現有關：**
+- 「列表」(list) 命令或會話列表功能
+- TUI 或 fzf 整合
+- 會話查詢或篩選工具
+
+這些主題未出現在現有記憶中。
+
+Referenced entities: `agent-tail:project`, `agent-tail:interactive_mode`, `agent-tail:session-manager-design`, `agent-tail:phase-2-interactive-mode`, `wwi:session_scanner_design`</result>
+<usage><total_tokens>17458</total_tokens><tool_uses>2</tool_uses><duration_ms>16039</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/3a6ba1e2-57a6-44a1-bedc-25bbd199f0b0/tasks/a7df05a57a01306f8.output
+
+---
+
+討論一下，如果整合 FZF 的話，可以做到什麼程度？
+
+---
+
+/auto-impl
+
+---
+
+continue
+
+---
+
+<task-notification>
+<task-id>ae3ef26b320e2eeab</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/ae3ef26b320e2eeab.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement session-lister formatter" completed</summary>
+<result>All 15 tests pass. The final file at `/Users/pc035860/code/agent-tail/src/list/session-lister.ts` implements:
+
+**`formatRelativeTime`**: computes `Date.now() - date.getTime()` in ms, then cascades through thresholds — `< 1000ms` → "just now" (covers future dates too since diff is negative/zero), `< 60s` → `{N}s ago`, `< 60m` → `{N}m ago`, `< 24h` → `{N}h ago`, else `{N}d ago`.
+
+**`formatSessionList`**: maps each `SessionListItem` to a 4-column tab-separated string: `shortId`, `formatRelativeTime(mtime)`, agent type (plain or chalk-colored), and `project ?? ''`. Uses `new Chalk({ level: 3 })` to force ANSI output regardless of TTY detection, which is required for the color test to pass in Bun's test runner.</result>
+<usage><total_tokens>25191</total_tokens><tool_uses>17</tool_uses><duration_ms>111498</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/ae3ef26b320e2eeab.output
+
+---
+
+<task-notification>
+<task-id>afb7ac19852e83ef4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/afb7ac19852e83ef4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement CLI parser --list option" completed</summary>
+<result>No lint errors. The changes are complete and correct.
+
+Here is a summary of what was done to `/Users/pc035860/code/agent-tail/src/cli/parser.ts`:
+
+1. **Added the option declaration** (line 65): `.option('-l, --list', 'List recent sessions instead of tailing')` appended to the commander chain before `return program;`.
+
+2. **Added `finalList` extraction and mutual exclusion checks** (lines 94–139): Inserted early in `parseArgs()` (right after agent-type validation). When `--list` is true, it exits with a clear error for each incompatible option: `--interactive`, `--subagent`, `--raw`, `--all`, positional session-ID argument, `--pane`, `--with-subagents`, and `--auto-switch`.
+
+3. **Added `finalFollow` with auto-disable** (lines 175–176): `let finalFollow = opts.follow; if (finalList) finalFollow = false;` — placed alongside the other `final*` variable declarations. The existing `--pane requires --follow` and `--interactive requires --follow` checks still reference `opts.follow` directly (not `finalFollow`), which is safe because `--list` is mutually exclusive with both `--pane` and `--interactive` and would have already exited before those checks are reached.
+
+4. **Updated the return statement** (lines 288, 299): `follow` now uses `finalFollow` instead of `opts.follow`, and `list: finalList` is added as a new field.</result>
+<usage><total_tokens>29329</total_tokens><tool_uses>13</tool_uses><duration_ms>106007</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/afb7ac19852e83ef4.output
+
+---
+
+<task-notification>
+<task-id>a905b043d0ba727cc</task-id>
+<tool-use-id>toolu_01N1QLYvXoTBWPLJKE2dXieQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/a905b043d0ba727cc.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review" completed</summary>
+<result>現在我有足夠的上下文，可以進行完整的程式碼品質分析。
+
+---
+
+以下是所有被審查檔案的完整發現，按嚴重程度排列。
+
+---
+
+## 一、Copy-paste with Slight Variation（最嚴重，跨 4 個 agent）
+
+4 個 `_collect*Sessions` 方法在結構上幾乎相同，差異只有 glob pattern、filename 前綴過濾、shortId 擷取方式和 `agentType` 字串。同樣地，`findLatest` 的樣板程式碼在每個 finder 裡重複出現三次。
+
+**`_collectMainSessions` / `_collectSessions` 骨架完全相同：**
+
+- `[claude-agent.ts:43]` `[codex-agent.ts:58]` `[gemini-agent.ts:35]` `[cursor-agent.ts:46]` — 四個方法都執行：建立 `files: SessionListItem[]`、掃描 glob、做 project filter（pattern 邏輯完全相同的三行）、呼叫 `stat`、push、sort by mtime、return。唯一差別是 glob pattern 與 shortId 的擷取邏輯。
+
+  建議：在 `SessionFinder` 介面旁抽出一個泛型 helper，例如：
+
+  ```ts
+  async function collectSessionFiles(
+    baseDir: string,
+    globPattern: string,
+    options: { project?: string },
+    mapper: (file: string, stats: Stats) => SessionListItem | null
+  ): Promise<SessionListItem[]>
+  ```
+
+  各 finder 只提供 `mapper` callback（含個別的前綴驗證、shortId 擷取），project filter 和 sort 由 helper 統一處理。這能消除約 60 行重複程式碼。
+
+**`findLatest` 樣板：**
+
+- `[codex-agent.ts:105]` `[gemini-agent.ts:78]` `[cursor-agent.ts:96]` — 這三個 `findLatest` 完全相同：呼叫 `_collect*`，若為空回傳 null，否則取 `files[0]` 組成 `SessionFile` 回傳。Claude 的版本唯一不同是額外讀 customTitle，這正當。
+
+  建議：`findLatest` 的邏輯可在 `_collectMainSessions` 回傳後以一個 one-liner 完成，或在 `listSessions` 共用後直接 `return items[0] ?? null`（Codex/Gemini/Cursor 三者都沒有 customTitle 需求）。
+
+**`listSessions` 樣板：**
+
+- `[claude-agent.ts:108]` `[codex-agent.ts:115]` `[gemini-agent.ts:88]` `[cursor-agent.ts:106]` — 四個實作一模一樣：`_collect`，`slice(0, limit)`。可完全移入共用 helper。
+
+---
+
+## 二、Redundant State
+
+- `[claude-agent.ts:417]` `lastProcessedLine` 欄位 — 用來防止重複處理同一行（`if (line === this.lastProcessedLine) return null`）。但這個問題的根本原因在於外部 watcher 呼叫 `parse()` 的行為，在 parser 內部用一個字串快取來 guard 是一個 leaky fix，且會在合法的場景下遮蔽問題（例如連續兩行內容完全相同時，第二行會被靜默丟棄）。
+
+  建議：若 watcher 可能重複呼叫，應在 watcher 層去重，而非在 parser 注入狀態。若確定不會重複，這個欄位可直接移除。
+
+- `[claude-agent.ts:404]` `currentMessageState.hasTextBefore` — 這個欄位跨多次 `processAssistantPart()` 呼叫累積狀態，只為了決定是否顯示 model 資訊（`const modelInfo = modelShort && !hasTextBefore ? ...`）。可以改成追蹤 `partIndex === 0 && part.type === 'text'` 是否為 true 來判斷，完全不需要額外欄位。
+
+---
+
+## 三、Parameter Sprawl
+
+- `[pick/index.ts:37]` — `parseArgs` 被呼叫只為了取得 `options.project` 和 `options.lines`，但整個 `CliOptions` 物件（含 follow、verbose、quiet 等所有欄位）都被建立出來。`parseArgs` 同時還觸發 `--list` 互斥驗證邏輯（line 96-138 in parser.ts）。`agent-pick` 只需要三個值，卻承擔了完整 CLI 解析的副作用。
+
+  建議：在 `pick/index.ts` 用 `commander` 或手動解析只取所需的 `-p`/`-n` 兩個選項，或將 `parseArgs` 抽出一個只解析 project/lines 的 subset helper。
+
+- `[pick/fzf-helpers.ts:26]` `buildFzfArgs` config 參數 — `agentTailPath` 和 `agentType` 每次都必須一起傳入且同時使用，這兩個值實際上共同構成一個「命令前綴」的概念。雖然現在只有四個欄位還算合理，但每次在 `pick/index.ts` 也要分別組裝 `listArgs`（lines 48-50, 63-65）時，`agentTailPath + agentType` 的組合已經出現三次。考慮把這組成一個 `baseCmd: string[]` 傳入。
+
+---
+
+## 四、Leaky Abstractions
+
+- `[index.ts:96]` `listCommand` 中的 `if (!agent.finder.listSessions)` — `SessionFinder` 介面已宣告 `listSessions` 為選用方法，但所有四個 finder 都有實作它。這個 optional check 讓呼叫端必須了解 finder 的能力邊界，屬於實作細節外漏。若 `listSessions` 是 `--list` 模式的必要條件，應在介面上設為必要方法，或在 `listCommand` 前由 `main()` 做保護，而非讓 `listCommand` 自行處理。
+
+- `[cursor-agent.ts:51]` `workspacePathCache` 的 Map — 這個 cache 在 `_collectMainSessions` 和 `findBySessionId` 中各自建立，生命週期只在單次 call 內。若 `findBySessionId` 和 `_collectMainSessions` 被連續呼叫，cache 無法跨呼叫共享，等同白做。若需跨呼叫快取，應提升為 instance field；若只需 per-call 去重，現行做法正確但 `findSubagent`（line 204）也建了同樣的 local Map，三份重複初始化需要確認其意圖一致。
+
+---
+
+## 五、Stringly-typed Code
+
+- `[parser.ts:82-91]` — agent type 驗證用四個獨立的 `!==` 比較，接著錯誤訊息又手動拼接字串 `"codex", "claude", "gemini", or "cursor"`。相同的字串列表在 `pick/index.ts:28` 中以 `validTypes` 陣列再次定義。
+
+  建議：使用 `core/types.ts` 中已存在的 `AgentType` 型別搭配一個 `AGENT_TYPES` 常數陣列，集中驗證邏輯。
+
+- `[parser.ts:142-165, 183-194, 212-223, 254-265]` — 「僅限 claude/codex/cursor」的 agent-type 白名單驗證重複出現四次，每次都是相同的三個 `!==` 比較。可抽成：
+
+  ```ts
+  const SUBAGENT_AGENTS: AgentType[] = ['claude', 'codex', 'cursor'];
+  function requiresSubagentAgent(flag: string, agentType: AgentType): void { ... }
+  ```
+
+  或直接用 `Set` 的 `has()` 判斷，減少重複且讓白名單維護集中在一處。
+
+- `[gemini-agent.ts:433]` `status === 'error'` — 字串比對，無型別保護。這是較輕微的問題，但若 Gemini tool call status 有其他可能值，這裡會靜默地不處理。
+
+---
+
+## 六、Unnecessary Comments
+
+- `[pick/index.ts:62]` `// Build the list command` — 接下來的兩行就是 `const listArgs = [...]`，自解釋。
+
+- `[pick/index.ts:67]` `// Spawn agent-tail --list to get session data` — 緊跟在變數宣告後，`listProc` 命名本身已夠清楚。
+
+- `[pick/index.ts:74]` `// Build fzf args`、`[pick/index.ts:82]` `// Spawn fzf with agent-tail --list output as stdin` — 同上，程式碼本身即自文件化。
+
+- `[pick/fzf-helpers.ts:34]` `// Build the list command for fzf input (used in reload bind)` 與 `[pick/fzf-helpers.ts:40]` `// Build the preview command (include -p for project-scoped preview)` — 合理的 what，但 `// include -p for project-scoped preview` 是不必要的 how 說明，實際的 `if (project) previewParts.push('-p', project)` 更清楚。
+
+- `[claude-agent.ts:58]` `// 排除 agent-* 開頭的檔案` 與下方 `// 只匹配 UUID 格式的檔案名` — 這類「翻譯程式碼」的中文註解在整個 codebase 中大量存在。在 TypeScript 中，predicate 條件本身就有足夠的語意，大部分此類單行 if-continue 不需要同義重複的說明。
+
+---
+
+## 七、其他小問題
+
+- `[codex-agent.ts:50]` `private get cache(): CodexSessionCache` — 這個 getter 只做 `return this._cache`，沒有加任何邏輯。它的存在只是為了讓 `findLatestInProject` 呼叫 `this.cache` 而非 `this._cache`。直接使用 `this._cache` 即可，移除此多餘的 getter。
+
+- `[fzf-helpers.ts:14]` `resolveAgentTailPath` 中的 `const binPath = join(...)` 後直接 `return binPath` — 中間變數沒有必要；可以 `return join(projectRoot, 'bin', 'agent-tail')` 一行。
+
+- `[session-lister.ts:43]` `AGENT_COLORS[item.agentType] ?? ((s: string) => s)` — 由於 `AGENT_COLORS` 的 key 型別是 `Record<AgentType, ...>`，而 `item.agentType` 型別也是 `AgentType`，這個 fallback `??` 從型別系統角度永遠不會觸發。可以移除 fallback，或把型別改為 `Partial<Record<...>>` 以誠實反映意圖。
+
+---
+
+## 總結
+
+最值得投入的重構是兩件事：
+
+1. **抽出 `collectSessionFiles` helper**（消除四個 agent 的重複 collect 邏輯，影響最大）
+2. **抽出 `SUBAGENT_AGENTS` 集合**（消除 parser.ts 中的四段 agent-type 白名單重複驗證）
+
+其餘問題為輕微，不影響正確性。</result>
+<usage><total_tokens>59839</total_tokens><tool_uses>12</tool_uses><duration_ms>98732</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/a905b043d0ba727cc.output
+
+---
+
+<task-notification>
+<task-id>a26641217a2508b40</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/a26641217a2508b40.output</output-file>
+<status>completed</status>
+<summary>Agent "Code efficiency review" completed</summary>
+<result>以下是逐檔的效率問題分析。
+
+---
+
+## 效率審查報告
+
+### 1. `findLatest` 退化為全量掃描（所有 agent）
+
+**核心問題**：重構後所有四個 agent 的 `findLatest` 都呼叫 `_collectMainSessions`，後者必須：掃描全目錄 → 對每個檔案呼叫 `stat()` → 建立完整陣列 → 排序 → 回傳 → `findLatest` 只取 `[0]`。這是全量 O(N) 操作換取 O(1) 輸出，每次啟動 tail 都要付這個代價。
+
+---
+
+### `src/agents/codex/codex-agent.ts`
+
+**[codex-agent.ts:75] 嚴重 — `findLatest` 現在對每個 JSONL 讀取第一行**
+
+```ts
+const meta = await readMainSessionMeta(file);  // 讀取整個檔案再 split('\n')[0]
+if (!meta) continue;
+```
+
+`readMainSessionMeta` 在 `session-cache.ts:39` 用 `Bun.file(filePath).text()` 讀取**整個檔案**，再取第一行。Codex session 可能有數千行，但此處只需要第一行。當 Codex 有幾十個 session 時，`findLatest` 就要全量讀取所有 session 文件。
+
+建議：改用 `createReadStream` 或 `readline` 只讀第一行，或在 `readMainSessionMeta` 內部改為串流讀取首行（如 `readFirstLine(path)`）。
+
+**[codex-agent.ts:58–113] 高 — `findLatest` 路徑完全繞過 `CodexSessionCache`**
+
+`findLatestInProject`（auto-switch 用）會走 `this.cache.getLatestByCwd()`，效率高。但 `findLatest`（啟動時用）走 `_collectMainSessions`，完全不用 cache。對 Codex 而言這是明確退化：重構前 `findLatest` 是否有獨立實作需確認，但現在肯定沒有利用已建好的 cache。
+
+建議：`findLatest` 應先嘗試從 cache 取所有 cwd 中 mtime 最大的那個，miss 才 fallback 到全量掃描。
+
+**[codex-agent.ts:279–301] 中 — `_findSubagentById` 的 project filter 用路徑模糊比對**
+
+```ts
+if (!file.toLowerCase().includes(project.toLowerCase())) continue;
+```
+
+Codex 的日期目錄路徑（`YYYY/MM/DD/rollout-...`）不含 project 名稱，只有 cwd 在 session_meta 內。這個 filter 永遠不會命中有意義的 project 名，實際上是無效過濾。此問題存在於 `_findSubagentById` 和 `_findLatestSubagent`（line 322–324）。
+
+建議：和 `_collectMainSessions` 一樣，從 `readMainSessionMeta` 取 `cwd` 後再比對，或明確文件此 filter 對 Codex 無效。
+
+---
+
+### `src/agents/claude/claude-agent.ts`
+
+**[claude-agent.ts:43–92] 高 — `findLatest` 做全量 stat + sort 只為取第一個**
+
+`_collectMainSessions` 對每個 JSONL 呼叫 `stat()`，建立完整 `SessionListItem[]`，全部排序，`findLatest` 取 `[0]`。Claude 的 `~/.claude/projects/` 可能有非常多歷史 session（多個 project、長期使用者數百個檔案）。
+
+建議：對 `findLatest` 的路徑，只需要「跑一次 glob + stat，追蹤當前最大 mtime」，不需要建 array 也不需要排序：
+
+```ts
+// 偽代碼：O(N) 掃描找 max，O(1) 記憶體
+let latest: { path: string; mtime: Date; shortId: string } | null = null;
+for await (const file of glob.scan(...)) {
+  // filter logic...
+  const stats = await stat(file);
+  if (!latest || stats.mtime > latest.mtime) latest = { ... };
+}
+```
+
+**[claude-agent.ts:52–88] 中 — glob 內的 stat 是序列化的**
+
+每次 `stat()` 在 `await` 後才進行下一個，無法利用 OS 的並行 I/O。對有大量 session 的使用者（100+ 檔案）影響明顯。
+
+建議：收集所有路徑後用 `Promise.all` 批次 stat，或使用原生 `Dirent` 搭配 `withFileTypes` 減少 syscall 次數。
+
+---
+
+### `src/agents/gemini/gemini-agent.ts`
+
+**[gemini-agent.ts:35–95] 中 — `findLatest` 全量排序（問題同 Claude）**
+
+Gemini session 數量通常比 Claude 少（per-project hash 目錄），影響相對較小，但模式同樣是全量 collect → sort → 取第一個。
+
+`findLatestInProject`（line 254–287）的做法正確：邊掃邊追蹤最大 mtime，**不建陣列也不排序**。`_collectSessions` 應向它學習，至少對 `findLatest` 路徑採用相同策略。
+
+---
+
+### `src/agents/cursor/cursor-agent.ts`
+
+**[cursor-agent.ts:46–93] 中 — `_collectMainSessions` 每個檔案讀取 `.workspace-trusted`（有 -p 時）**
+
+```ts
+const matched = await this._matchProject(file, options.project, workspacePathCache);
+```
+
+`_matchProject` 嘗試讀取 `.workspace-trusted` JSON（第一次 per workspace slug，之後有 cache）。Cache 是 `Map<slug, path | null>` 在單次呼叫內有效，但每次呼叫 `_collectMainSessions` 都重建一個新 `Map`（line 51）。若 `findLatest` 和 `listSessions` 連續被呼叫（未來的場景），`.workspace-trusted` 會被讀兩次。
+
+建議：把 `workspacePathCache` 提升為 class-level 成員，或至少在 `findLatest` 中用更早的快速路徑（先匹配 slug，只對 slug 不匹配的才讀 `.workspace-trusted`）。
+
+**[cursor-agent.ts:294–321] 低 — `findLatestInProject` 的做法是範本**
+
+這個方法做法正確：邊掃邊追蹤最大值，O(1) 記憶體。其他 agent 的 `findLatest` 應採用同樣模式。
+
+---
+
+### `src/agents/codex/session-cache.ts`
+
+**[session-cache.ts:39] 高 — `readMainSessionMeta` 讀取整個檔案取首行**
+
+```ts
+const content = await Bun.file(filePath).text();
+const firstLine = content.split('\n')[0];
+```
+
+這是 Codex 整條路徑最大的效率問題。在冷啟動（cache miss）時，`scanAllSessions` 對每個 rollout 文件執行此操作，可能是幾十個 MB 的無謂讀取。在 `_collectMainSessions`（供 `listSessions` 和新的 `findLatest` 使用）中同樣如此。
+
+建議：使用串流或 `readline` 只讀到第一個換行符即停止：
+
+```ts
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+
+async function readFirstLine(filePath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const rl = createInterface({
+      input: createReadStream(filePath, { start: 0, end: 512 }),
+      crlfDelay: Infinity,
+    });
+    rl.once('line', (line) => { rl.close(); resolve(line); });
+    rl.once('close', () => resolve(null));
+    rl.once('error', () => resolve(null));
+  });
+}
+```
+
+讀前 512 bytes 對 `session_meta` 行已綽綽有餘。
+
+**[session-cache.ts:278–283] 低 — cache 查找 O(N×M) 線性掃描**
+
+```ts
+for (const [, sessions] of this.cache) {
+  if (sessions.some((s) => s.path === file)) {
+    alreadyCached = true;
+    break;
+  }
+}
+```
+
+每次 `maybeRefresh` 對今天目錄的每個新文件都做全 cache 掃描。
+
+建議：在 cache 初始化時額外維護一個 `Set<string>` 儲存所有已知路徑，將查找降為 O(1)。
+
+---
+
+### `src/list/session-lister.ts`
+
+**乾淨** — 此模組只做格式化，無 I/O，無效率問題。
+
+---
+
+### `src/pick/index.ts`
+
+**乾淨** — 此模組是外部 process 協調（spawn agent-tail 和 fzf），無直接 I/O 效率問題。
+
+---
+
+### `src/index.ts` (listCommand)
+
+**[index.ts:103–107] 低 — `limit` 傳入 `listSessions` 但在 `_collectMainSessions` 內未提早截斷**
+
+`listCommand` 正確地傳入 `limit`，但四個 agent 的 `listSessions` 都是先呼叫 `_collectMainSessions`（全量 stat + sort），再 `files.slice(0, limit)` 截斷。`limit` 沒有在 collect 階段起到 early-exit 作用。
+
+這是 `listSessions` 的設計可接受（list 本來就需要全量），但若未來有 `--list --limit 1` 的用法，`findLatest` 直接路徑更合適。目前不構成 bug，屬於低優先度。
+
+---
+
+## 優先度彙總
+
+| 優先度 | 檔案 | 問題 |
+|--------|------|------|
+| 高 | `session-cache.ts:39` | `readMainSessionMeta` 讀取整個 JSONL 取首行 |
+| 高 | `codex-agent.ts:58` | `findLatest` 繞過 cache，全量掃描+讀首行 |
+| 高 | `claude-agent.ts:43` | `findLatest` 全量 stat+sort 取 `[0]`，應改為 rolling max |
+| 中 | `claude-agent.ts:52` | glob 內 stat 全序列化 |
+| 中 | `gemini-agent.ts:35` | 同 Claude，全量 collect 取最新 |
+| 中 | `codex-agent.ts:279` | Codex subagent project filter 用路徑比對，但路徑無 project 名 |
+| 中 | `cursor-agent.ts:51` | `workspacePathCache` 每次呼叫重建 |
+| 低 | `session-cache.ts:278` | 已知路徑查找 O(N×M)，應改 Set |
+| 低 | `index.ts:103` | `limit` 未在 collect 階段 early-exit |</result>
+<usage><total_tokens>57865</total_tokens><tool_uses>15</tool_uses><duration_ms>96785</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/a26641217a2508b40.output
+
+---
+
+<task-notification>
+<task-id>a3741e74128507947</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/a3741e74128507947.output</output-file>
+<status>completed</status>
+<summary>Agent "Code reuse review" completed</summary>
+<result>以下是針對 CODE REUSE 的審查結果。
+
+---
+
+## 程式碼重用審查結果
+
+### 發現總覽
+
+| 嚴重度 | 數量 |
+|--------|------|
+| Medium | 2 |
+| Low    | 3 |
+| 無問題 | 其餘項目 |
+
+---
+
+### Medium — 有影響的重用機會
+
+**[1] src/pick/fzf-helpers.ts:14-21 — `resolveAgentTailPath()` 與 PaneManager 命令建構策略不一致**
+
+`fzf-helpers.ts` 用 `import.meta.dir` 往上爬兩層找 `bin/agent-tail`：
+
+```ts
+const srcDir = dirname(import.meta.dir);   // src/pick/ -> src/
+const projectRoot = dirname(srcDir);        // src/ -> project root
+const binPath = join(projectRoot, 'bin', 'agent-tail');
+```
+
+而 `src/index.ts` 的 PaneManager 命令建構器（第 402-404、1277-1278、1772-1773 行，三處重複）用的是：
+
+```ts
+const runtime = `"${process.argv[0]}"`;
+const script  = `"${process.argv[1]}"`;
+```
+
+兩種策略目的相同（呼叫 agent-tail），但行為在不同安裝場景下有差異：
+- `bin/agent-tail` 是 shebang 腳本，在 `bun run` 直接執行 `src/index.ts` 時路徑不同
+- `process.argv[1]` 永遠指向實際執行的腳本，更具普適性
+
+建議：`resolveAgentTailPath()` 應改為同樣使用 `process.argv[1]` 的方式（或包裝成共用工具），確保兩者行為一致。CLAUDE.md 的「Gotchas」章節也明確說明 `process.argv[0]` + `process.argv[1]` 是正確做法。
+
+---
+
+**[2] src/index.ts:402-404, 1277-1278, 1772-1773 — PaneManager 命令建構邏輯三處複製**
+
+同樣的命令建構模式在 `startClaudeMultiWatch`、`startCodexMultiWatch`、`startCursorMultiWatch` 裡各出現一次，唯一差異是 agent 類型字串：
+
+```ts
+// 三處幾乎相同，只有 "claude" / "codex" / "cursor" 不同
+const runtime = `"${process.argv[0]}"`;
+const script  = `"${process.argv[1]}"`;
+return `${runtime} ${script} claude --subagent ${agentId} -q --no-pane`;
+```
+
+這個 lambda 應提取為共用函式，放在 `src/index.ts` 頂部或 `src/utils/` 中：
+
+```ts
+function buildSubagentPaneCommand(agentType: AgentType, agentId: string): string {
+  const runtime = `"${process.argv[0]}"`;
+  const script  = `"${process.argv[1]}"`;
+  return `${runtime} ${script} ${agentType} --subagent ${agentId} -q --no-pane`;
+}
+```
+
+---
+
+### Low — 輕微重用機會
+
+**[3] src/agents/claude/claude-agent.ts:90, codex-agent.ts:101, cursor-agent.ts:92, gemini-agent.ts:74 — 四處相同的 mtime 降序排序**
+
+每個 `_collectMainSessions` / `_collectSessions` 結尾都有：
+```ts
+files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+```
+
+這是廣泛分散的 inline 邏輯，適合提取為 `src/utils/` 中的小型 comparator 函式（例如 `byMtimeDesc`）。但考慮到各 agent 的集合類型不同（`SessionListItem` vs `{path, mtime}`），提取帶來的收益有限，列為低優先。
+
+---
+
+**[4] src/agents/claude/claude-agent.ts:313-315, codex-agent.ts:205-207, cursor-agent.ts:176-178, gemini-agent.ts:183-185 — priority-then-mtime 排序邏輯四處重複**
+
+`findBySessionId` 方法裡普遍出現：
+```ts
+candidates.sort((a, b) => {
+  if (b.priority !== a.priority) return b.priority - a.priority;
+  return b.mtime.getTime() - a.mtime.getTime();
+});
+```
+
+此排序邏輯可提取為共用 comparator。candidates 型別結構相同（`{ path, mtime, priority }`），重用成本低，但因目前每個 agent 的 `findBySessionId` 都是私有方法，影響範圍小。
+
+---
+
+**[5] src/pick/index.ts:46-56 — fallback 路徑重複建構 listArgs**
+
+```ts
+// fallback 區塊 (line 48-51)
+const listArgs = [agentTailPath, agentType, '--list'];
+if (options.project) listArgs.push('-p', options.project);
+if (options.lines) listArgs.push('-n', String(options.lines));
+
+// 正常路徑 (line 63-65) 重複相同建構
+const listArgs = [agentTailPath, agentType, '--list'];
+if (options.project) listArgs.push('-p', options.project);
+if (options.lines) listArgs.push('-n', String(options.lines));
+```
+
+同一個 `listArgs` 建構邏輯出現兩次，中間只被 `checkFzfAvailable()` 分隔。可提前建構一次在 if 之前再使用，或抽取為 helper。
+
+---
+
+### 無問題的部分
+
+**`formatRelativeTime`（session-lister.ts:10）** — `src/utils/text.ts` 不含任何時間格式化功能，此函式無現有工具可替換，位置合理。
+
+**`checkFzfAvailable`（fzf-helpers.ts:7）** — `Bun.which('fzf') !== null` 是一行邏輯，與 `TmuxController.isAvailable()` 的 `process.env.TMUX` 檢查沒有實質重疊，兩者用途不同，無需合併。
+
+**`parseSelection`（fzf-helpers.ts:83）** — 邏輯獨立，無現有工具重疊。
+
+**`formatSessionList`（session-lister.ts:37）** — 輸出格式（tab 分隔、ANSI color）與現有 `pretty-formatter.ts`（用於 tailing 輸出）目的不同，分開維護是正確的。
+
+**`_collectMainSessions` 模式（四個 agent）** — 各 agent 的 glob pattern、filter 邏輯、shortId 提取方式差異明顯，強制統一成共用函式反而增加耦合，現有設計符合 Occam's Razor 原則。</result>
+<usage><total_tokens>73190</total_tokens><tool_uses>32</tool_uses><duration_ms>121748</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/a3741e74128507947.output
+
+---
+
+<task-notification>
+<task-id>af9bc3215f68be6d2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/af9bc3215f68be6d2.output</output-file>
+<status>completed</status>
+<summary>Agent "TDD review on test files" completed</summary>
+<result>Now let me create a comprehensive audit report:
+
+## TDD Quality Audit Report
+
+### Summary
+**Verdict: PASS_WITH_ISSUES**
+
+---
+
+### Issues Found
+
+#### 1. **FALSE POSITIVES (Tests that pass even with buggy code)**
+
+**session-lister.test.ts**
+- **Line 60-63**: `formatRelativeTime` edge case - Test expects `"30s ago"` but the implementation at line 15 returns `${diffSec}s ago` where diffSec is floored. Passing a date exactly 30 seconds ago could pass with an off-by-one error in floor logic.
+- **Line 30-33**: Test asserts `"1m ago"` at exactly 60 seconds. The implementation uses `if (diffMin < 60)`, but because `diffSec < 60` check comes first (line 15), a 60-second delta actually returns the previous branch. The test passes, but only because the boundary is correct by luck, not by rigorous boundary testing (e.g., 59s, 60s, 61s should all be tested).
+
+**fzf-helpers.test.ts**
+- **Lines 108-123**: `parseSelection` tests only happy paths and single cancellation. Does NOT test:
+  - Empty fields (e.g., `"\t\t\t"` results in shortId being empty string, which the function returns)
+  - Multiple tabs in a row
+  - `parseSelection('abc')` (no tab) - would return `'abc'` via `split('\t')[0]`
+  - The function returns `shortId || null`, but if `split()[0]` is `''`, it returns null—yet test doesn't verify this behavior
+
+**claude/codex/gemini/cursor list tests**
+- All four agent list tests assume that **only `mtime` determines sort order**, but they don't test:
+  - Two files with identical mtime (implementation uses `sort()` which is stable in Node.js, but test doesn't verify stable sort)
+  - Files created within the same millisecond
+  - The actual sort comparator function (black box: could be broken but still appear sorted in limited test data)
+
+#### 2. **TESTING IMPLEMENTATION DETAILS**
+
+**fzf-helpers.test.ts (Lines 16-81)**
+- Tests assert presence of specific flags (`--ansi`, `--delimiter`, `--with-nth`) but do **NOT test the actual behavior** these flags enable:
+  - Tests that `--ansi` is present but don't verify ANSI codes are used
+  - Tests that `--delimiter '\t'` is present but don't verify fields are split on tabs
+  - Tests that `--with-nth 2..` is present but don't verify display logic skips field 1
+  - This is fragile: a refactor that uses a different set of flags (but same behavior) breaks the test
+
+**parser.test.ts (lines 88-92, 100-104)**
+- Tests filter fzf bind arguments by checking `indexOf('--bind')` and then checking the next element. This is **brittle implementation detail testing**: the test assumes position of flags in the array. If the function reorders flags, the test fails even if behavior is correct.
+
+#### 3. **MISSING BOUNDARY CASES**
+
+**formatRelativeTime edge cases:**
+- No test for negative time differences (future dates: line 55-58 tests this, good)
+- No test for exactly 0ms (implementation returns `'just now'` for < 1000ms)
+- No test for very old dates (e.g., 1 year ago) — the implementation just returns days, no upper bound stated
+- Boundary at exactly 60s, 60m, 24h should be tested with both sides (59s, 60s, 61s), but only exact boundary tested
+
+**Parser.test.ts --list section:**
+- **Line 417-419**: Tests that `--list` auto-sets follow=false, but does NOT test that this is enforced correctly in code (just parses the flag)
+- **Line 452-481**: Tests mutual exclusion errors (--list + --interactive, --list + --all, etc.) but does NOT test:
+  - `--list --follow` (should fail if follow explicitly set to true?)
+  - `--list --quiet` (allowed or conflict?)
+  - `--list --verbose` (allowed or conflict?)
+  - `--list --no-follow` (redundant, but allowed?)
+- **Line 484-498**: `--list` with session-id exits, but test doesn't verify that a session-id is actually present in `options.sessionId` before the error is thrown
+
+**fzf-helpers.test.ts:**
+- `checkFzfAvailable()`: Test only checks that return type is boolean (line 10-13). Doesn't test:
+  - That it actually calls `Bun.which('fzf')` 
+  - That it returns `true` when fzf exists vs. `false` when it doesn't
+  - Mock file system state to verify behavior
+
+#### 4. **TEST NAMING QUALITY**
+
+**Good naming:**
+- `formatRelativeTime`, `buildFzfArgs`, `parseSelection` tests are descriptive
+- Agent list tests name test cases by behavior: `'returns sessions sorted by mtime descending'`
+
+**Issues:**
+- **parser.test.ts line 98**: Duplicate test name "–subagent with gemini agent exits with error" (appears twice at lines 80 and 98). Both test the same thing—one should be removed.
+- **parser.test.ts lines 542-609**: Test names use "TC12", "TC13" labels but don't clearly state what they test. Names like `'codex --with-subagents 不再報錯'` (Chinese: "no longer errors") are vague—should state "codex --with-subagents parses successfully"
+- **session-lister.test.ts line 90**: Test name says "undefined project (tab still present)" but the assertion checks that `parts[3] === ''` (empty string, not missing). Name is slightly misleading.
+
+---
+
+### Specific Findings
+
+| File | Issue | Severity |
+|------|-------|----------|
+| session-lister.test.ts | Missing boundary tests for 0s, negative times | Medium |
+| session-lister.test.ts | formatRelativeTime: 59s → 60s → 61s boundary untested | Medium |
+| fzf-helpers.test.ts | checkFzfAvailable tests return type only, not actual behavior | High |
+| fzf-helpers.test.ts | parseSelection: empty field, no-tab cases untested | Medium |
+| fzf-helpers.test.ts | buildFzfArgs tests flag presence, not actual behavior | Medium |
+| parser.test.ts | Duplicate test at lines 80 and 98 | Low |
+| parser.test.ts | --list section missing boundary: follow explicitly set + --list | Medium |
+| parser.test.ts | --list mutual exclusions incomplete (--verbose, --quiet not tested) | Medium |
+| All *list-sessions.test.ts | Sort stability with identical mtime not tested | Medium |
+| fzf-helpers.test.ts | Flag order assertions are brittle (indexOf pattern) | Medium |
+
+---
+
+### Recommendations
+
+1. **Boundary testing**: Add tests for 59s, 60s, 61s; 59m, 60m, 61m; 23h, 24h, 25h
+2. **Remove brittle flag position checks**: Test flags exist, not their position. Use regex or array includes
+3. **Mock external calls**: `checkFzfAvailable()` should mock `Bun.which()` to test both true/false paths
+4. **Deduplicate parser tests**: Remove line 98-112 (duplicate of 80-96)
+5. **Expand --list mutual exclusions**: Test --list + --verbose, --list + --quiet, --list + --follow
+6. **Test sort stability**: Create two files with same mtime and verify consistent ordering
+7. **Rename vague test names**: Replace "TC12", "不再報錯" with explicit behavior descriptions
+
+---
+
+**Overall**: Tests provide good **happy-path coverage** but have **weak boundary/edge-case coverage** and some **brittle implementation-detail assertions**. Refactoring flags or sort logic would break tests even if behavior is correct.</result>
+<usage><total_tokens>44667</total_tokens><tool_uses>10</tool_uses><duration_ms>31088</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-pc035860-code-agent-tail/6d698c7f-cc2b-4dbf-94b4-7375fd2545d2/tasks/af9bc3215f68be6d2.output
+
+---
+
+/doc-update README.md
+
+---
+
+白話地敘述總結 session 內容，存到 workflowy 的 quick note (use workflowy-cli skill)\
+如果前面已經有存過 quick note，後續的內容要以新的 node 進行記錄
+
+---
+
+agent-pick 為什麼可以直接執行？
+是在哪邊綁定指令？
+
+---
+
+你剛剛有跑過 link 了嗎
+
+---
+
+ok
+
+---
+
+說明一下 agent-pick 進入後的快捷鍵有哪些
+還有在輸入框要輸入什麼？  有什麼效果？
+
+---
+
+看起來好像怪怪的
+我輸入之後不是即時 filter
+然後我按上下鍵會變成 ^[[A ^[[B
+滑鼠點擊也是會變成這種 escape 字元
+
+---
+
+/patch-claudemd
+
+---
+
+問一下現在這個清單的呈現方式：
+
+1. 數量限制
+   目前最長似乎只有 20 項，但既然我們都已經整合 FZF 了，應該可以提供更多項目讓使用者做篩選。
+
+2. 時間抓取準確性
+   我看它目前是抓檔案的最後改動時間，但有些 Session 的檔案改動時間不準（可能是系統會改到檔案），導致排序或顯示有誤。
+   (a) 應該要改抓 Session 裡面記錄的實際時間才對。
+   (b) 如果可以的話，我們應該也有其他地方有紀錄類似的情況。
+   (c) 雖然有些 Agent 工具（例如 Cursor）可能沒寫實際時間在裡面，但其他工具應該是有的。
+
+整理一下，跟我討論下一步動作
+
+---
+
+讀取首行還是讀取最後一則 message 的時間比較好？
+我感覺讀取最後一則比較精準，如果是要看最後更新時間的話。
+
+---
+
+好一起處理

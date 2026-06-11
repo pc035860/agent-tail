@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "dbe49d6383f6",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/agents/claude/claude-agent.ts",
+    "src/claude/custom-title.ts",
+    "src/claude/watch-builder.ts",
+    "src/core/session-manager.ts",
+    "src/core/types.ts",
+    "src/formatters/pretty-formatter.ts",
+    "src/index.ts",
+    "src/interactive/display-controller.ts",
+    "tests/agents/claude-agent.test.ts",
+    "tests/claude/custom-title.test.ts",
+    "tests/core/session-manager.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/db/e49d6383f6/0/metadata.json",
+      "transcript": "/db/e49d6383f6/0/full.jsonl",
+      "content_hash": "/db/e49d6383f6/0/content_hash.txt",
+      "prompt": "/db/e49d6383f6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8775,
+    "cache_creation_tokens": 240754,
+    "cache_read_tokens": 12758876,
+    "output_tokens": 33973,
+    "api_call_count": 124
+  }
+}
