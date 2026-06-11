@@ -207,6 +207,39 @@ describe('FileWatcher', () => {
       expect(received[4]).toBe('{"new": 2}');
     });
 
+    test('handles many sequential appends without losing lines', async () => {
+      // 模擬高頻寫入：1000 個 append，每次一行
+      // 用來檢驗持久 fd + 可重用 buffer 在反覆讀取下仍正確
+      const testFile = join(tempDir, 'high-freq.jsonl');
+      await writeFile(testFile, '{"line": 0}\n');
+
+      const received: string[] = [];
+
+      await watcher.start(testFile, {
+        follow: true,
+        pollInterval: 30,
+        onLine: (line) => received.push(line),
+      });
+
+      expect(received).toHaveLength(1);
+
+      // 每 5ms append 一行，總共 50 次
+      for (let i = 1; i <= 50; i++) {
+        await appendFile(testFile, `{"line": ${i}}\n`);
+        await new Promise((r) => setTimeout(r, 5));
+      }
+
+      // 等 polling 收尾
+      await new Promise((r) => setTimeout(r, 200));
+
+      // 應該收到全部 51 行，無漏無重
+      expect(received).toHaveLength(51);
+      // 確認順序正確、內容對得上
+      for (let i = 0; i <= 50; i++) {
+        expect(received[i]).toBe(`{"line": ${i}}`);
+      }
+    });
+
     test('initialLines limits first read but appends emit normally', async () => {
       const testFile = join(tempDir, 'first.jsonl');
       await writeFile(

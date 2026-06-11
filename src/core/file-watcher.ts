@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { open, stat, type FileHandle } from 'node:fs/promises';
 
 export interface WatchOptions {
   follow: boolean;
@@ -37,6 +37,10 @@ export class FileWatcher {
   // JSONL 增量讀取狀態（jsonMode 不使用）
   private lastReadOffset = 0;
   private pendingBuffer = '';
+  // 持久 fd 與可重用 buffer：避免每次 watcher 觸發都建新 Bun.file()/Blob slice，
+  // 後者經實測會在 macOS 累積 IOAccelerator swap pages（即使每次讀取量很小）。
+  private fileHandle: FileHandle | null = null;
+  private readBuffer: Buffer = Buffer.alloc(64 * 1024);
 
   /**
    * 開始監控檔案
@@ -173,22 +177,54 @@ export class FileWatcher {
   }
 
   /**
+   * 確保 fileHandle 已開啟。Lazy open，第一次增量讀時建立。
+   * truncate / restartWatcher 時會關掉，下次呼叫會自動重開。
+   */
+  private async ensureFileHandle(filePath: string): Promise<FileHandle> {
+    if (this.fileHandle !== null) return this.fileHandle;
+    this.fileHandle = await open(filePath, 'r');
+    return this.fileHandle;
+  }
+
+  /**
+   * 關閉並清掉 fileHandle。錯誤吞掉（已經被外部關掉等情況不該擋住流程）。
+   */
+  private async closeFileHandle(): Promise<void> {
+    if (this.fileHandle === null) return;
+    const fh = this.fileHandle;
+    this.fileHandle = null;
+    try {
+      await fh.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
    * 增量讀取：只讀 [lastReadOffset, currentSize) 範圍。
    * 處理 truncate / atomic replace / partial line buffer。
+   *
+   * 使用持久 fd + 可重用 Buffer，避免每次都建新的 Bun.file()/Blob slice
+   * （後者在 macOS 上會累積 IOAccelerator backing pages 無法回收）。
    */
   private async incrementalReadJsonl(
     filePath: string,
     onLine: (line: string) => void
   ): Promise<void> {
-    const stats = await stat(filePath);
-    const currentSize = stats.size;
+    let handle = await this.ensureFileHandle(filePath);
+    let stats = await handle.stat();
+    let currentSize = stats.size;
 
     // Truncate / atomic replace：當前 size 比已讀 offset 還小，視同檔案被截斷。
-    // 重置狀態並把剩下的內容當作新內容處理。
+    // 關掉舊 fd（可能指向舊 inode）並重開到新檔案。
     if (currentSize < this.lastReadOffset) {
       this.lastReadOffset = 0;
       this.pendingBuffer = '';
       this.processedLines = 0;
+      await this.closeFileHandle();
+      handle = await this.ensureFileHandle(filePath);
+      stats = await handle.stat();
+      currentSize = stats.size;
     }
 
     // 沒有新增 bytes，也沒有暫存的尾段 → 跳過
@@ -198,10 +234,20 @@ export class FileWatcher {
 
     let newContent = '';
     if (currentSize > this.lastReadOffset) {
-      const file = Bun.file(filePath);
-      const slice = file.slice(this.lastReadOffset, currentSize);
-      newContent = await slice.text();
-      this.lastReadOffset = currentSize;
+      const bytesToRead = currentSize - this.lastReadOffset;
+      if (bytesToRead > this.readBuffer.length) {
+        // 放大 buffer 為兩倍或必要大小，取大者；之後重複使用
+        const nextLen = Math.max(bytesToRead, this.readBuffer.length * 2);
+        this.readBuffer = Buffer.alloc(nextLen);
+      }
+      const { bytesRead } = await handle.read(
+        this.readBuffer,
+        0,
+        bytesToRead,
+        this.lastReadOffset
+      );
+      newContent = this.readBuffer.toString('utf8', 0, bytesRead);
+      this.lastReadOffset += bytesRead;
     }
 
     const combined = this.pendingBuffer + newContent;
@@ -232,6 +278,8 @@ export class FileWatcher {
     this.watcher = null;
     this.isRestarting = false;
     this.stopPolling();
+    // fire-and-forget：close 是非同步但不擋 stop()
+    void this.closeFileHandle();
   }
 
   private startWatcher(): void {
@@ -269,6 +317,8 @@ export class FileWatcher {
     this.lastReadOffset = 0;
     this.pendingBuffer = '';
     this.isFirstRead = false; // 重啟不算首次讀取
+    // 舊 fileHandle 可能還指向被 rename 的 inode，必須關掉重開
+    await this.closeFileHandle();
 
     // 使用 scheduleRead 避免與 polling 競態
     await this.scheduleRead();
