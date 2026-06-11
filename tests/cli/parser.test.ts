@@ -129,9 +129,9 @@ describe('parseArgs', () => {
       expect(options.sleepInterval).toBe(2000);
     });
 
-    test('defaults to 500ms', () => {
+    test('defaults to 2000ms', () => {
       const options = parseArgs(['node', 'agent-tail', 'claude']);
-      expect(options.sleepInterval).toBe(500);
+      expect(options.sleepInterval).toBe(2000);
     });
 
     test('rejects interval below 100ms', () => {
@@ -169,7 +169,7 @@ describe('parseArgs', () => {
     test('--subagent without -s still works', () => {
       const options = parseArgs(['node', 'agent-tail', 'claude', '--subagent']);
       expect(options.subagent).toBe(true);
-      expect(options.sleepInterval).toBe(500);
+      expect(options.sleepInterval).toBe(2000);
     });
   });
 

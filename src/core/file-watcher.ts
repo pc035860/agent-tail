@@ -7,7 +7,7 @@ export interface WatchOptions {
   onError?: (error: Error) => void;
   /** JSON 模式：不分割行，把整個檔案當作一個整體傳給 onLine */
   jsonMode?: boolean;
-  /** Polling interval in milliseconds (default: 500) */
+  /** Polling interval in milliseconds (default: 2000) */
   pollInterval?: number;
   /** Number of initial lines to show (default: all) */
   initialLines?: number;
@@ -29,7 +29,7 @@ export class FileWatcher {
   private isRestarting = false;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isPolling = false;
-  private pollInterval = 500;
+  private pollInterval = 2000;
   private isFirstRead = true;
   // 競態條件防護：isProcessing 和 pending 標誌
   private isProcessing = false;
@@ -45,7 +45,7 @@ export class FileWatcher {
     this.jsonMode = options.jsonMode || false;
     this.filePath = filePath;
     this.options = options;
-    this.pollInterval = options.pollInterval || 500;
+    this.pollInterval = options.pollInterval || 2000;
     this.isFirstRead = true;
 
     // 初始讀取現有內容（直接呼叫，不需排程）

@@ -32,7 +32,7 @@ function createProgram(): Command {
     )
     .option(
       '-s, --sleep-interval <ms>',
-      'Set file polling interval in milliseconds (default: 500)',
+      'Set file polling interval in milliseconds (default: 2000)',
       parseInt
     )
     .option(
@@ -360,7 +360,7 @@ export function parseArgs(args: string[]): CliOptions {
     follow: finalFollow,
     verbose: finalVerbose,
     quiet: opts.quiet ?? false,
-    sleepInterval: opts.sleepInterval ?? 500,
+    sleepInterval: opts.sleepInterval ?? 2000,
     lines: opts.lines,
     subagent: opts.subagent,
     interactive: finalInteractive,
