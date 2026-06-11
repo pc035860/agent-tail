@@ -34,6 +34,9 @@ export class FileWatcher {
   // 競態條件防護：isProcessing 和 pending 標誌
   private isProcessing = false;
   private pendingRead = false;
+  // JSONL 增量讀取狀態（jsonMode 不使用）
+  private lastReadOffset = 0;
+  private pendingBuffer = '';
 
   /**
    * 開始監控檔案
@@ -91,65 +94,133 @@ export class FileWatcher {
 
   /**
    * 讀取並處理檔案內容
+   *
+   * - jsonMode：整檔讀，比對 hash 後整體傳給 onLine（Gemini/Agy 語義）
+   * - JSONL 模式：首次讀整檔（為了支援 initialLines），之後改用 byte
+   *   offset 增量讀取，避免長時間 follow 大檔時每次都把整個檔案
+   *   再讀進記憶體。
    */
   private async readAndProcess(
     filePath: string,
     onLine: (line: string) => void
   ): Promise<void> {
-    const file = Bun.file(filePath);
-    const content = await file.text();
-
     if (this.jsonMode) {
-      // JSON 模式：把整個檔案當作一個整體
-      // 使用簡單的 hash 來檢測內容是否有變化
+      const file = Bun.file(filePath);
+      const content = await file.text();
       const contentHash = Bun.hash(content).toString();
       if (contentHash !== this.lastContentHash) {
         this.lastContentHash = contentHash;
         onLine(content);
       }
-    } else {
-      // JSONL 模式：按行分割
-      const lines = content.split('\n').filter(Boolean);
-
-      // 檔案被截斷或重寫時，重置已處理行數
-      if (lines.length < this.processedLines) {
-        this.processedLines = 0;
-      } else if (lines.length <= this.processedLines) {
-        const contentHash = Bun.hash(content).toString();
-        if (this.lastContentHash && this.lastContentHash !== contentHash) {
-          this.processedLines = 0;
-        }
-        this.lastContentHash = contentHash;
-      }
-
-      // 處理 initialLines 選項
-      let linesToProcess: string[];
-      if (this.isFirstRead && this.options?.initialLines !== undefined) {
-        const n = this.options.initialLines;
-
-        if (n < 0) {
-          linesToProcess = lines; // 負數：全部
-        } else if (n === 0) {
-          linesToProcess = []; // 零：無
-        } else if (n >= lines.length) {
-          linesToProcess = lines; // 超出：全部
-        } else {
-          linesToProcess = lines.slice(-n); // 正常：最後 N 行
-        }
-      } else {
-        linesToProcess = lines.slice(this.processedLines);
-      }
-
-      for (const line of linesToProcess) {
-        onLine(line);
-      }
-
-      this.processedLines = lines.length;
-      this.isFirstRead = false;
-      if (lines.length > 0) {
-        this.lastContentHash = Bun.hash(content).toString();
-      }
+      return;
     }
+
+    await this.readAndProcessJsonl(filePath, onLine);
+  }
+
+  /**
+   * JSONL 模式讀取：首次走整檔（支援 initialLines），後續走增量。
+   */
+  private async readAndProcessJsonl(
+    filePath: string,
+    onLine: (line: string) => void
+  ): Promise<void> {
+    if (this.isFirstRead) {
+      await this.firstReadJsonl(filePath, onLine);
+      return;
+    }
+
+    await this.incrementalReadJsonl(filePath, onLine);
+  }
+
+  /**
+   * 首次讀取：保留原本「整檔 → 取最後 N 行」語義，
+   * 讀完後把 byte offset 設為當前檔案大小，後續走增量。
+   */
+  private async firstReadJsonl(
+    filePath: string,
+    onLine: (line: string) => void
+  ): Promise<void> {
+    const file = Bun.file(filePath);
+    const content = await file.text();
+    const lines = content.split('\n').filter(Boolean);
+
+    let linesToProcess: string[];
+    if (this.options?.initialLines !== undefined) {
+      const n = this.options.initialLines;
+      if (n < 0) {
+        linesToProcess = lines;
+      } else if (n === 0) {
+        linesToProcess = [];
+      } else if (n >= lines.length) {
+        linesToProcess = lines;
+      } else {
+        linesToProcess = lines.slice(-n);
+      }
+    } else {
+      linesToProcess = lines;
+    }
+
+    for (const line of linesToProcess) {
+      onLine(line);
+    }
+
+    this.processedLines = lines.length;
+    this.isFirstRead = false;
+    // 用實際讀到的 byte 長度當作 offset，下次只讀新增區塊
+    this.lastReadOffset = Buffer.byteLength(content, 'utf8');
+    this.pendingBuffer = '';
+  }
+
+  /**
+   * 增量讀取：只讀 [lastReadOffset, currentSize) 範圍。
+   * 處理 truncate / atomic replace / partial line buffer。
+   */
+  private async incrementalReadJsonl(
+    filePath: string,
+    onLine: (line: string) => void
+  ): Promise<void> {
+    const stats = await stat(filePath);
+    const currentSize = stats.size;
+
+    // Truncate / atomic replace：當前 size 比已讀 offset 還小，視同檔案被截斷。
+    // 重置狀態並把剩下的內容當作新內容處理。
+    if (currentSize < this.lastReadOffset) {
+      this.lastReadOffset = 0;
+      this.pendingBuffer = '';
+      this.processedLines = 0;
+    }
+
+    // 沒有新增 bytes，也沒有暫存的尾段 → 跳過
+    if (currentSize === this.lastReadOffset && this.pendingBuffer === '') {
+      return;
+    }
+
+    let newContent = '';
+    if (currentSize > this.lastReadOffset) {
+      const file = Bun.file(filePath);
+      const slice = file.slice(this.lastReadOffset, currentSize);
+      newContent = await slice.text();
+      this.lastReadOffset = currentSize;
+    }
+
+    const combined = this.pendingBuffer + newContent;
+    const lastNewlineIdx = combined.lastIndexOf('\n');
+
+    if (lastNewlineIdx === -1) {
+      // 沒有完整行，全部暫存等下次
+      this.pendingBuffer = combined;
+      return;
+    }
+
+    const linesPortion = combined.slice(0, lastNewlineIdx);
+    this.pendingBuffer = combined.slice(lastNewlineIdx + 1);
+
+    const newLines = linesPortion.split('\n').filter(Boolean);
+    for (const line of newLines) {
+      onLine(line);
+    }
+    this.processedLines += newLines.length;
   }
 
   /**
@@ -195,6 +266,8 @@ export class FileWatcher {
     // 檔案可能被原子替換，需重置狀態避免漏讀
     this.processedLines = 0;
     this.lastContentHash = '';
+    this.lastReadOffset = 0;
+    this.pendingBuffer = '';
     this.isFirstRead = false; // 重啟不算首次讀取
 
     // 使用 scheduleRead 避免與 polling 競態
