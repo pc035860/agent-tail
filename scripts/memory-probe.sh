@@ -48,7 +48,7 @@ while kill -0 "$PID" 2>/dev/null; do
   TS=$(date -Iseconds 2>/dev/null || date +%FT%T)
 
   FP_RAW=$(/usr/bin/footprint -p "$PID" 2>/dev/null \
-    | awk '/Footprint:/ {print $3 $4; exit}' || true)
+    | awk '/Footprint:/ {print $5 $6; exit}' || true)
   FP_MB=$(to_mb "${FP_RAW:-0}")
 
   VMS=$(vmmap -summary "$PID" 2>/dev/null || true)
