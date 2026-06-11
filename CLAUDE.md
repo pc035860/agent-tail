@@ -32,7 +32,7 @@ agent-tail gemini --no-follow      # don't follow, only show existing content
 agent-tail claude -v               # verbose mode (no truncation)
 agent-tail <agent-type> -q         # quiet mode (suppress non-error messages)
 agent-tail <agent-type> -n 50      # show only last 50 lines initially
-agent-tail <agent-type> -s 200     # set polling interval to 200ms (default: 500)
+agent-tail <agent-type> -s 200     # set polling interval to 200ms (default: 2000)
 
 # Claude-specific options
 agent-tail claude --subagent       # tail latest subagent log
@@ -220,6 +220,7 @@ src/
 - **`createInteractiveSessionManager(displayController)`** is shared by Claude, Codex, and Cursor interactive watches.
 
 **Gotchas:**
+- **FileWatcher hot path must NOT use `Bun.file().slice()`**: repeated BunFile/Blob creation accumulates unreclaimable IOAccelerator pages on macOS (17 GB footprint observed). `FileWatcher` uses a persistent `FileHandle` + reusable Buffer for incremental JSONL reads (`src/core/file-watcher.ts:40-43`); close + reopen the fd on truncate/atomic replace. Bun >=1.3.13 required (`package.json` engines) — older Bun leaks IOAccelerator slabs regardless (oven-sh/bun#28234).
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
 - **`Bun.file(dir).exists()` returns false for directories**. Use `stat(dir)` instead.
 - **Codex cache only scans "today"** for incremental refresh. Cross-midnight sessions handled on next startup.

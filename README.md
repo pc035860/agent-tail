@@ -17,7 +17,7 @@ When you use AI coding assistants like **Claude Code**, **Codex**, **Gemini CLI*
 
 ### Prerequisites
 
-You need [Bun](https://bun.sh) installed. If you don't have it:
+You need [Bun](https://bun.sh) **>=1.3.13** installed (older versions leak memory on macOS Apple Silicon during long-running tails — see [oven-sh/bun#28234](https://github.com/oven-sh/bun/issues/28234)). If you don't have it:
 
 ```bash
 # macOS / Linux
@@ -275,7 +275,7 @@ sessions (sorted by activity time).
 | `--no-follow` | | Don't watch for new changes, just show existing content |
 | `--quiet` | `-q` | Suppress non-error output messages |
 | `--no-quiet` | | Show informational messages (default) |
-| `--sleep-interval <ms>` | `-s` | Set file polling interval (100-60000ms, default: 500) |
+| `--sleep-interval <ms>` | `-s` | Set file polling interval (100-60000ms, default: 2000) |
 | `--lines <number>` | `-n` | Number of initial lines to show per file (default: all). In `--list` mode: number of sessions |
 | `--list` | `-l` | List recent sessions instead of tailing (tab-separated output) |
 | `--subagent [id]` | | Claude/Codex/Cursor: tail subagent log (latest if no ID) |
