@@ -153,7 +153,8 @@ describe('WorkflowAttachment', () => {
     // Write new agent transcript after start
     const agentPath = join(fixture.transcriptDir, `agent-${AGENT_ID_1}.jsonl`);
     await writeFile(agentPath, makeAssistantLine('dynamic'));
-    await waitMs(300);
+    // 增加 slack 以涵蓋 Bun 1.3.14 上 fs.watch directory 偵測偶發較慢
+    await waitMs(1500);
 
     const agentLabel = makeWorkflowAgentLabel(AGENT_ID_1);
     expect(lines.some((l) => l.label === agentLabel)).toBe(true);

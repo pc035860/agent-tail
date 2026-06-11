@@ -11,7 +11,7 @@ import type { WorkflowSnapshot } from '../../src/claude-workflow/types.ts';
 const DEBOUNCE_MS = 10;
 
 function waitDebounce(): Promise<void> {
-  return new Promise((r) => setTimeout(r, DEBOUNCE_MS * 3 + 50));
+  return new Promise((r) => setTimeout(r, DEBOUNCE_MS * 6 + 200));
 }
 
 function makeSnapshot(
