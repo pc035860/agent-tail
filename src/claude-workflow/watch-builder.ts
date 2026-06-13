@@ -30,6 +30,10 @@ import type {
 
 const TRANSCRIPT_DIR_RETRIES = 10;
 const TRANSCRIPT_DIR_INTERVAL_MS = 100;
+// fs.watch 在 macOS 上對 dir 內新檔事件偶發 miss（特別是 watch start 後立刻
+// 有檔案出現的情況）。用 polling backup 主動掃描蓋住漏網事件 — knownAgentIds
+// 在 attachAgent 內做 dedup，安全重入。500ms 對 dir scan 成本可接受。
+const SUBAGENT_DIR_POLL_MS = 500;
 
 export interface WorkflowAttachmentConfig {
   workflow: DetectedWorkflow;
@@ -61,6 +65,7 @@ export class WorkflowAttachment {
   private readonly agentWatchers = new Map<string, FileWatcher>();
   private readonly agentParsers = new Map<string, LineParser>();
   private subagentDirWatcher: FSWatcher | null = null;
+  private subagentDirPollTimer: ReturnType<typeof setInterval> | null = null;
   private snapshotWatcher: SnapshotWatcher | null = null;
   private currentSnapshot: WorkflowSnapshot | null = null;
   // One-shot latch — true once auto-exit (snapshot terminal status) is
@@ -161,6 +166,10 @@ export class WorkflowAttachment {
 
     this.subagentDirWatcher?.close();
     this.subagentDirWatcher = null;
+    if (this.subagentDirPollTimer) {
+      clearInterval(this.subagentDirPollTimer);
+      this.subagentDirPollTimer = null;
+    }
 
     this.journalWatcher?.stop();
     this.journalWatcher = null;
@@ -309,6 +318,14 @@ export class WorkflowAttachment {
         `[wf:${this.config.workflow.runId}] subagent dir watch failed: ${err}`
       );
     }
+
+    // Polling backup — 主動掃描漏網事件（attachAgent 自帶 knownAgentIds dedup）。
+    this.subagentDirPollTimer = setInterval(() => {
+      if (this.stopped) return;
+      void this._scanAndAttachInitialAgents().catch(() => {
+        /* swallow — next tick retries */
+      });
+    }, SUBAGENT_DIR_POLL_MS);
   }
 
   private _handleSnapshotChange(snap: WorkflowSnapshot): void {

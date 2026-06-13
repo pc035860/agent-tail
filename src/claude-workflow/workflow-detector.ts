@@ -1,4 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs';
+import { Glob } from 'bun';
 import type { OutputHandler } from '../core/detector-interfaces.ts';
 import type { ParsedLine } from '../core/types.ts';
 import {
@@ -15,6 +16,9 @@ import type { DetectedWorkflow } from './types.ts';
 // lands in P5.
 
 const RETRY_DELAY_MS = 100;
+// fs.watch 在 macOS 上對 dir 內新檔事件偶發 miss。Polling backup 主動掃描補
+// 漏 — knownRunIds 在 markRunIdKnown 內做 dedup，安全重入。
+const DIR_POLL_BACKUP_MS = 500;
 
 export interface WorkflowDetectorConfig {
   sessionUuid: string;
@@ -26,6 +30,8 @@ export interface WorkflowDetectorConfig {
 
 export class WorkflowDetector {
   private dirWatcher: FSWatcher | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private workflowsDir: string | null = null;
   private readonly knownRunIds = new Set<string>();
   private stopped = false;
 
@@ -33,6 +39,7 @@ export class WorkflowDetector {
 
   async start(): Promise<void> {
     const workflowsDir = getWorkflowsDir(this.config.sessionDir);
+    this.workflowsDir = workflowsDir;
     try {
       this.dirWatcher = watch(workflowsDir, (_eventType, filename) => {
         if (this.stopped || !filename) return;
@@ -50,6 +57,29 @@ export class WorkflowDetector {
       this.config.outputHandler.debug(
         `[workflow-detector] watch ${workflowsDir} failed: ${err}`
       );
+    }
+
+    // Polling backup — fs.watch event miss 時主動掃描補漏。
+    this.pollTimer = setInterval(() => {
+      if (this.stopped) return;
+      void this._pollDirectory();
+    }, DIR_POLL_BACKUP_MS);
+  }
+
+  private async _pollDirectory(): Promise<void> {
+    if (!this.workflowsDir) return;
+    try {
+      const glob = new Glob('wf_*.json');
+      for await (const file of glob.scan({ cwd: this.workflowsDir })) {
+        if (this.stopped) return;
+        if (file.includes('/')) continue;
+        const runId = parseWorkflowSnapshotFilename(file);
+        if (!runId) continue;
+        if (!this.markRunIdKnown(runId)) continue;
+        void this._handleNewRunId(runId, /* retries */ 10);
+      }
+    } catch {
+      /* dir 可能尚未建立或剛被刪除，下一輪重試 */
     }
   }
 
@@ -114,6 +144,10 @@ export class WorkflowDetector {
     this.stopped = true;
     this.dirWatcher?.close();
     this.dirWatcher = null;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 
   private async _handleNewRunId(runId: string, retries: number): Promise<void> {
