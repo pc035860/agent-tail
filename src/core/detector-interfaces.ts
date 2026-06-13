@@ -56,12 +56,55 @@ export interface RetryConfig {
 /** 主 session 的標籤常數 */
 export const MAIN_LABEL = '[MAIN]';
 
-/** 從 agentId 建立標籤（例如 '[abc1234]'） */
-export function makeAgentLabel(agentId: string): string {
+/** spawnRegistry 中表示 parent 是主 session 的哨值（用於 makeAgentLabel 內部判斷） */
+export const MAIN_SOURCE = 'MAIN';
+
+/** label 中分隔 child agent id 與 parent agent id 的字元 */
+export const LABEL_PARENT_DELIMITER = '◂';
+
+/**
+ * 從 agentId 建立標籤
+ * - 無 parent / parent 為主 session → '[abc1234]'
+ * - 巢狀 parent → '[abc1234◂def5678]'（child◂parent，方便視覺辨識來源）
+ */
+export function makeAgentLabel(
+  agentId: string,
+  parentAgentId?: string
+): string {
+  if (parentAgentId && parentAgentId !== MAIN_SOURCE) {
+    return `[${agentId}${LABEL_PARENT_DELIMITER}${parentAgentId}]`;
+  }
   return `[${agentId}]`;
 }
 
-/** 從標籤提取 agentId（例如 '[abc1234]' -> 'abc1234'） */
+/**
+ * 從標籤提取 agentId
+ * - '[abc1234]' → 'abc1234'
+ * - '[abc1234◂def5678]' → 'abc1234'（只取 child id）
+ * - '[MAIN]' → 'MAIN'
+ */
 export function extractAgentIdFromLabel(label: string): string {
-  return label.slice(1, -1);
+  const inner = label.slice(1, -1);
+  const idx = inner.indexOf(LABEL_PARENT_DELIMITER);
+  return idx >= 0 ? inner.slice(0, idx) : inner;
+}
+
+/** 從巢狀標籤提取 parent agentId（無 parent 時回 undefined） */
+export function extractParentAgentIdFromLabel(
+  label: string
+): string | undefined {
+  const inner = label.slice(1, -1);
+  const idx = inner.indexOf(LABEL_PARENT_DELIMITER);
+  return idx >= 0
+    ? inner.slice(idx + LABEL_PARENT_DELIMITER.length)
+    : undefined;
+}
+
+/**
+ * 把 label 轉成 spawnRegistry 用的 parent source 值。
+ * - '[MAIN]' → MAIN_SOURCE
+ * - '[agentId]' / '[agentId◂parent]' → 'agentId'
+ */
+export function labelToParentSource(label: string): string {
+  return label === MAIN_LABEL ? MAIN_SOURCE : extractAgentIdFromLabel(label);
 }

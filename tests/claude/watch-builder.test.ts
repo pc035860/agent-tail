@@ -10,10 +10,12 @@ import {
   buildSubagentFiles,
   createOnLineHandler,
   createSuperFollowController,
+  parseQueueOperationCompletion,
   readLastAssistantMessage,
   SUPER_FOLLOW_POLL_MS,
   type OnLineHandlerConfig,
 } from '../../src/claude/watch-builder';
+import { SubagentDetector as RealSubagentDetector } from '../../src/claude/subagent-detector';
 import {
   MAIN_LABEL,
   makeAgentLabel,
@@ -45,12 +47,14 @@ function createMockDetector(): SubagentDetector & {
   fallbackDetectionCalls: string[];
   pushDescriptionCalls: string[];
   agentProgressCalls: string[];
+  recordSpawnCalls: Array<{ toolUseId: string; parentSource: string }>;
 } {
   const detector = {
     earlyDetectionCalls: 0,
     fallbackDetectionCalls: [] as string[],
     pushDescriptionCalls: [] as string[],
     agentProgressCalls: [] as string[],
+    recordSpawnCalls: [] as Array<{ toolUseId: string; parentSource: string }>,
     handleEarlyDetection() {
       detector.earlyDetectionCalls++;
     },
@@ -63,6 +67,9 @@ function createMockDetector(): SubagentDetector & {
     handleAgentProgress(agentId: string) {
       detector.agentProgressCalls.push(agentId);
     },
+    recordSpawn(toolUseId: string, parentSource: string) {
+      detector.recordSpawnCalls.push({ toolUseId, parentSource });
+    },
     getKnownAgentIds: () => new Set<string>(),
     isKnownAgent: () => false,
     startDirectoryWatch: () => {},
@@ -73,6 +80,7 @@ function createMockDetector(): SubagentDetector & {
     fallbackDetectionCalls: string[];
     pushDescriptionCalls: string[];
     agentProgressCalls: string[];
+    recordSpawnCalls: Array<{ toolUseId: string; parentSource: string }>;
   };
 }
 
@@ -505,10 +513,16 @@ describe('createOnLineHandler', () => {
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
   });
 
-  test('non-[MAIN] label does NOT trigger any detection', () => {
+  test('non-[MAIN] label does NOT trigger earlyDetection / pushDescription / fallbackDetection', () => {
+    // earlyDetection / pushDescription are MAIN-only by design.
+    // Fallback detection (toolUseResult.agentId) is also MAIN-only — nested
+    // completion does NOT show up in parent subagent's JSONL; it's emitted as
+    // queue-operation/task-notification in MAIN. See `queue-operation` handler
+    // below for nested completion routing.
     const detector = createMockDetector();
     const parsed = createMockParsedLine({
       isTaskToolUse: true,
+      taskDescription: 'should not push',
       raw: { toolUseResult: { agentId: 'abc1234' } },
     });
 
@@ -538,6 +552,330 @@ describe('createOnLineHandler', () => {
 
     expect(detector.earlyDetectionCalls).toBe(0);
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
+    expect(detector.pushDescriptionCalls).toHaveLength(0);
+  });
+
+  // Phase 4: nested subagent completion is reported only in MAIN's
+  // queue-operation lines (the parent subagent's JSONL doesn't carry the
+  // task-notification). Parsing the embedded XML and routing through
+  // handleFallbackDetection drives markSessionDone (✓ tick) + onSubagentDone
+  // (close nested pane).
+  test('[MAIN] queue-operation with task-notification status=completed → fallbackDetection(taskId)', () => {
+    const detector = createMockDetector();
+    const config: OnLineHandlerConfig = {
+      parsers: new Map(),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+    const handler = createOnLineHandler(config);
+
+    const line = JSON.stringify({
+      type: 'queue-operation',
+      operation: 'enqueue',
+      content:
+        '<task-notification>\n<task-id>aacdade58f602a790</task-id>\n<tool-use-id>toolu_xyz</tool-use-id>\n<status>completed</status>\n</task-notification>',
+    });
+    handler(line, '[MAIN]');
+
+    expect(detector.fallbackDetectionCalls).toEqual(['aacdade58f602a790']);
+  });
+
+  test('[MAIN] queue-operation with status != completed → no fallbackDetection', () => {
+    const detector = createMockDetector();
+    const config: OnLineHandlerConfig = {
+      parsers: new Map(),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+    const handler = createOnLineHandler(config);
+
+    const line = JSON.stringify({
+      type: 'queue-operation',
+      operation: 'enqueue',
+      content:
+        '<task-notification>\n<task-id>aacdade58f602a790</task-id>\n<status>running</status>\n</task-notification>',
+    });
+    handler(line, '[MAIN]');
+
+    expect(detector.fallbackDetectionCalls).toHaveLength(0);
+  });
+
+  // Helper-level tests — covers regex/JSON edge cases without going through
+  // the full createOnLineHandler pipeline.
+  describe('parseQueueOperationCompletion (helper)', () => {
+    test('happy path: returns task-id', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification>\n<task-id>aacd1234567890ab</task-id>\n<status>completed</status>\n</task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBe('aacd1234567890ab');
+    });
+
+    test('status=running → null', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><task-id>x</task-id><status>running</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('status=failed → null (only completed is treated as terminal)', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><task-id>x</task-id><status>failed</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('wrong top-level type → null', () => {
+      const line = JSON.stringify({
+        type: 'user',
+        content:
+          '<task-notification><task-id>x</task-id><status>completed</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('missing <task-id> → null', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><status>completed</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('non-JSON line → null', () => {
+      expect(parseQueueOperationCompletion('not json at all')).toBeNull();
+    });
+
+    test('prefilter rejects unrelated lines fast (no JSON parse)', () => {
+      // Line lacks both prefilter substrings — must short-circuit to null.
+      expect(parseQueueOperationCompletion('{"type":"assistant"}')).toBeNull();
+    });
+  });
+
+  // Integration: real SubagentDetector — drive a queue-operation completion
+  // event and verify ✓ tick + onSubagentDone (pane close) end-to-end.
+  test('queue-operation drives markSessionDone + onSubagentDone via real detector', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wb-qo-int-'));
+    try {
+      const subagentsDir = join(tmpDir, 'subagents');
+      await mkdir(subagentsDir, { recursive: true });
+
+      // Track session lifecycle and pane events
+      const sessionDoneCalls: string[] = [];
+      const subagentDoneCalls: string[] = [];
+
+      const detector = new RealSubagentDetector(
+        new Set(['aacdade1']), // nested already known (cold attach scenario)
+        {
+          subagentsDir,
+          output: {
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            debug: () => {},
+          },
+          watcher: { addFile: async () => {} },
+          enabled: true,
+          watchDir: false,
+          session: {
+            addSession: () => {},
+            markSessionDone: (id: string) => {
+              sessionDoneCalls.push(id);
+            },
+            updateUI: () => {},
+          },
+          // hasPane returns true → triggers onSubagentDone
+          hasPane: () => true,
+          onSubagentDone: (id: string) => {
+            subagentDoneCalls.push(id);
+          },
+        }
+      );
+
+      const config: OnLineHandlerConfig = {
+        parsers: new Map(),
+        formatter: createMockFormatter(),
+        detector,
+        onOutput: () => {},
+        verbose: false,
+      };
+      const handler = createOnLineHandler(config);
+
+      const completionLine = JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        content:
+          '<task-notification>\n<task-id>aacdade1</task-id>\n<status>completed</status>\n</task-notification>',
+      });
+
+      handler(completionLine, '[MAIN]');
+
+      expect(sessionDoneCalls).toContain('aacdade1');
+      expect(subagentDoneCalls).toContain('aacdade1');
+
+      detector.stop();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('non-[MAIN] queue-operation does NOT trigger fallbackDetection (defensive)', () => {
+    const detector = createMockDetector();
+    const config: OnLineHandlerConfig = {
+      parsers: new Map(),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+    const handler = createOnLineHandler(config);
+
+    const line = JSON.stringify({
+      type: 'queue-operation',
+      content:
+        '<task-notification><task-id>xxxxxxx</task-id><status>completed</status></task-notification>',
+    });
+    handler(line, '[someagent]');
+
+    expect(detector.fallbackDetectionCalls).toHaveLength(0);
+  });
+
+  // Phase 2: recordSpawn is the only detector hook called from non-MAIN labels.
+  // It records the spawn relationship so nested subagent registrations can
+  // reverse-look-up their parent via meta.json.toolUseId.
+  test('non-[MAIN] label with taskToolUseId calls recordSpawn with parent agentId', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      isTaskToolUse: true,
+      taskToolUseId: 'toolu_nestedSpawn',
+      raw: {},
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[ace4e3f]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{}', '[ace4e3f]');
+
+    expect(detector.recordSpawnCalls).toHaveLength(1);
+    expect(detector.recordSpawnCalls[0]!.toolUseId).toBe('toolu_nestedSpawn');
+    // parent is the calling agentId (extracted from label), NOT MAIN
+    expect(detector.recordSpawnCalls[0]!.parentSource).toBe('ace4e3f');
+  });
+
+  // Regression: shouldOutput 抑制不能跳過 recordSpawn — 否則 --pane 模式下
+  // 被抑制的 parent subagent 的 Agent tool_use 不會進 spawnRegistry，
+  // nested child 拿不到 parent label
+  test('shouldOutput suppression does NOT skip recordSpawn (metadata always fires)', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      isTaskToolUse: true,
+      taskToolUseId: 'toolu_suppressedParent',
+      raw: {},
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const outputs: string[] = [];
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[ace4e3f]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: (formatted) => outputs.push(formatted),
+      verbose: false,
+      shouldOutput: (label) => label === '[MAIN]', // 抑制非 MAIN
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{}', '[ace4e3f]');
+
+    // 輸出被抑制
+    expect(outputs).toHaveLength(0);
+    // 但 metadata 偵測仍然觸發
+    expect(detector.recordSpawnCalls).toHaveLength(1);
+    expect(detector.recordSpawnCalls[0]!.toolUseId).toBe(
+      'toolu_suppressedParent'
+    );
+    expect(detector.recordSpawnCalls[0]!.parentSource).toBe('ace4e3f');
+  });
+
+  test('[MAIN] label with taskToolUseId calls recordSpawn with MAIN sentinel', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      isTaskToolUse: true,
+      taskToolUseId: 'toolu_mainSpawn',
+      taskDescription: 'main spawn',
+      raw: {},
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[MAIN]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{}', '[MAIN]');
+
+    expect(detector.recordSpawnCalls).toHaveLength(1);
+    expect(detector.recordSpawnCalls[0]!.parentSource).toBe('MAIN');
+    // Main label also still pushes description + early detection
+    expect(detector.pushDescriptionCalls).toEqual(['main spawn']);
+    expect(detector.earlyDetectionCalls).toBe(1);
   });
 
   test('creates new parser for unknown label', () => {

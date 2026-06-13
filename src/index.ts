@@ -30,6 +30,7 @@ import type {
 import {
   SubagentDetector,
   scanForNewSubagents,
+  resolveExistingParents,
   MAIN_LABEL,
   makeAgentLabel,
   extractAgentIdFromLabel,
@@ -469,12 +470,15 @@ async function startClaudeMultiWatch(
       existingAgentIds.add(initialAgentId);
     }
 
-    const existingSubagentFiles = await buildSubagentFiles(
-      subagentsDir,
-      existingAgentIds
-    );
+    const [existingSubagentFiles, parentMap] = await Promise.all([
+      buildSubagentFiles(subagentsDir, existingAgentIds),
+      resolveExistingParents(subagentsDir, sessionFile.path, existingAgentIds),
+    ]);
     for (const { agentId, path } of existingSubagentFiles) {
-      files.push({ path, label: makeAgentLabel(agentId) });
+      files.push({
+        path,
+        label: makeAgentLabel(agentId, parentMap.get(agentId)),
+      });
     }
 
     if (existingAgentIds.size > 0) {
@@ -671,12 +675,19 @@ async function startClaudeMultiWatch(
         newExistingAgentIds.add(id);
       }
 
-      const existingSubagentFiles = await buildSubagentFiles(
-        newSubagentsDir,
-        newExistingAgentIds
-      );
+      const [existingSubagentFiles, parentMap] = await Promise.all([
+        buildSubagentFiles(newSubagentsDir, newExistingAgentIds),
+        resolveExistingParents(
+          newSubagentsDir,
+          nextSessionFile.path,
+          newExistingAgentIds
+        ),
+      ]);
       for (const { agentId, path } of existingSubagentFiles) {
-        newFiles.push({ path, label: makeAgentLabel(agentId) });
+        newFiles.push({
+          path,
+          label: makeAgentLabel(agentId, parentMap.get(agentId)),
+        });
       }
 
       if (newExistingAgentIds.size > 0) {
@@ -1324,12 +1335,20 @@ async function startClaudeInteractiveWatch(
       existingAgentIds.add(initialAgentId);
     }
 
-    const existingSubagentFiles = await buildSubagentFiles(
-      subagentsDir,
-      existingAgentIds
-    );
+    const [existingSubagentFiles, parentMap] = await Promise.all([
+      buildSubagentFiles(subagentsDir, existingAgentIds),
+      resolveExistingParents(
+        subagentsDir,
+        targetSessionFile.path,
+        existingAgentIds
+      ),
+    ]);
     for (const { agentId, path } of existingSubagentFiles) {
-      sessionManager.addSession(agentId, makeAgentLabel(agentId), path);
+      sessionManager.addSession(
+        agentId,
+        makeAgentLabel(agentId, parentMap.get(agentId)),
+        path
+      );
     }
 
     if (showIntro) {

@@ -8,10 +8,44 @@ import {
   MAIN_LABEL,
   buildSubagentPath,
 } from './subagent-detector.ts';
+import { labelToParentSource } from '../core/detector-interfaces.ts';
 import type { WorkflowDetector } from '../claude-workflow/workflow-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
+
+/**
+ * 解析主 session 內 queue-operation + task-notification 訊號，
+ * 回傳 status === 'completed' 的 task-id（其他狀態 / 解析失敗皆回 null）。
+ *
+ * 為什麼這條路徑必要：Claude Code 對 nested subagent 完成的通知只寫進主 session
+ * （以 type=queue-operation 包 task-notification XML 字串），parent subagent
+ * 的 JSONL 完全沒有 toolUseResult.agentId=nested 這類事件。要關 nested pane /
+ * 在 -i Tab 列打 ✓ 必須走這條。
+ *
+ * Exported for direct testing.
+ */
+export function parseQueueOperationCompletion(line: string): string | null {
+  // 子字串前置過濾，避免每行都 JSON.parse
+  if (
+    !line.includes('"queue-operation"') ||
+    !line.includes('<task-notification>')
+  ) {
+    return null;
+  }
+  try {
+    const data = JSON.parse(line) as { type?: string; content?: string };
+    if (data.type !== 'queue-operation' || typeof data.content !== 'string') {
+      return null;
+    }
+    const taskIdMatch = data.content.match(/<task-id>([^<]+)<\/task-id>/);
+    const statusMatch = data.content.match(/<status>([^<]+)<\/status>/);
+    if (!taskIdMatch?.[1] || statusMatch?.[1] !== 'completed') return null;
+    return taskIdMatch[1];
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 從 subagent JSONL 檔案讀取最後一條 assistant 訊息的所有 ParsedLine parts
@@ -137,6 +171,16 @@ export function createOnLineHandler(
       }
     }
 
+    // queue-operation + task-notification: Claude Code 對 subagent 完成的真正訊號
+    // 包含主 spawn 與 nested。實測 nested 完成的 task-notification 只寫進主 session
+    // （不在 parent subagent JSONL），所以這條路徑只在 MAIN 觸發。
+    if (label === MAIN_LABEL) {
+      const completedTaskId = parseQueueOperationCompletion(line);
+      if (completedTaskId) {
+        config.detector.handleFallbackDetection(completedTaskId);
+      }
+    }
+
     let parser = config.parsers.get(label);
     if (!parser) {
       const newAgent = new ClaudeAgent({ verbose: config.verbose });
@@ -148,30 +192,27 @@ export function createOnLineHandler(
     while (parsed) {
       parsed.sourceLabel = label;
 
-      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
-      if (config.shouldOutput && !config.shouldOutput(label)) {
-        parsed = parser.parse(line);
-        continue;
-      }
-
-      config.onOutput(config.formatter.format(parsed), label);
-
-      // Real-time custom-title update
-      if (
-        label === MAIN_LABEL &&
-        parsed.isCustomTitle &&
-        parsed.customTitleValue
-      ) {
-        config.onTitleUpdate?.(parsed.customTitleValue);
-      }
+      // === Metadata extraction ===
+      // 必須在 shouldOutput 抑制檢查之前；偵測邏輯不該受輸出抑制影響
+      // （否則 --pane 模式下 parent subagent 被抑制時，recordSpawn 不會觸發
+      //  → nested child 的 [child◂parent] label 拿不到 parent，掛回 [child]）
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-      if (label === MAIN_LABEL && parsed.isTaskToolUse) {
-        // Push description before early detection so it's queued when scan triggers
+      // 只有主 session 走完整偵測流程（FIFO push + early detection scan）
+      // nested 那層的 description 改靠 meta.json 補；dir watch 處理檔案出現
+      if (parsed.isTaskToolUse && label === MAIN_LABEL) {
         if (parsed.taskDescription) {
           config.detector.pushDescription(parsed.taskDescription);
         }
         config.detector.handleEarlyDetection();
+      }
+      // Phase 2: 紀錄 spawn 關係（主 session 與 nested 都收）
+      // nested subagent 註冊時靠此 map 反查 parent → 組 [child◂parent] label
+      if (parsed.isTaskToolUse && parsed.taskToolUseId) {
+        config.detector.recordSpawn(
+          parsed.taskToolUseId,
+          labelToParentSource(label)
+        );
       }
 
       // P5 — Workflow path A: main-JSONL Workflow tool_result triggers
@@ -181,6 +222,8 @@ export function createOnLineHandler(
       }
 
       // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
+      // 注意：main 的 toolUseResult.agentId 在 spawn 時就出現（status=async_launched），
+      // 真正的「完成」訊號要看 queue-operation / task-notification（下方處理）。
       if (label === MAIN_LABEL) {
         const raw = parsed.raw as {
           toolUseResult?: {
@@ -195,6 +238,22 @@ export function createOnLineHandler(
 
         if (agentId && !commandName && status !== 'forked') {
           config.detector.handleFallbackDetection(agentId);
+        }
+      }
+
+      // === Output (subject to suppression) ===
+      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
+      const suppressed = !!(config.shouldOutput && !config.shouldOutput(label));
+      if (!suppressed) {
+        config.onOutput(config.formatter.format(parsed), label);
+
+        // Real-time custom-title update
+        if (
+          label === MAIN_LABEL &&
+          parsed.isCustomTitle &&
+          parsed.customTitleValue
+        ) {
+          config.onTitleUpdate?.(parsed.customTitleValue);
         }
       }
 

@@ -1,8 +1,12 @@
 import { describe, test, expect } from 'bun:test';
 import {
   MAIN_LABEL,
+  MAIN_SOURCE,
+  LABEL_PARENT_DELIMITER,
   makeAgentLabel,
   extractAgentIdFromLabel,
+  extractParentAgentIdFromLabel,
+  labelToParentSource,
   type SessionHandler,
   type OutputHandler,
   type RetryConfig,
@@ -48,6 +52,55 @@ describe('detector-interfaces', () => {
     test('UUID 前段往返一致', () => {
       const id = '019cc375-5af5';
       expect(extractAgentIdFromLabel(makeAgentLabel(id))).toBe(id);
+    });
+  });
+
+  // Phase 2: nested subagent 的 parent-aware label 格式
+  describe('Phase 2: parent-aware label', () => {
+    test('MAIN_SOURCE 常數定義', () => {
+      expect(MAIN_SOURCE).toBe('MAIN');
+    });
+
+    test('分隔符號為 ◂', () => {
+      expect(LABEL_PARENT_DELIMITER).toBe('◂');
+    });
+
+    test('無 parent 時 label 維持 [agentId]', () => {
+      expect(makeAgentLabel('ad29fb7')).toBe('[ad29fb7]');
+    });
+
+    test('parent = MAIN_SOURCE 時 label 維持 [agentId]（主 session spawn 不顯示 parent）', () => {
+      expect(makeAgentLabel('ace4e3f', MAIN_SOURCE)).toBe('[ace4e3f]');
+    });
+
+    test('nested parent 時 label 為 [child◂parent]', () => {
+      expect(makeAgentLabel('ad29fb7', 'ace4e3f')).toBe('[ad29fb7◂ace4e3f]');
+    });
+
+    test('extractAgentIdFromLabel 從巢狀 label 取 child id', () => {
+      expect(extractAgentIdFromLabel('[ad29fb7◂ace4e3f]')).toBe('ad29fb7');
+    });
+
+    test('extractParentAgentIdFromLabel 無 parent 時回 undefined', () => {
+      expect(extractParentAgentIdFromLabel('[ad29fb7]')).toBeUndefined();
+    });
+
+    test('extractParentAgentIdFromLabel 從巢狀 label 取 parent id', () => {
+      expect(extractParentAgentIdFromLabel('[ad29fb7◂ace4e3f]')).toBe(
+        'ace4e3f'
+      );
+    });
+
+    test('labelToParentSource: [MAIN] → MAIN_SOURCE', () => {
+      expect(labelToParentSource('[MAIN]')).toBe(MAIN_SOURCE);
+    });
+
+    test('labelToParentSource: [child] → child agentId', () => {
+      expect(labelToParentSource('[ace4e3f]')).toBe('ace4e3f');
+    });
+
+    test('labelToParentSource: [child◂parent] → child agentId（不含 parent）', () => {
+      expect(labelToParentSource('[ad29fb7◂ace4e3f]')).toBe('ad29fb7');
     });
   });
 
