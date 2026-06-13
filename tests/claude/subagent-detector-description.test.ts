@@ -76,9 +76,13 @@ describe('SubagentDetector description queue', () => {
     await new Promise((r) => setTimeout(r, 500));
 
     expect(hookCalls).toHaveLength(2);
-    // FIFO order: first description goes to first agent
-    expect(hookCalls[0]!.description).toBe('desc A');
-    expect(hookCalls[1]!.description).toBe('desc B');
+    // FIFO 配對在 registerNewAgent 同步 shift 那刻決定（scan 順序為字典序：
+    // aaaaaaa 配 'desc A'、bbbbbbb 配 'desc B'）。callback 觸發順序由
+    // async finalizeRegistration 決定（readSubagentMeta retry 競速），不穩定。
+    // 因此用 agentId 反查配對，不依賴 hookCalls 索引。
+    const byAgent = new Map(hookCalls.map((c) => [c.agentId, c.description]));
+    expect(byAgent.get('aaaaaaa')).toBe('desc A');
+    expect(byAgent.get('bbbbbbb')).toBe('desc B');
 
     detector.stop();
   });
