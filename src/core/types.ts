@@ -91,6 +91,12 @@ export interface SessionListItem extends SessionFile {
   project?: string;
   /** 最後活動時間（從 session 內容讀取，比 file mtime 更準確） */
   lastActivityTime?: Date;
+  /**
+   * 自動推導的標題，從首個 user prompt 抽出（slash command、scheduled-task name、
+   * 或裸 text）。只有 customTitle 缺席時才填，formatSessionList 會視覺區分。
+   * Claude only。
+   */
+  autoTitle?: string;
   /** 類型：main session 或 workflow run（default 視為 'session'） */
   logType?: 'session' | 'workflow';
   /** Workflow run ID（僅 logType='workflow' 有值） */

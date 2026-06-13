@@ -122,6 +122,121 @@ export async function readLastTimestampFromJSONL(
 }
 
 /**
+ * Read the first meaningful user prompt from a Claude JSONL session, head-read.
+ * Used as a `customTitle` fallback in `--list` so unnamed sessions still convey
+ * what was being worked on (e.g. `/eshop-deploy ec-frontend, stag+prod, v1.97.0`,
+ * `[cron] samtsan-daily-marketplace`, or the raw first-turn user message).
+ *
+ * Filtering:
+ * - <scheduled-task name="X">  → `[cron] X`
+ * - <command-name>/cmd</command-name> with optional <command-args>X</command-args>
+ *                              → `/cmd X` (args trimmed to single line)
+ * - lines with only XML tags / Caveat: prefix / empty → skipped
+ * - assistant tool_use placeholders / tool_result content → skipped
+ *
+ * Reads progressive chunks (16KB → 64KB → 256KB) because a few Claude sessions
+ * have many file-history-snapshot or system-reminder lines before the first
+ * real user turn.
+ */
+export async function readFirstUserPromptFromHead(
+  filePath: string,
+  maxLength = 80
+): Promise<string | null> {
+  const CHUNK_SIZES = [16384, 65536, 262144]; // 16KB, 64KB, 256KB
+  try {
+    const file = Bun.file(filePath);
+    const size = file.size;
+    if (size === 0) return null;
+
+    for (const chunkSize of CHUNK_SIZES) {
+      const head = file.slice(0, Math.min(size, chunkSize));
+      const text = await head.text();
+      const lines = text.split('\n').filter(Boolean);
+
+      for (const line of lines) {
+        const extracted = tryExtractUserPrompt(line);
+        if (extracted) {
+          // Collapse internal whitespace then truncate
+          const normalized = extracted.replace(/\s+/g, ' ').trim();
+          return normalized.length > maxLength
+            ? normalized.slice(0, maxLength - 1) + '…'
+            : normalized;
+        }
+      }
+      // 已讀完整檔，下一輪 chunk 不會帶來新內容
+      if (chunkSize >= size) break;
+    }
+  } catch {
+    // File read error
+  }
+  return null;
+}
+
+/** Extract a usable prompt string from a single Claude JSONL line, or null. */
+function tryExtractUserPrompt(line: string): string | null {
+  let data: { type?: string; isMeta?: boolean; message?: unknown };
+  try {
+    data = JSON.parse(line) as typeof data;
+  } catch {
+    return null;
+  }
+  if (data.type !== 'user' || data.isMeta) return null;
+
+  const msg = data.message as { content?: unknown } | undefined;
+  const content = msg?.content;
+
+  let text = '';
+  if (typeof content === 'string') {
+    text = content;
+  } else if (Array.isArray(content)) {
+    for (const part of content) {
+      if (
+        part &&
+        typeof part === 'object' &&
+        (part as { type?: string }).type === 'text'
+      ) {
+        text = (part as { text?: string }).text ?? '';
+        break;
+      }
+    }
+  }
+  text = text.trim();
+  if (!text) return null;
+
+  // <scheduled-task name="X" ...>  →  [cron] X  (pure-ASCII marker;
+  // emoji like ⏰ render brightly in terminals and visually dominate the row)
+  const sched = text.match(/<scheduled-task[^>]*name="([^"]+)"/);
+  if (sched?.[1]) return `[cron] ${sched[1]}`;
+
+  // <command-name>/cmd</command-name> with optional <command-args>
+  const cmd = text.match(/<command-name>([^<]+)<\/command-name>/);
+  if (cmd?.[1]) {
+    const args = text.match(/<command-args>([^<]*)<\/command-args>/);
+    const argText = args?.[1]?.trim();
+    return argText ? `${cmd[1].trim()} ${argText}` : cmd[1].trim();
+  }
+
+  if (text.startsWith('Caveat:')) return null;
+
+  // 明確 skip 已知 Claude Code 注入的 internal wrapper（system-reminder、
+  // bash-stdout/stderr、local-command-stdout、attached-files 等）。
+  // 不能用 generic XML strip — 那會把 reminder 內文當成 prompt 露出。
+  if (INTERNAL_WRAPPER_TAG_RE.test(text)) return null;
+
+  // 其他殘留 XML（沒在白名單但也不是已知 wrapper）一律 strip 後返回，
+  // 因為這通常是 user prompt 內嵌的標籤（例如 <code>foo</code>）。
+  const stripped = text.replace(/<[^>]+>/g, '').trim();
+  return stripped || null;
+}
+
+/**
+ * 已知 Claude Code 注入到 user 訊息中的內部 wrapper tag。
+ * 開頭命中任何一個就完全跳過（不嘗試提取內容）。
+ */
+const INTERNAL_WRAPPER_TAG_RE =
+  /^<(system-reminder|bash-(?:stdout|stderr|input)|local-command-(?:stdout|stderr)|command-stdout|command-stderr|stdout|stderr|attached-files|user-prompt-submit-hook)\b/;
+
+/**
  * Read last message timestamp from a Gemini JSON session file.
  * Gemini uses whole-file JSON (not JSONL), so we read the entire file.
  * Session files are typically small.

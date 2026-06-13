@@ -1,8 +1,29 @@
 import { Chalk } from 'chalk';
 import type { SessionListItem } from '../core/types.ts';
+import { padVisibleEnd, truncateVisible } from '../utils/visible-width.ts';
 
 /** Chalk instance with forced color (level 1 = basic ANSI) for --list output */
 const colorChalk = new Chalk({ level: 1 });
+
+/**
+ * Fixed visible widths for the visible columns. Goal: every row writes the
+ * same number of visible cells into cols 0..3, so `\t` between them always
+ * expands to the same terminal tab stop (multiples of 8) and TITLE (col 4)
+ * starts at a fixed cell across rows.
+ *
+ * Without this, e.g. `3m ago` and `just now` (both ≤ 8 cells) end at different
+ * cells; the inter-column tab then lands at a different stop and TITLE wanders
+ * 8 cells row-to-row. Tab stop after a `\t` is `ceil((cursor+1)/8)*8` —
+ * strictly the next multiple of 8 — so widths chosen as:
+ *   - TYPE  width 4  → 'sess' fits exactly, 'wf  ' pads to 4; tab → cell 8
+ *   - ID    width 15 → workflow runId `wf_8hex-3hex` worst case; tab → cell 24
+ *   - TIME  width 8  → 'just now' fits exactly; tab → cell 40
+ *   - NOTES width 36 → tab → cell 80; TITLE always begins at cell 80
+ */
+const TYPE_COLUMN_WIDTH = 4;
+const ID_COLUMN_WIDTH = 15;
+const TIME_COLUMN_WIDTH = 8;
+const NOTES_COLUMN_WIDTH = 36;
 
 const UUID_REGEX =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -87,15 +108,39 @@ function sanitizeColumn(s: string): string {
 }
 
 /**
+ * Render the TITLE column with explicit visual distinction:
+ *   - customTitle (user-set / `/rename`): plain text — full visual weight
+ *   - autoTitle (derived from first user prompt): `› TEXT` dimmed — subtle signal
+ *     that this is a derived hint, not authoritative
+ *   - neither: dim em-dash `—`
+ */
+function formatTitleColumn(item: SessionListItem, color: boolean): string {
+  if (item.customTitle) {
+    return sanitizeColumn(item.customTitle);
+  }
+  if (item.autoTitle) {
+    const text = sanitizeColumn(`› ${item.autoTitle}`);
+    return color ? colorChalk.dim(text) : text;
+  }
+  return color ? colorChalk.dim('—') : '—';
+}
+
+/**
  * Format a list of sessions as tab-separated lines per SPEC §11.3 / §11.4.
  *
  * Columns (tab-separated):
- *   0 TYPE   'sess' | 'wf'  (cyan / magenta when color=true)
- *   1 ID     short identifier
- *   2 TIME   relative time
- *   3 TITLE  customTitle ?? '(no custom title)'
- *   4 NOTES  see {@link formatNotes}
- *   5 HID    hidden full id (see {@link hiddenFullId}); fzf --with-nth 1..5 hides it
+ *   0 TYPE    'sess' | 'wf'  (cyan / magenta when color=true)
+ *   1 ID      short identifier
+ *   2 TIME    relative time
+ *   3 NOTES   see {@link formatNotes} — project path (main) or workflow status
+ *   4 TITLE   customTitle | dim('› ' + autoTitle) | dim('—')
+ *   5 HID     hidden full id (see {@link hiddenFullId}); fzf --with-nth 1..5 hides it
+ *
+ * Column order rationale: project paths are bounded (~10-50 chars, mostly
+ * `~/code/foo` or `~/git/foo` shape), while titles can range from `/clear`
+ * (6 chars) to long bilingual prompts (80+). Putting the bounded column
+ * first keeps the variable-length TITLE on the right edge where wrapping is
+ * visually acceptable.
  */
 export function formatSessionList(
   items: SessionListItem[],
@@ -113,12 +158,23 @@ export function formatSessionList(
     // Visible columns are sanitized: user-controlled customTitle and
     // path-derived project may contain tab / newline, which would corrupt
     // the 6-col tab-delimited contract consumed by fzf.
+    // TYPE / ID / TIME / NOTES are all padded to fixed visible widths so the
+    // TITLE column aligns vertically across rows (see *_COLUMN_WIDTH consts).
+    const idRaw = sanitizeColumn(item.shortId);
+    const timeRaw = formatRelativeTime(item.lastActivityTime ?? item.mtime);
+    const notesRaw = sanitizeColumn(formatNotes(item));
     const columns = [
-      typeStr,
-      sanitizeColumn(item.shortId),
-      formatRelativeTime(item.lastActivityTime ?? item.mtime),
-      sanitizeColumn(item.customTitle ?? '(no custom title)'),
-      sanitizeColumn(formatNotes(item)),
+      padVisibleEnd(typeStr, TYPE_COLUMN_WIDTH),
+      padVisibleEnd(truncateVisible(idRaw, ID_COLUMN_WIDTH), ID_COLUMN_WIDTH),
+      padVisibleEnd(
+        truncateVisible(timeRaw, TIME_COLUMN_WIDTH),
+        TIME_COLUMN_WIDTH
+      ),
+      padVisibleEnd(
+        truncateVisible(notesRaw, NOTES_COLUMN_WIDTH),
+        NOTES_COLUMN_WIDTH
+      ),
+      formatTitleColumn(item, options.color),
       hiddenFullId(item),
     ];
 

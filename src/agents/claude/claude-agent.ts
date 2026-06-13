@@ -21,6 +21,7 @@ import {
   readLastTimestampFromJSONL,
   readCustomTitleFromTail,
   readCwdFromHead,
+  readFirstUserPromptFromHead,
 } from '../../utils/session-time.ts';
 import { WorkflowSessionFinder } from './workflow-agent.ts';
 import type { ProjectInfo } from '../../core/types.ts';
@@ -218,7 +219,19 @@ export class ClaudeSessionFinder implements SessionFinder {
       return tb - ta;
     });
 
-    return files.slice(0, options.limit);
+    const sliced = files.slice(0, options.limit);
+
+    // 對沒有 customTitle 的 session 補抽 autoTitle（first user prompt）。
+    // 排序 + slice 之後才跑 — autoTitle 不影響排序，只對最終 limit 筆讀 head。
+    await Promise.all(
+      sliced.map(async (item) => {
+        if (item.customTitle) return;
+        const auto = await readFirstUserPromptFromHead(item.path);
+        if (auto) item.autoTitle = auto;
+      })
+    );
+
+    return sliced;
   }
 
   /**
