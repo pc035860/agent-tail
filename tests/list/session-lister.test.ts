@@ -186,7 +186,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     expect(parts[5]).toBe('abc12345');
   });
 
-  test('workflow row: TYPE=wf, NOTES="{status} · in session {uuid8}", HID=runId', () => {
+  test('workflow row: TYPE=wf, NOTES="{status} · in session {uuid8}", TITLE=dim(› name), HID=runId', () => {
     const item = makeItem({
       shortId: 'wf_abcd1234-37e',
       agentType: 'claude',
@@ -194,7 +194,9 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
       workflowRunId: 'wf_abcd1234-37e',
       workflowSessionUuid: '5fe53568-abcd-1234-abcd-1234567890ab',
       workflowStatus: 'completed',
-      customTitle: 'wf:briefshare-impl',
+      // workflow name 是 derived → autoTitle，formatTitleColumn 用 '› TEXT'
+      // 前綴（dim 在 color=true 時）區分使用者 /rename 設定的 customTitle。
+      autoTitle: 'briefshare-impl',
       path: '/tmp/proj/abc12345-1234-1234-1234-123456789abc/workflows/wf_abcd1234-37e.json',
       mtime: new Date(Date.now() - 7 * 60 * 1000),
     });
@@ -206,7 +208,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     expect(parts[1]!.trimEnd()).toBe('wf_abcd1234-37e');
     expect(parts[2]!.trimEnd()).toBe('7m ago');
     expect(parts[3]!.trimEnd()).toBe('completed · in session 5fe53568'); // NOTES col 3 (padded)
-    expect(parts[4]).toBe('wf:briefshare-impl'); // TITLE col 4
+    expect(parts[4]).toBe('› briefshare-impl'); // TITLE col 4 — autoTitle prefix
     expect(parts[5]).toBe('wf_abcd1234-37e');
   });
 
@@ -217,12 +219,28 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
       logType: 'workflow',
       workflowRunId: 'wf_xxxxxxxx-yyy',
       workflowSessionUuid: '5fe53568-abcd-1234-abcd-1234567890ab',
-      customTitle: 'wf:test',
+      autoTitle: 'test',
       path: '/tmp/proj/abc12345-1234-1234-1234-123456789abc/workflows/wf_xxxxxxxx-yyy.json',
     });
     const result = formatSessionList([item], { color: false });
     const parts = result[0]!.split('\t');
     expect(parts[3]!.trimEnd()).toBe('in session 5fe53568'); // NOTES col 3 (padded)
+  });
+
+  // Lock 「workflow row without autoTitle」走 em-dash 分支（STATUS Next #3
+  // 的 fallback case：snapshot 缺 workflowName 或讀檔失敗時）。
+  test('workflow row without autoTitle/customTitle → TITLE is em-dash', () => {
+    const item = makeItem({
+      shortId: 'wf_noname12-345',
+      agentType: 'claude',
+      logType: 'workflow',
+      workflowRunId: 'wf_noname12-345',
+      workflowSessionUuid: '5fe53568-abcd-1234-abcd-1234567890ab',
+      path: '/tmp/proj/abc12345-1234-1234-1234-123456789abc/workflows/wf_noname12-345.json',
+    });
+    const result = formatSessionList([item], { color: false });
+    const parts = result[0]!.split('\t');
+    expect(parts[4]).toBe('—');
   });
 
   // Codex regression: previous fix padded only NOTES, leaving TYPE / ID / TIME

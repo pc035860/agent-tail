@@ -197,7 +197,10 @@ describe('WorkflowSessionFinder', () => {
       expect(item.workflowRunId).toBe(RUN_ID_1);
       expect(item.workflowSessionUuid).toBe(SESSION_UUID_1);
       expect(item.workflowStatus).toBe('completed');
-      expect(item.customTitle).toBe('wf:demo');
+      // workflow name 是 derived → autoTitle，不是 customTitle。
+      // ID 列已顯示 runId，TITLE 不再重複 'wf:' prefix。
+      expect(item.autoTitle).toBe('demo');
+      expect(item.customTitle).toBeUndefined();
       expect(item.shortId).toBe(RUN_ID_1);
     });
 
@@ -235,7 +238,7 @@ describe('WorkflowSessionFinder', () => {
       expect(result).toHaveLength(2);
     });
 
-    test('snapshot with invalid JSON still listed with fallback customTitle', async () => {
+    test('snapshot with invalid JSON still listed (no title since workflowName unreadable)', async () => {
       const path = join(
         tempDir,
         ENCODED_DIR_1,
@@ -250,11 +253,14 @@ describe('WorkflowSessionFinder', () => {
 
       const result = await finder.listSessions({});
       expect(result).toHaveLength(1);
-      expect(result[0]!.customTitle).toBe(`wf:${RUN_ID_1}`);
+      // 無 workflowName → 不塞 autoTitle，formatTitleColumn 走 dim('—')。
+      // ID 列已有 runId，不在 TITLE 重複顯示。
+      expect(result[0]!.autoTitle).toBeUndefined();
+      expect(result[0]!.customTitle).toBeUndefined();
       expect(result[0]!.workflowStatus).toBeUndefined();
     });
 
-    test('snapshot without workflowName falls back to runId in customTitle', async () => {
+    test('snapshot without workflowName → no autoTitle (ID column already shows runId)', async () => {
       await writeSnapshot(tempDir, ENCODED_DIR_1, SESSION_UUID_1, RUN_ID_1, {
         runId: RUN_ID_1,
         status: 'completed',
@@ -263,7 +269,8 @@ describe('WorkflowSessionFinder', () => {
 
       const result = await finder.listSessions({});
       expect(result).toHaveLength(1);
-      expect(result[0]!.customTitle).toBe(`wf:${RUN_ID_1}`);
+      expect(result[0]!.autoTitle).toBeUndefined();
+      expect(result[0]!.customTitle).toBeUndefined();
     });
 
     test('project field uses encoded dir name', async () => {

@@ -103,15 +103,26 @@ export class WorkflowSessionFinder implements SessionFinder {
   }): Promise<SessionListItem[]> {
     const all = await this._collectWorkflows(options);
     const limit = options.limit ?? 20;
-    return all.slice(0, limit).map<SessionListItem>((w) => ({
-      ...w.file,
-      shortId: w.runId,
-      project: w.encodedProjectDir,
-      logType: 'workflow',
-      workflowRunId: w.runId,
-      workflowSessionUuid: w.sessionUuid,
-      ...(w.status ? { workflowStatus: w.status } : {}),
-    }));
+    return all.slice(0, limit).map<SessionListItem>((w) => {
+      // workflow name 是從 snapshot 推導出的 derived label，不是使用者 /rename
+      // 設定的權威名稱 → 用 autoTitle 讓 formatTitleColumn 渲染 dim('› TEXT')，
+      // 與真實 customTitle 的 plain 顯示視覺區分（CLAUDE.md autoTitle/customTitle 視覺契約）。
+      // ID 列已有 wf_<runId>，去掉 'wf:' prefix 避免重複。
+      // 注意：_collectWorkflows 內部仍把 'wf:<name>' 塞進 file.customTitle，
+      // src/index.ts:382 的 isWorkflowMode 判斷依賴此契約，不要動。listSessions
+      // 在這層把 customTitle 拆掉、改塞 autoTitle，只影響 --list 輸出。
+      const { customTitle: _stripWfPrefix, ...fileWithoutCustom } = w.file;
+      return {
+        ...fileWithoutCustom,
+        shortId: w.runId,
+        project: w.encodedProjectDir,
+        logType: 'workflow',
+        workflowRunId: w.runId,
+        workflowSessionUuid: w.sessionUuid,
+        ...(w.workflowName ? { autoTitle: w.workflowName } : {}),
+        ...(w.status ? { workflowStatus: w.status } : {}),
+      };
+    });
   }
 
   // --- internals ---
@@ -164,8 +175,10 @@ export class WorkflowSessionFinder implements SessionFinder {
           status = snap.status;
         }
       } catch {
-        // Snapshot read/parse failure — degrade gracefully (entry still
-        // listed with runId-derived fallback customTitle).
+        // Snapshot read/parse failure — degrade gracefully. listSessions 不再
+        // 用 runId 補 fallback autoTitle（看不出資訊量）；findLatest /
+        // findBySessionId 內部仍保留 customTitle='wf:<runId>' 作為 dispatcher
+        // 模式判斷的契約（見下方 isWorkflowMode 在 src/index.ts:382 的用法）。
       }
 
       const title = workflowName ?? runId;
