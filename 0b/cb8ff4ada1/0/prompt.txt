@@ -1,0 +1,13 @@
+5cf8459a-acbc-431b-8cec-26fcff173e44.jsonl
+
+這個 claude-automation 的 session 有跑了 nested subagent，幫我看一下 nested subagent 結構怎麼設計的，規劃讓 agent-tail 也能支援顯示
+
+- 使用 agent Explore 來做廣泛的程式碼探索與資料蒐集\
+- IMPORTANT: run subagents in parallel\
+- Utilize the TaskList tool to plan tasks in the user's best interest. Organize parallelization effectively for optimal results.
+
+---
+
+開個 branch, gather context -> plan -> implement
+我想做 phase 1 + phase 2
+每個 phase 你就用 /agent-remote 驗證，現在是在 agent-deck 裡

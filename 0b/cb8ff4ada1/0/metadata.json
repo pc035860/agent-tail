@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "0bcb8ff4ada1",
+  "session_id": "030aecf6-cf9d-4c77-8308-cac279d87004",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T03:58:03.573165Z",
+  "branch": "feat/nested-subagent-display",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/core/types.ts",
+    "tests/claude/subagent-detector-description.test.ts",
+    "tests/claude/watch-builder.test.ts",
+    "tests/core/detector-interfaces.test.ts",
+    "src/agents/claude/claude-agent.ts",
+    "src/claude/subagent-detector.ts",
+    "src/claude/watch-builder.ts",
+    "src/core/detector-interfaces.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "44f138836379",
+  "token_usage": {
+    "input_tokens": 782,
+    "cache_creation_tokens": 333461,
+    "cache_read_tokens": 23103249,
+    "output_tokens": 104054,
+    "api_call_count": 131
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T03:58:03.307098Z",
+    "agent_lines": 510,
+    "human_added": 145,
+    "human_modified": 23,
+    "human_removed": 0,
+    "total_committed": 678,
+    "agent_percentage": 75.22123893805309
+  }
+}
