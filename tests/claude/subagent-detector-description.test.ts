@@ -177,4 +177,268 @@ describe('SubagentDetector description queue', () => {
 
     detector.stop();
   });
+
+  test('falls back to meta.json description when FIFO is empty (nested subagent)', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-meta-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    // Nested subagent: jsonl + meta.json present, but no FIFO description
+    // (because the Agent tool_use lives in a parent subagent JSONL, not main)
+    await writeFile(join(subagentsDir, 'agent-eeeeeee.jsonl'), '');
+    await writeFile(
+      join(subagentsDir, 'agent-eeeeeee.meta.json'),
+      JSON.stringify({
+        agentType: 'prompt-reviewer',
+        description: 'Review nested change',
+        toolUseId: 'toolu_nestedSpawn',
+      })
+    );
+
+    const hookCalls: {
+      agentId: string;
+      description?: string;
+    }[] = [];
+
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      onNewSubagent: (agentId: string, _path: string, description?: string) => {
+        hookCalls.push({ agentId, description });
+      },
+    });
+
+    detector.startDirectoryWatch();
+
+    // No pushDescription — nested case: description comes from meta.json
+    detector.handleEarlyDetection();
+    // Wait for async meta.json read + onNewSubagent invocation
+    await new Promise((r) => setTimeout(r, 800));
+
+    expect(hookCalls).toHaveLength(1);
+    expect(hookCalls[0]!.agentId).toBe('eeeeeee');
+    expect(hookCalls[0]!.description).toBe('Review nested change');
+
+    detector.stop();
+  });
+
+  test('FIFO description wins over meta.json (main-session spawn)', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-meta-prio-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    await writeFile(join(subagentsDir, 'agent-fffffff.jsonl'), '');
+    await writeFile(
+      join(subagentsDir, 'agent-fffffff.meta.json'),
+      JSON.stringify({
+        agentType: 'general-purpose',
+        description: 'meta description',
+        toolUseId: 'toolu_mainSpawn',
+      })
+    );
+
+    const hookCalls: {
+      agentId: string;
+      description?: string;
+    }[] = [];
+
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      onNewSubagent: (agentId: string, _path: string, description?: string) => {
+        hookCalls.push({ agentId, description });
+      },
+    });
+
+    detector.startDirectoryWatch();
+    detector.pushDescription('fifo description');
+    detector.handleEarlyDetection();
+    await new Promise((r) => setTimeout(r, 800));
+
+    expect(hookCalls).toHaveLength(1);
+    expect(hookCalls[0]!.description).toBe('fifo description');
+
+    detector.stop();
+  });
+
+  test('Phase 2: meta.json toolUseId + recordSpawn → addSession AND watcher.addFile both use [child◂parent] label', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-parent-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    // Nested subagent (level-2): spawned by parent agent ace4e3f
+    await writeFile(join(subagentsDir, 'agent-ad29fb7.jsonl'), '');
+    await writeFile(
+      join(subagentsDir, 'agent-ad29fb7.meta.json'),
+      JSON.stringify({
+        agentType: 'prompt-reviewer',
+        description: 'nested review',
+        toolUseId: 'toolu_nestedSpawn',
+      })
+    );
+
+    const sessionEvents: Array<{ agentId: string; label: string }> = [];
+    const watcherEvents: Array<{ path: string; label: string }> = [];
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: {
+        addFile: async (file) => {
+          watcherEvents.push({ path: file.path, label: file.label });
+        },
+      },
+      enabled: true,
+      session: {
+        addSession: (agentId: string, label: string) => {
+          sessionEvents.push({ agentId, label });
+        },
+      },
+      onNewSubagent: () => {},
+    });
+
+    detector.startDirectoryWatch();
+    // Parent ace4e3f's JSONL spawned the nested subagent via this toolUseId
+    detector.recordSpawn('toolu_nestedSpawn', 'ace4e3f');
+
+    detector.handleEarlyDetection();
+    await new Promise((r) => setTimeout(r, 800));
+
+    expect(sessionEvents).toHaveLength(1);
+    expect(sessionEvents[0]!.agentId).toBe('ad29fb7');
+    expect(sessionEvents[0]!.label).toBe('[ad29fb7◂ace4e3f]');
+
+    // watcher.addFile 也應收到 parent-aware label —— 否則 file watcher 的輸出
+    // 路由與 session label 不一致，會破壞下游 parser map 與 shouldOutput 對照。
+    expect(watcherEvents).toHaveLength(1);
+    expect(watcherEvents[0]!.label).toBe('[ad29fb7◂ace4e3f]');
+
+    detector.stop();
+  });
+
+  test('Phase 2 race: recordSpawn fires AFTER nested file detected → retry resolves parent label', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-race-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    await writeFile(join(subagentsDir, 'agent-ad29fb7.jsonl'), '');
+    await writeFile(
+      join(subagentsDir, 'agent-ad29fb7.meta.json'),
+      JSON.stringify({
+        agentType: 'prompt-reviewer',
+        description: 'late parent',
+        toolUseId: 'toolu_lateSpawn',
+      })
+    );
+
+    const sessionEvents: Array<{ agentId: string; label: string }> = [];
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      session: {
+        addSession: (agentId: string, label: string) => {
+          sessionEvents.push({ agentId, label });
+        },
+      },
+      onNewSubagent: () => {},
+    });
+
+    detector.startDirectoryWatch();
+
+    // 立刻觸發 detection（registry 尚未有 toolUseId）
+    detector.handleEarlyDetection();
+
+    // 60ms 後 parent JSONL 那行才被解析 → recordSpawn 到（仍在 retry window 內）
+    setTimeout(() => {
+      detector.recordSpawn('toolu_lateSpawn', 'ace4e3f');
+    }, 60);
+
+    // retry window 上限 ~150ms + meta retry，總共給 1.2s slack
+    await new Promise((r) => setTimeout(r, 1200));
+
+    expect(sessionEvents).toHaveLength(1);
+    expect(sessionEvents[0]!.label).toBe('[ad29fb7◂ace4e3f]');
+
+    detector.stop();
+  });
+
+  test('Phase 2: MAIN parent via recordSpawn → addSession uses plain [child] label', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-mainparent-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    await writeFile(join(subagentsDir, 'agent-ace4e3f.jsonl'), '');
+    await writeFile(
+      join(subagentsDir, 'agent-ace4e3f.meta.json'),
+      JSON.stringify({
+        agentType: 'general-purpose',
+        description: 'main spawn',
+        toolUseId: 'toolu_mainSpawn',
+      })
+    );
+
+    const sessionEvents: Array<{ agentId: string; label: string }> = [];
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      session: {
+        addSession: (agentId: string, label: string) => {
+          sessionEvents.push({ agentId, label });
+        },
+      },
+      onNewSubagent: () => {},
+    });
+
+    detector.startDirectoryWatch();
+    detector.recordSpawn('toolu_mainSpawn', 'MAIN');
+
+    detector.handleEarlyDetection();
+    await new Promise((r) => setTimeout(r, 800));
+
+    expect(sessionEvents).toHaveLength(1);
+    expect(sessionEvents[0]!.label).toBe('[ace4e3f]');
+
+    detector.stop();
+  });
+
+  test('no description when both FIFO and meta.json are empty', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-meta-none-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    await writeFile(join(subagentsDir, 'agent-9999999.jsonl'), '');
+    // No meta.json on purpose
+
+    const hookCalls: {
+      agentId: string;
+      description?: string;
+    }[] = [];
+
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      onNewSubagent: (agentId: string, _path: string, description?: string) => {
+        hookCalls.push({ agentId, description });
+      },
+    });
+
+    detector.startDirectoryWatch();
+    detector.handleEarlyDetection();
+    // Read retries up to 5 * 50ms = 250ms, give it slack
+    await new Promise((r) => setTimeout(r, 800));
+
+    expect(hookCalls).toHaveLength(1);
+    expect(hookCalls[0]!.description).toBeUndefined();
+
+    detector.stop();
+  });
 });

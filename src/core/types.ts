@@ -117,6 +117,8 @@ export interface ParsedLine {
   isTaskToolUse?: boolean;
   /** Task (or Agent) tool_use 的 description 欄位（用於 pane 命名） */
   taskDescription?: string;
+  /** Task (or Agent) tool_use 的 id 欄位（用於追蹤 spawn → nested subagent 對應） */
+  taskToolUseId?: string;
   /** Whether this is a custom-title event (Claude only) */
   isCustomTitle?: boolean;
   /** The custom title value from the event */

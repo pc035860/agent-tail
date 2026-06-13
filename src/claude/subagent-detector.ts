@@ -1,7 +1,7 @@
 import { Glob } from 'bun';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { makeAgentLabel } from '../core/detector-interfaces.ts';
+import { makeAgentLabel, MAIN_SOURCE } from '../core/detector-interfaces.ts';
 import type {
   OutputHandler,
   SessionHandler,
@@ -70,12 +70,73 @@ export const FALLBACK_DETECTION_RETRY: RetryConfig = {
   initialDelay: 100,
 };
 
+/**
+ * spawnRegistry 反查 retry 參數（Phase 2 nested parent lookup）。
+ * 蓋住 parent JSONL line 在 nested 檔案出現後才被解析的 race window。
+ * 4 × 50 = 最壞 150ms（不含最後一輪的 sleep）— Claude Code 實測時序為前提。
+ */
+export const PARENT_LOOKUP_MAX_ATTEMPTS = 4;
+export const PARENT_LOOKUP_DELAY_MS = 50;
+
 /** 建立 subagent 檔案路徑 */
 export function buildSubagentPath(
   subagentsDir: string,
   agentId: string
 ): string {
   return join(subagentsDir, `agent-${agentId}.jsonl`);
+}
+
+/** 建立 subagent meta.json 檔案路徑 */
+export function buildSubagentMetaPath(
+  subagentsDir: string,
+  agentId: string
+): string {
+  return join(subagentsDir, `agent-${agentId}.meta.json`);
+}
+
+/**
+ * Subagent meta.json 結構
+ * Claude Code 在 spawn subagent 時會寫入此檔（包含 nested subagent）
+ */
+export interface SubagentMeta {
+  agentType?: string;
+  description?: string;
+  toolUseId?: string;
+  name?: string;
+}
+
+/**
+ * 嘗試讀取 subagent 的 meta.json（含 retry）
+ * meta.json 可能稍晚於 .jsonl 寫入，需要短暫重試
+ *
+ * @param subagentsDir subagents 目錄
+ * @param agentId agent 識別碼
+ * @param retries 重試次數（預設 5）
+ * @param retryDelayMs 每次重試間隔（預設 50ms）
+ */
+export async function readSubagentMeta(
+  subagentsDir: string,
+  agentId: string,
+  retries = 5,
+  retryDelayMs = 50
+): Promise<SubagentMeta | null> {
+  const metaPath = buildSubagentMetaPath(subagentsDir, agentId);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const file = Bun.file(metaPath);
+      if (await file.exists()) {
+        const text = await file.text();
+        const parsed = JSON.parse(text) as SubagentMeta;
+        return parsed;
+      }
+    } catch {
+      // 讀取或解析失敗，視為缺漏 → 重試
+    }
+    if (attempt < retries) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+  return null;
 }
 
 /** 從 session 檔案路徑推導 subagents 目錄 */
@@ -185,7 +246,8 @@ export async function tryAddSubagentFile(
   agentId: string,
   watcher: WatcherHandler,
   output: OutputHandler,
-  config: RetryConfig = FALLBACK_DETECTION_RETRY
+  config: RetryConfig = FALLBACK_DETECTION_RETRY,
+  parentAgentId?: string
 ): Promise<boolean> {
   const doTry = async (retriesLeft: number): Promise<boolean> => {
     try {
@@ -193,7 +255,7 @@ export async function tryAddSubagentFile(
       if (await file.exists()) {
         await watcher.addFile({
           path: subagentPath,
-          label: makeAgentLabel(agentId),
+          label: makeAgentLabel(agentId, parentAgentId),
         });
         return true;
       } else if (retriesLeft > 0) {
@@ -233,6 +295,10 @@ export class SubagentDetector {
   // FIFO queue: Task tool_use descriptions, matched to agents in registration order.
   // May mismatch with parallel Task launches (known limitation, wrong label only).
   private pendingDescriptions: string[] = [];
+  // spawnRegistry: 紀錄每個 Agent tool_use id 由誰呼叫
+  // value = parent agentId（巢狀）或 MAIN_SOURCE（主 session）
+  // 用於 meta.json.toolUseId 反查 → 推導 nested subagent 的 parent
+  private spawnRegistry: Map<string, string> = new Map();
 
   constructor(initialAgentIds: Set<string>, config: SubagentDetectorConfig) {
     this.knownAgentIds = new Set(initialAgentIds);
@@ -263,6 +329,7 @@ export class SubagentDetector {
     }
     this.pendingTimers.clear();
     this.pendingDescriptions = [];
+    this.spawnRegistry.clear();
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -400,6 +467,18 @@ export class SubagentDetector {
   }
 
   /**
+   * 記錄一次 Agent tool_use 呼叫的 spawn 關係。
+   * - toolUseId: Agent tool_use 的 id（例 toolu_01Smf3mRVKSkcMH1p2X1RDxV）
+   * - parentLabel: 呼叫方的 agentId；主 session 請傳 MAIN_SOURCE
+   *
+   * Phase 2 用：當新 subagent 註冊且讀到 meta.json 的 toolUseId 時，
+   * 反查此表得知 parent，組成 [child◂parent] label。
+   */
+  recordSpawn(toolUseId: string, parentLabel: string): void {
+    this.spawnRegistry.set(toolUseId, parentLabel);
+  }
+
+  /**
    * 取得已知的 agentId 集合（供測試使用）
    */
   getKnownAgentIds(): Set<string> {
@@ -497,34 +576,103 @@ export class SubagentDetector {
       `agent-${agentId}.jsonl`
     );
 
-    // Session 處理（Interactive 模式）
-    this.config.session?.addSession?.(
+    // 同步先取 FIFO 保持順序；async 部分（meta.json fallback、parent 解析、
+    // session/watcher 註冊）丟給 finalizeRegistration
+    const queuedDescription = this.pendingDescriptions.shift();
+    void this.finalizeRegistration(
       agentId,
-      makeAgentLabel(agentId),
-      subagentPath
+      subagentPath,
+      queuedDescription,
+      retryConfig,
+      message
     );
+  }
 
-    if (this.config.enabled) {
-      this.config.output.warn(message);
-
-      // 觸發 onNewSubagent 回呼（pane 自動開啟等用途）
-      const description = this.pendingDescriptions.shift();
-      this.config.onNewSubagent?.(agentId, subagentPath, description);
-
-      // 非阻塞式新增檔案監控
-      const timer = setTimeout(() => {
-        this.pendingTimers.delete(timer);
-        if (!this.isWatching) return;
-
-        tryAddSubagentFile(
-          subagentPath,
-          agentId,
-          this.config.watcher,
-          this.config.output,
-          retryConfig
-        );
-      }, retryConfig.initialDelay);
-      this.pendingTimers.add(timer);
+  /**
+   * spawnRegistry 反查含 retry：parent JSONL line 與 nested 檔案出現存在 race。
+   * - 命中 → MAIN_SOURCE 視為無 parent（回 undefined），其他視為 nested parent。
+   * - 最多 PARENT_LOOKUP_MAX_ATTEMPTS 次，間隔 PARENT_LOOKUP_DELAY_MS（第 1 次不等）。
+   */
+  private async lookupParentWithRetry(
+    toolUseId: string
+  ): Promise<string | undefined> {
+    const MAX_ATTEMPTS = PARENT_LOOKUP_MAX_ATTEMPTS;
+    const DELAY_MS = PARENT_LOOKUP_DELAY_MS;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const parent = this.spawnRegistry.get(toolUseId);
+      if (parent) {
+        return parent === MAIN_SOURCE ? undefined : parent;
+      }
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+        if (!this.isWatching) return undefined;
+      }
     }
+    return undefined;
+  }
+
+  /**
+   * 完成新 subagent 的非同步註冊流程：
+   * 1. 若 FIFO 沒有 description（典型為 nested subagent）→ 讀 meta.json 補
+   * 2. 若 meta.json 有 toolUseId → 反查 spawnRegistry 取得 parent agentId
+   * 3. 用 parent-aware label 註冊 session 與 file watcher
+   * 4. 觸發 onNewSubagent 回呼
+   */
+  private async finalizeRegistration(
+    agentId: string,
+    subagentPath: string,
+    queuedDescription: string | undefined,
+    retryConfig: RetryConfig,
+    message: string
+  ): Promise<void> {
+    let description = queuedDescription;
+    let parentAgentId: string | undefined;
+
+    // FIFO 命中 = 主 session spawn → 無 parent；FIFO 落空 = 可能 nested。
+    // 已知 trade-off：FIFO shift 在 registerNewAgent 同步進行，遇到 parallel Task
+    // 啟動或「主 spawn 比 main JSONL line 還早到」等罕見 race 時，stale description
+    // 可能被誤配給 nested agent（且因為 description 不為空，會跳過 meta + parent
+    // 反查）。視為與 line 287-288 既有 FIFO 限制同類，MVP 接受。
+    if (!description) {
+      const meta = await readSubagentMeta(this.config.subagentsDir, agentId);
+      // detector 已 stop 則放棄（防止跨 session 污染）
+      if (!this.isWatching) return;
+      description = meta?.description;
+      if (meta?.toolUseId) {
+        // Race: parent JSONL 那行 Agent tool_use 可能比 nested 檔出現還晚被
+        // 解析（→ recordSpawn 後到）。短暫 retry 蓋住典型 50-200ms 窗口；
+        // 仍查不到就退回無 parent label，不阻塞註冊流程。
+        parentAgentId = await this.lookupParentWithRetry(meta.toolUseId);
+        if (!this.isWatching) return;
+      }
+    }
+
+    const label = makeAgentLabel(agentId, parentAgentId);
+
+    // Session 處理（Interactive 模式）
+    this.config.session?.addSession?.(agentId, label, subagentPath);
+
+    if (!this.config.enabled) return;
+
+    this.config.output.warn(message);
+
+    // 觸發 onNewSubagent 回呼（pane 自動開啟等用途）
+    this.config.onNewSubagent?.(agentId, subagentPath, description);
+
+    // 非阻塞式新增檔案監控
+    const timer = setTimeout(() => {
+      this.pendingTimers.delete(timer);
+      if (!this.isWatching) return;
+
+      tryAddSubagentFile(
+        subagentPath,
+        agentId,
+        this.config.watcher,
+        this.config.output,
+        retryConfig,
+        parentAgentId
+      );
+    }, retryConfig.initialDelay);
+    this.pendingTimers.add(timer);
   }
 }

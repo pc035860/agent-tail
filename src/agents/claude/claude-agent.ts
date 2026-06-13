@@ -522,6 +522,7 @@ class ClaudeLineParser implements LineParser {
       type: string;
       text?: string;
       name?: string;
+      id?: string;
       input?: Record<string, unknown>;
     }>;
     partIndex: number;
@@ -611,6 +612,7 @@ class ClaudeLineParser implements LineParser {
         type: string;
         text?: string;
         name?: string;
+        id?: string;
         input?: Record<string, unknown>;
       }>;
     };
@@ -679,6 +681,8 @@ class ClaudeLineParser implements LineParser {
         isTask && typeof part.input?.description === 'string'
           ? part.input.description
           : undefined;
+      const taskToolUseId =
+        isTask && typeof part.id === 'string' ? part.id : undefined;
 
       return {
         type: 'function_call',
@@ -691,6 +695,7 @@ class ClaudeLineParser implements LineParser {
         isTaskToolUse: isTask,
         ...(isWorkflow ? { isWorkflowToolUse: true } : {}),
         taskDescription,
+        taskToolUseId,
       };
     }
 

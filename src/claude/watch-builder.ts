@@ -8,6 +8,10 @@ import {
   MAIN_LABEL,
   buildSubagentPath,
 } from './subagent-detector.ts';
+import {
+  MAIN_SOURCE,
+  extractAgentIdFromLabel,
+} from '../core/detector-interfaces.ts';
 import type { WorkflowDetector } from '../claude-workflow/workflow-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
@@ -148,30 +152,26 @@ export function createOnLineHandler(
     while (parsed) {
       parsed.sourceLabel = label;
 
-      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
-      if (config.shouldOutput && !config.shouldOutput(label)) {
-        parsed = parser.parse(line);
-        continue;
-      }
-
-      config.onOutput(config.formatter.format(parsed), label);
-
-      // Real-time custom-title update
-      if (
-        label === MAIN_LABEL &&
-        parsed.isCustomTitle &&
-        parsed.customTitleValue
-      ) {
-        config.onTitleUpdate?.(parsed.customTitleValue);
-      }
+      // === Metadata extraction ===
+      // 必須在 shouldOutput 抑制檢查之前；偵測邏輯不該受輸出抑制影響
+      // （否則 --pane 模式下 parent subagent 被抑制時，recordSpawn 不會觸發
+      //  → nested child 的 [child◂parent] label 拿不到 parent，掛回 [child]）
 
       // 早期 Subagent 偵測：當偵測到 Task tool_use 時立即掃描
-      if (label === MAIN_LABEL && parsed.isTaskToolUse) {
-        // Push description before early detection so it's queued when scan triggers
+      // 只有主 session 走完整偵測流程（FIFO push + early detection scan）
+      // nested 那層的 description 改靠 meta.json 補；dir watch 處理檔案出現
+      if (parsed.isTaskToolUse && label === MAIN_LABEL) {
         if (parsed.taskDescription) {
           config.detector.pushDescription(parsed.taskDescription);
         }
         config.detector.handleEarlyDetection();
+      }
+      // Phase 2: 紀錄 spawn 關係（主 session 與 nested 都收）
+      // nested subagent 註冊時靠此 map 反查 parent → 組 [child◂parent] label
+      if (parsed.isTaskToolUse && parsed.taskToolUseId) {
+        const parentLabel =
+          label === MAIN_LABEL ? MAIN_SOURCE : extractAgentIdFromLabel(label);
+        config.detector.recordSpawn(parsed.taskToolUseId, parentLabel);
       }
 
       // P5 — Workflow path A: main-JSONL Workflow tool_result triggers
@@ -195,6 +195,22 @@ export function createOnLineHandler(
 
         if (agentId && !commandName && status !== 'forked') {
           config.detector.handleFallbackDetection(agentId);
+        }
+      }
+
+      // === Output (subject to suppression) ===
+      // Phase 2.3: 過濾已有 pane 的 subagent 輸出
+      const suppressed = !!(config.shouldOutput && !config.shouldOutput(label));
+      if (!suppressed) {
+        config.onOutput(config.formatter.format(parsed), label);
+
+        // Real-time custom-title update
+        if (
+          label === MAIN_LABEL &&
+          parsed.isCustomTitle &&
+          parsed.customTitleValue
+        ) {
+          config.onTitleUpdate?.(parsed.customTitleValue);
         }
       }
 

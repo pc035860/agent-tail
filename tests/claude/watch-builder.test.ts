@@ -45,12 +45,14 @@ function createMockDetector(): SubagentDetector & {
   fallbackDetectionCalls: string[];
   pushDescriptionCalls: string[];
   agentProgressCalls: string[];
+  recordSpawnCalls: Array<{ toolUseId: string; parentLabel: string }>;
 } {
   const detector = {
     earlyDetectionCalls: 0,
     fallbackDetectionCalls: [] as string[],
     pushDescriptionCalls: [] as string[],
     agentProgressCalls: [] as string[],
+    recordSpawnCalls: [] as Array<{ toolUseId: string; parentLabel: string }>,
     handleEarlyDetection() {
       detector.earlyDetectionCalls++;
     },
@@ -63,6 +65,9 @@ function createMockDetector(): SubagentDetector & {
     handleAgentProgress(agentId: string) {
       detector.agentProgressCalls.push(agentId);
     },
+    recordSpawn(toolUseId: string, parentLabel: string) {
+      detector.recordSpawnCalls.push({ toolUseId, parentLabel });
+    },
     getKnownAgentIds: () => new Set<string>(),
     isKnownAgent: () => false,
     startDirectoryWatch: () => {},
@@ -73,6 +78,7 @@ function createMockDetector(): SubagentDetector & {
     fallbackDetectionCalls: string[];
     pushDescriptionCalls: string[];
     agentProgressCalls: string[];
+    recordSpawnCalls: Array<{ toolUseId: string; parentLabel: string }>;
   };
 }
 
@@ -505,10 +511,11 @@ describe('createOnLineHandler', () => {
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
   });
 
-  test('non-[MAIN] label does NOT trigger any detection', () => {
+  test('non-[MAIN] label does NOT trigger earlyDetection or pushDescription', () => {
     const detector = createMockDetector();
     const parsed = createMockParsedLine({
       isTaskToolUse: true,
+      taskDescription: 'should not push',
       raw: { toolUseResult: { agentId: 'abc1234' } },
     });
 
@@ -538,6 +545,135 @@ describe('createOnLineHandler', () => {
 
     expect(detector.earlyDetectionCalls).toBe(0);
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
+    expect(detector.pushDescriptionCalls).toHaveLength(0);
+  });
+
+  // Phase 2: recordSpawn is the only detector hook called from non-MAIN labels.
+  // It records the spawn relationship so nested subagent registrations can
+  // reverse-look-up their parent via meta.json.toolUseId.
+  test('non-[MAIN] label with taskToolUseId calls recordSpawn with parent agentId', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      isTaskToolUse: true,
+      taskToolUseId: 'toolu_nestedSpawn',
+      raw: {},
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[ace4e3f]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{}', '[ace4e3f]');
+
+    expect(detector.recordSpawnCalls).toHaveLength(1);
+    expect(detector.recordSpawnCalls[0]!.toolUseId).toBe('toolu_nestedSpawn');
+    // parent is the calling agentId (extracted from label), NOT MAIN
+    expect(detector.recordSpawnCalls[0]!.parentLabel).toBe('ace4e3f');
+  });
+
+  // Regression: shouldOutput 抑制不能跳過 recordSpawn — 否則 --pane 模式下
+  // 被抑制的 parent subagent 的 Agent tool_use 不會進 spawnRegistry，
+  // nested child 拿不到 parent label
+  test('shouldOutput suppression does NOT skip recordSpawn (metadata always fires)', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      isTaskToolUse: true,
+      taskToolUseId: 'toolu_suppressedParent',
+      raw: {},
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const outputs: string[] = [];
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[ace4e3f]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: (formatted) => outputs.push(formatted),
+      verbose: false,
+      shouldOutput: (label) => label === '[MAIN]', // 抑制非 MAIN
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{}', '[ace4e3f]');
+
+    // 輸出被抑制
+    expect(outputs).toHaveLength(0);
+    // 但 metadata 偵測仍然觸發
+    expect(detector.recordSpawnCalls).toHaveLength(1);
+    expect(detector.recordSpawnCalls[0]!.toolUseId).toBe(
+      'toolu_suppressedParent'
+    );
+    expect(detector.recordSpawnCalls[0]!.parentLabel).toBe('ace4e3f');
+  });
+
+  test('[MAIN] label with taskToolUseId calls recordSpawn with MAIN sentinel', () => {
+    const detector = createMockDetector();
+    const parsed = createMockParsedLine({
+      isTaskToolUse: true,
+      taskToolUseId: 'toolu_mainSpawn',
+      taskDescription: 'main spawn',
+      raw: {},
+    });
+
+    const mockParser: LineParser = {
+      parse: (() => {
+        let called = false;
+        return () => {
+          if (!called) {
+            called = true;
+            return parsed;
+          }
+          return null;
+        };
+      })(),
+    };
+
+    const config: OnLineHandlerConfig = {
+      parsers: new Map([['[MAIN]', mockParser]]),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+
+    const handler = createOnLineHandler(config);
+    handler('{}', '[MAIN]');
+
+    expect(detector.recordSpawnCalls).toHaveLength(1);
+    expect(detector.recordSpawnCalls[0]!.parentLabel).toBe('MAIN');
+    // Main label also still pushes description + early detection
+    expect(detector.pushDescriptionCalls).toEqual(['main spawn']);
+    expect(detector.earlyDetectionCalls).toBe(1);
   });
 
   test('creates new parser for unknown label', () => {
