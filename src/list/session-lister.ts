@@ -1,8 +1,29 @@
 import { Chalk } from 'chalk';
 import type { SessionListItem } from '../core/types.ts';
+import { padVisibleEnd, truncateVisible } from '../utils/visible-width.ts';
 
 /** Chalk instance with forced color (level 1 = basic ANSI) for --list output */
 const colorChalk = new Chalk({ level: 1 });
+
+/**
+ * Fixed visible widths for the visible columns. Goal: every row writes the
+ * same number of visible cells into cols 0..3, so `\t` between them always
+ * expands to the same terminal tab stop (multiples of 8) and TITLE (col 4)
+ * starts at a fixed cell across rows.
+ *
+ * Without this, e.g. `3m ago` and `just now` (both ≤ 8 cells) end at different
+ * cells; the inter-column tab then lands at a different stop and TITLE wanders
+ * 8 cells row-to-row. Tab stop after a `\t` is `ceil((cursor+1)/8)*8` —
+ * strictly the next multiple of 8 — so widths chosen as:
+ *   - TYPE  width 4  → 'sess' fits exactly, 'wf  ' pads to 4; tab → cell 8
+ *   - ID    width 15 → workflow runId `wf_8hex-3hex` worst case; tab → cell 24
+ *   - TIME  width 8  → 'just now' fits exactly; tab → cell 40
+ *   - NOTES width 36 → tab → cell 80; TITLE always begins at cell 80
+ */
+const TYPE_COLUMN_WIDTH = 4;
+const ID_COLUMN_WIDTH = 15;
+const TIME_COLUMN_WIDTH = 8;
+const NOTES_COLUMN_WIDTH = 36;
 
 const UUID_REGEX =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -137,11 +158,22 @@ export function formatSessionList(
     // Visible columns are sanitized: user-controlled customTitle and
     // path-derived project may contain tab / newline, which would corrupt
     // the 6-col tab-delimited contract consumed by fzf.
+    // TYPE / ID / TIME / NOTES are all padded to fixed visible widths so the
+    // TITLE column aligns vertically across rows (see *_COLUMN_WIDTH consts).
+    const idRaw = sanitizeColumn(item.shortId);
+    const timeRaw = formatRelativeTime(item.lastActivityTime ?? item.mtime);
+    const notesRaw = sanitizeColumn(formatNotes(item));
     const columns = [
-      typeStr,
-      sanitizeColumn(item.shortId),
-      formatRelativeTime(item.lastActivityTime ?? item.mtime),
-      sanitizeColumn(formatNotes(item)),
+      padVisibleEnd(typeStr, TYPE_COLUMN_WIDTH),
+      padVisibleEnd(truncateVisible(idRaw, ID_COLUMN_WIDTH), ID_COLUMN_WIDTH),
+      padVisibleEnd(
+        truncateVisible(timeRaw, TIME_COLUMN_WIDTH),
+        TIME_COLUMN_WIDTH
+      ),
+      padVisibleEnd(
+        truncateVisible(notesRaw, NOTES_COLUMN_WIDTH),
+        NOTES_COLUMN_WIDTH
+      ),
       formatTitleColumn(item, options.color),
       hiddenFullId(item),
     ];
