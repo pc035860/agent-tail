@@ -1,0 +1,24 @@
+2, 4, 5 分別是什麼
+
+---
+
+先分析討論一下 #4，討論完再 autonomous 順跑 #4, #5
+
+---
+
+/goal
+
+#4, #5 都要開 branch 做，最後再 --no-ff merge 回 main
+
+基本流程是
+- gather context -> plan -> implement
+- run e2e test (tmux pane, 現在在 tmux 環境裡)
+- commit
+- run review-loop skill (codex)\
+- run simplify skill\ (若改動不多可自行判斷跳過)
+- run review-loop skill (codex) for post-simpliy check\ (有做 simplify 才需要跑)
+- run e2e regression test (tmux pane)
+- run patch-claudemd skill\
+- commit
+
+success criteria: 完成 #4, #5 ， e2e test 通過且 review-loop no blocking，最後跑 checkpoint skill

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "920e60558e60",
+  "strategy": "manual-commit",
+  "branch": "feat/nested-subagent-terminal-status",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/claude/watch-builder.ts",
+    "tests/claude/watch-builder.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/92/0e60558e60/0/metadata.json",
+      "transcript": "/92/0e60558e60/0/full.jsonl",
+      "content_hash": "/92/0e60558e60/0/content_hash.txt",
+      "prompt": "/92/0e60558e60/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 39187,
+    "cache_read_tokens": 6559783,
+    "output_tokens": 16552,
+    "api_call_count": 25
+  }
+}
