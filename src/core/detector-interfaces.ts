@@ -99,3 +99,12 @@ export function extractParentAgentIdFromLabel(
     ? inner.slice(idx + LABEL_PARENT_DELIMITER.length)
     : undefined;
 }
+
+/**
+ * 把 label 轉成 spawnRegistry 用的 parent source 值。
+ * - '[MAIN]' → MAIN_SOURCE
+ * - '[agentId]' / '[agentId◂parent]' → 'agentId'
+ */
+export function labelToParentSource(label: string): string {
+  return label === MAIN_LABEL ? MAIN_SOURCE : extractAgentIdFromLabel(label);
+}

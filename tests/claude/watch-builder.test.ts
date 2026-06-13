@@ -45,14 +45,14 @@ function createMockDetector(): SubagentDetector & {
   fallbackDetectionCalls: string[];
   pushDescriptionCalls: string[];
   agentProgressCalls: string[];
-  recordSpawnCalls: Array<{ toolUseId: string; parentLabel: string }>;
+  recordSpawnCalls: Array<{ toolUseId: string; parentSource: string }>;
 } {
   const detector = {
     earlyDetectionCalls: 0,
     fallbackDetectionCalls: [] as string[],
     pushDescriptionCalls: [] as string[],
     agentProgressCalls: [] as string[],
-    recordSpawnCalls: [] as Array<{ toolUseId: string; parentLabel: string }>,
+    recordSpawnCalls: [] as Array<{ toolUseId: string; parentSource: string }>,
     handleEarlyDetection() {
       detector.earlyDetectionCalls++;
     },
@@ -65,8 +65,8 @@ function createMockDetector(): SubagentDetector & {
     handleAgentProgress(agentId: string) {
       detector.agentProgressCalls.push(agentId);
     },
-    recordSpawn(toolUseId: string, parentLabel: string) {
-      detector.recordSpawnCalls.push({ toolUseId, parentLabel });
+    recordSpawn(toolUseId: string, parentSource: string) {
+      detector.recordSpawnCalls.push({ toolUseId, parentSource });
     },
     getKnownAgentIds: () => new Set<string>(),
     isKnownAgent: () => false,
@@ -78,7 +78,7 @@ function createMockDetector(): SubagentDetector & {
     fallbackDetectionCalls: string[];
     pushDescriptionCalls: string[];
     agentProgressCalls: string[];
-    recordSpawnCalls: Array<{ toolUseId: string; parentLabel: string }>;
+    recordSpawnCalls: Array<{ toolUseId: string; parentSource: string }>;
   };
 }
 
@@ -586,7 +586,7 @@ describe('createOnLineHandler', () => {
     expect(detector.recordSpawnCalls).toHaveLength(1);
     expect(detector.recordSpawnCalls[0]!.toolUseId).toBe('toolu_nestedSpawn');
     // parent is the calling agentId (extracted from label), NOT MAIN
-    expect(detector.recordSpawnCalls[0]!.parentLabel).toBe('ace4e3f');
+    expect(detector.recordSpawnCalls[0]!.parentSource).toBe('ace4e3f');
   });
 
   // Regression: shouldOutput 抑制不能跳過 recordSpawn — 否則 --pane 模式下
@@ -633,7 +633,7 @@ describe('createOnLineHandler', () => {
     expect(detector.recordSpawnCalls[0]!.toolUseId).toBe(
       'toolu_suppressedParent'
     );
-    expect(detector.recordSpawnCalls[0]!.parentLabel).toBe('ace4e3f');
+    expect(detector.recordSpawnCalls[0]!.parentSource).toBe('ace4e3f');
   });
 
   test('[MAIN] label with taskToolUseId calls recordSpawn with MAIN sentinel', () => {
@@ -670,7 +670,7 @@ describe('createOnLineHandler', () => {
     handler('{}', '[MAIN]');
 
     expect(detector.recordSpawnCalls).toHaveLength(1);
-    expect(detector.recordSpawnCalls[0]!.parentLabel).toBe('MAIN');
+    expect(detector.recordSpawnCalls[0]!.parentSource).toBe('MAIN');
     // Main label also still pushes description + early detection
     expect(detector.pushDescriptionCalls).toEqual(['main spawn']);
     expect(detector.earlyDetectionCalls).toBe(1);

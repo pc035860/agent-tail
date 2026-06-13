@@ -8,10 +8,7 @@ import {
   MAIN_LABEL,
   buildSubagentPath,
 } from './subagent-detector.ts';
-import {
-  MAIN_SOURCE,
-  extractAgentIdFromLabel,
-} from '../core/detector-interfaces.ts';
+import { labelToParentSource } from '../core/detector-interfaces.ts';
 import type { WorkflowDetector } from '../claude-workflow/workflow-detector.ts';
 
 export const SUPER_FOLLOW_POLL_MS = 500;
@@ -169,9 +166,10 @@ export function createOnLineHandler(
       // Phase 2: 紀錄 spawn 關係（主 session 與 nested 都收）
       // nested subagent 註冊時靠此 map 反查 parent → 組 [child◂parent] label
       if (parsed.isTaskToolUse && parsed.taskToolUseId) {
-        const parentLabel =
-          label === MAIN_LABEL ? MAIN_SOURCE : extractAgentIdFromLabel(label);
-        config.detector.recordSpawn(parsed.taskToolUseId, parentLabel);
+        config.detector.recordSpawn(
+          parsed.taskToolUseId,
+          labelToParentSource(label)
+        );
       }
 
       // P5 — Workflow path A: main-JSONL Workflow tool_result triggers

@@ -79,10 +79,12 @@ export const PARENT_LOOKUP_MAX_ATTEMPTS = 4;
 export const PARENT_LOOKUP_DELAY_MS = 50;
 
 /**
- * subagents/ 與其父目錄都不存在時的 retry 間隔。
+ * subagents/ 與其父目錄都不存在時的初始 retry 間隔（base）。
  * agent-tail 在首個 subagent 出現前啟動是常態，必須持續輪詢直到目錄被建立。
+ * 指數退避：1s, 2s, 4s, 8s, 16s, 30s, 30s...（cap）
  */
 export const SUBAGENTS_DIR_RETRY_DELAY_MS = 1000;
+export const SUBAGENTS_DIR_RETRY_MAX_DELAY_MS = 30000;
 
 /** 建立 subagent 檔案路徑 */
 export function buildSubagentPath(
@@ -104,7 +106,7 @@ export function buildSubagentMetaPath(
  * Subagent meta.json 結構
  * Claude Code 在 spawn subagent 時會寫入此檔（包含 nested subagent）
  */
-export interface SubagentMeta {
+interface SubagentMeta {
   agentType?: string;
   description?: string;
   toolUseId?: string;
@@ -117,24 +119,22 @@ export interface SubagentMeta {
  *
  * @param subagentsDir subagents 目錄
  * @param agentId agent 識別碼
- * @param retries 重試次數（預設 5）
+ * @param retries 重試次數（預設 3，最壞 150ms）
  * @param retryDelayMs 每次重試間隔（預設 50ms）
  */
 export async function readSubagentMeta(
   subagentsDir: string,
   agentId: string,
-  retries = 5,
+  retries = 3,
   retryDelayMs = 50
 ): Promise<SubagentMeta | null> {
   const metaPath = buildSubagentMetaPath(subagentsDir, agentId);
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const file = Bun.file(metaPath);
-      if (await file.exists()) {
-        const text = await file.text();
-        const parsed = JSON.parse(text) as SubagentMeta;
-        return parsed;
-      }
+      // 直讀 text()，缺檔走 catch 而非預先 exists()（少一次 syscall + 去 TOCTOU）
+      const text = await Bun.file(metaPath).text();
+      const parsed = JSON.parse(text) as SubagentMeta;
+      return parsed;
     } catch {
       // 讀取或解析失敗，視為缺漏 → 重試
     }
@@ -298,6 +298,8 @@ export class SubagentDetector {
   private isWatching = false;
   // 追蹤所有 pending 的 setTimeout 句柄，用於 stop() 時清除
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  // subagents/ 目錄 retry 的指數退避計數（成功 attach 後重置）
+  private dirRetryAttempts = 0;
   // FIFO queue: Task tool_use descriptions, matched to agents in registration order.
   // May mismatch with parallel Task launches (known limitation, wrong label only).
   private pendingDescriptions: string[] = [];
@@ -336,6 +338,7 @@ export class SubagentDetector {
     this.pendingTimers.clear();
     this.pendingDescriptions = [];
     this.spawnRegistry.clear();
+    this.dirRetryAttempts = 0;
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -350,10 +353,7 @@ export class SubagentDetector {
     if (!this.config.enabled) return;
 
     // 延遲掃描（讓檔案有機會建立）
-    const timer = setTimeout(async () => {
-      this.pendingTimers.delete(timer);
-      if (!this.isWatching) return;
-
+    this.schedulePending(EARLY_DETECTION_RETRY.initialDelay, async () => {
       try {
         const newAgentIds = await scanForNewSubagents(
           this.config.subagentsDir,
@@ -370,8 +370,7 @@ export class SubagentDetector {
       } catch (error) {
         this.config.output.error(`Early detection scan failed: ${error}`);
       }
-    }, EARLY_DETECTION_RETRY.initialDelay);
-    this.pendingTimers.add(timer);
+    });
   }
 
   /**
@@ -475,13 +474,13 @@ export class SubagentDetector {
   /**
    * 記錄一次 Agent tool_use 呼叫的 spawn 關係。
    * - toolUseId: Agent tool_use 的 id（例 toolu_01Smf3mRVKSkcMH1p2X1RDxV）
-   * - parentLabel: 呼叫方的 agentId；主 session 請傳 MAIN_SOURCE
+   * - parentSource: 呼叫方的 agentId；主 session 請傳 MAIN_SOURCE
    *
    * Phase 2 用：當新 subagent 註冊且讀到 meta.json 的 toolUseId 時，
    * 反查此表得知 parent，組成 [child◂parent] label。
    */
-  recordSpawn(toolUseId: string, parentLabel: string): void {
-    this.spawnRegistry.set(toolUseId, parentLabel);
+  recordSpawn(toolUseId: string, parentSource: string): void {
+    this.spawnRegistry.set(toolUseId, parentSource);
   }
 
   /**
@@ -541,7 +540,11 @@ export class SubagentDetector {
       this.dirWatcher.on('error', () => {
         this.dirWatcher?.close();
         this.dirWatcher = null;
+        // 排程 retry，否則 dir 重新出現時無法再 attach
+        this.scheduleSubagentsDirRetry();
       });
+      // 成功 attach → 重置 retry 計數
+      this.dirRetryAttempts = 0;
       // 目錄建立後先掃描一次，避免錯過已存在的新檔案
       this.scheduleScan();
     } catch {
@@ -574,18 +577,41 @@ export class SubagentDetector {
   }
 
   /**
-   * subagents/ 與其父目錄都不存在時排程 retry。
+   * subagents/ 與其父目錄都不存在時排程 retry（指數退避，上限 30s）。
    * Claude Code 在首個 subagent 出現前不會建立 {sessionUUID}/ 目錄；
    * agent-tail 若先於首個 subagent 啟動，必須持續 retry 直到目錄出現。
+   * 對於從不 spawn subagent 的 session，退避避免無止境的 1Hz 輪詢。
    */
   private scheduleSubagentsDirRetry(): void {
     if (!this.isWatching) return;
-    const timer = setTimeout(() => {
-      this.pendingTimers.delete(timer);
-      if (!this.isWatching) return;
+    // 1s, 2s, 4s, 8s, 16s, 30s, 30s...
+    const delay = Math.min(
+      SUBAGENTS_DIR_RETRY_DELAY_MS * 2 ** this.dirRetryAttempts,
+      SUBAGENTS_DIR_RETRY_MAX_DELAY_MS
+    );
+    this.dirRetryAttempts++;
+    this.schedulePending(delay, () => {
       if (this.dirWatcher || this.parentWatcher) return; // 同時間其他路徑已 attach
       this.tryWatchSubagentsDir();
-    }, SUBAGENTS_DIR_RETRY_DELAY_MS);
+    });
+  }
+
+  /**
+   * 在 pendingTimers 集合中註冊一個延遲執行的回呼。
+   * - 自動把 timer 加入 pendingTimers（stop() 會統一清掉）
+   * - 進入回呼時自動從集合移除
+   * - 觸發時再次檢查 isWatching，detector 已 stop 則放棄
+   */
+  private schedulePending(
+    delayMs: number,
+    fn: () => void | Promise<void>
+  ): void {
+    if (!this.isWatching) return;
+    const timer = setTimeout(async () => {
+      this.pendingTimers.delete(timer);
+      if (!this.isWatching) return;
+      await fn();
+    }, delayMs);
     this.pendingTimers.add(timer);
   }
 
@@ -616,21 +642,23 @@ export class SubagentDetector {
 
   /**
    * spawnRegistry 反查含 retry：parent JSONL line 與 nested 檔案出現存在 race。
-   * - 命中 → MAIN_SOURCE 視為無 parent（回 undefined），其他視為 nested parent。
+   * - 命中 → 從 registry 刪除（每個 toolUseId 只會被 1 個 child consume），
+   *   MAIN_SOURCE 視為無 parent 回 undefined，其他視為 nested parent。
    * - 最多 PARENT_LOOKUP_MAX_ATTEMPTS 次，間隔 PARENT_LOOKUP_DELAY_MS（第 1 次不等）。
    */
   private async lookupParentWithRetry(
     toolUseId: string
   ): Promise<string | undefined> {
-    const MAX_ATTEMPTS = PARENT_LOOKUP_MAX_ATTEMPTS;
-    const DELAY_MS = PARENT_LOOKUP_DELAY_MS;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 0; attempt < PARENT_LOOKUP_MAX_ATTEMPTS; attempt++) {
       const parent = this.spawnRegistry.get(toolUseId);
       if (parent) {
+        this.spawnRegistry.delete(toolUseId);
         return parent === MAIN_SOURCE ? undefined : parent;
       }
-      if (attempt < MAX_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+      if (attempt < PARENT_LOOKUP_MAX_ATTEMPTS - 1) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, PARENT_LOOKUP_DELAY_MS)
+        );
         if (!this.isWatching) return undefined;
       }
     }

@@ -6,6 +6,7 @@ import {
   makeAgentLabel,
   extractAgentIdFromLabel,
   extractParentAgentIdFromLabel,
+  labelToParentSource,
   type SessionHandler,
   type OutputHandler,
   type RetryConfig,
@@ -88,6 +89,18 @@ describe('detector-interfaces', () => {
       expect(extractParentAgentIdFromLabel('[ad29fb7◂ace4e3f]')).toBe(
         'ace4e3f'
       );
+    });
+
+    test('labelToParentSource: [MAIN] → MAIN_SOURCE', () => {
+      expect(labelToParentSource('[MAIN]')).toBe(MAIN_SOURCE);
+    });
+
+    test('labelToParentSource: [child] → child agentId', () => {
+      expect(labelToParentSource('[ace4e3f]')).toBe('ace4e3f');
+    });
+
+    test('labelToParentSource: [child◂parent] → child agentId（不含 parent）', () => {
+      expect(labelToParentSource('[ad29fb7◂ace4e3f]')).toBe('ad29fb7');
     });
   });
 
