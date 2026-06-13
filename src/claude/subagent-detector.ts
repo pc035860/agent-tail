@@ -78,6 +78,12 @@ export const FALLBACK_DETECTION_RETRY: RetryConfig = {
 export const PARENT_LOOKUP_MAX_ATTEMPTS = 4;
 export const PARENT_LOOKUP_DELAY_MS = 50;
 
+/**
+ * subagents/ 與其父目錄都不存在時的 retry 間隔。
+ * agent-tail 在首個 subagent 出現前啟動是常態，必須持續輪詢直到目錄被建立。
+ */
+export const SUBAGENTS_DIR_RETRY_DELAY_MS = 1000;
+
 /** 建立 subagent 檔案路徑 */
 export function buildSubagentPath(
   subagentsDir: string,
@@ -557,10 +563,30 @@ export class SubagentDetector {
       this.parentWatcher.on('error', () => {
         this.parentWatcher?.close();
         this.parentWatcher = null;
+        // 父層 watcher 掉了，排程 retry（subagentsDir 可能稍後出現）
+        this.scheduleSubagentsDirRetry();
       });
     } catch {
-      // ignore
+      // 父層目錄也不存在（典型：session UUID 目錄要等首個 subagent 才被建立）
+      // 排程 retry，否則 nested subagent 永遠不會被偵測到
+      this.scheduleSubagentsDirRetry();
     }
+  }
+
+  /**
+   * subagents/ 與其父目錄都不存在時排程 retry。
+   * Claude Code 在首個 subagent 出現前不會建立 {sessionUUID}/ 目錄；
+   * agent-tail 若先於首個 subagent 啟動，必須持續 retry 直到目錄出現。
+   */
+  private scheduleSubagentsDirRetry(): void {
+    if (!this.isWatching) return;
+    const timer = setTimeout(() => {
+      this.pendingTimers.delete(timer);
+      if (!this.isWatching) return;
+      if (this.dirWatcher || this.parentWatcher) return; // 同時間其他路徑已 attach
+      this.tryWatchSubagentsDir();
+    }, SUBAGENTS_DIR_RETRY_DELAY_MS);
+    this.pendingTimers.add(timer);
   }
 
   private registerNewAgent(
@@ -625,26 +651,24 @@ export class SubagentDetector {
     retryConfig: RetryConfig,
     message: string
   ): Promise<void> {
-    let description = queuedDescription;
+    // 一律讀 meta.json：它是 Claude Code 寫的權威來源（description + toolUseId）。
+    // 不能只在 FIFO 落空時才讀 — FIFO 可能因「歷史 Task 推進去但對應 subagent
+    // 早已存在、registerNewAgent skip」而累積 stale 條目，後續任何新 subagent
+    // 註冊都會 shift 到錯誤 description 並跳過 parent lookup。
+    const meta = await readSubagentMeta(this.config.subagentsDir, agentId);
+    // detector 已 stop 則放棄（防止跨 session 污染）
+    if (!this.isWatching) return;
+
+    // 偏好 meta.description；FIFO 僅作備援（meta.json 不在或無 description 欄位時）
+    const description = meta?.description ?? queuedDescription;
     let parentAgentId: string | undefined;
 
-    // FIFO 命中 = 主 session spawn → 無 parent；FIFO 落空 = 可能 nested。
-    // 已知 trade-off：FIFO shift 在 registerNewAgent 同步進行，遇到 parallel Task
-    // 啟動或「主 spawn 比 main JSONL line 還早到」等罕見 race 時，stale description
-    // 可能被誤配給 nested agent（且因為 description 不為空，會跳過 meta + parent
-    // 反查）。視為與 line 287-288 既有 FIFO 限制同類，MVP 接受。
-    if (!description) {
-      const meta = await readSubagentMeta(this.config.subagentsDir, agentId);
-      // detector 已 stop 則放棄（防止跨 session 污染）
+    if (meta?.toolUseId) {
+      // Race: parent JSONL 那行 Agent tool_use 可能比 nested 檔出現還晚被
+      // 解析（→ recordSpawn 後到）。短暫 retry 蓋住典型 50-200ms 窗口；
+      // 仍查不到就退回無 parent label，不阻塞註冊流程。
+      parentAgentId = await this.lookupParentWithRetry(meta.toolUseId);
       if (!this.isWatching) return;
-      description = meta?.description;
-      if (meta?.toolUseId) {
-        // Race: parent JSONL 那行 Agent tool_use 可能比 nested 檔出現還晚被
-        // 解析（→ recordSpawn 後到）。短暫 retry 蓋住典型 50-200ms 窗口；
-        // 仍查不到就退回無 parent label，不阻塞註冊流程。
-        parentAgentId = await this.lookupParentWithRetry(meta.toolUseId);
-        if (!this.isWatching) return;
-      }
     }
 
     const label = makeAgentLabel(agentId, parentAgentId);
@@ -654,7 +678,9 @@ export class SubagentDetector {
 
     if (!this.config.enabled) return;
 
-    this.config.output.warn(message);
+    // 把 label 帶進 warn 訊息，便於 nested 場景下直接看到 [child◂parent]
+    const annotatedMessage = parentAgentId ? `${message} ${label}` : message;
+    this.config.output.warn(annotatedMessage);
 
     // 觸發 onNewSubagent 回呼（pane 自動開啟等用途）
     this.config.onNewSubagent?.(agentId, subagentPath, description);

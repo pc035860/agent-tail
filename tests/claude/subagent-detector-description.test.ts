@@ -224,7 +224,13 @@ describe('SubagentDetector description queue', () => {
     detector.stop();
   });
 
-  test('FIFO description wins over meta.json (main-session spawn)', async () => {
+  // meta.json is the canonical source — claude code always writes it.
+  // FIFO is a side channel that can carry stale historical entries (Task pushed
+  // for a subagent that already existed at attach time, so registerNewAgent
+  // skipped and the description sat in the queue). Trusting FIFO over meta.json
+  // would misroute that stale description to the next nested subagent and skip
+  // parent lookup.
+  test('meta.json description wins over FIFO when both are present', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-meta-prio-'));
     const subagentsDir = join(tmpDir, 'subagents');
     await mkdir(subagentsDir, { recursive: true });
@@ -238,6 +244,41 @@ describe('SubagentDetector description queue', () => {
         toolUseId: 'toolu_mainSpawn',
       })
     );
+
+    const hookCalls: {
+      agentId: string;
+      description?: string;
+    }[] = [];
+
+    const detector = new SubagentDetector(new Set(), {
+      subagentsDir,
+      output: createMockOutputHandler(),
+      watcher: createMockWatcherHandler(),
+      enabled: true,
+      onNewSubagent: (agentId: string, _path: string, description?: string) => {
+        hookCalls.push({ agentId, description });
+      },
+    });
+
+    detector.startDirectoryWatch();
+    detector.pushDescription('fifo description');
+    detector.handleEarlyDetection();
+    await new Promise((r) => setTimeout(r, 800));
+
+    expect(hookCalls).toHaveLength(1);
+    expect(hookCalls[0]!.description).toBe('meta description');
+
+    detector.stop();
+  });
+
+  // FIFO is the fallback when meta.json is missing or has no description
+  test('FIFO description used when meta.json is missing', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'subagent-fifo-fb-'));
+    const subagentsDir = join(tmpDir, 'subagents');
+    await mkdir(subagentsDir, { recursive: true });
+
+    // jsonl only, no meta.json
+    await writeFile(join(subagentsDir, 'agent-7777777.jsonl'), '');
 
     const hookCalls: {
       agentId: string;
