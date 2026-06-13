@@ -654,6 +654,30 @@ describe('createOnLineHandler', () => {
       expect(parseQueueOperationCompletion(line)).toBeNull();
     });
 
+    // 鎖死 status name 沒有 alias — Claude Code 實測只用 completed/failed/killed，
+    // 不用 cancelled/canceled/stopped/aborted。若上游某天新增任一 alias，這幾條
+    // 會在 review 時觸發討論（而不是悄悄掉進「未知 status → null」分支）。
+    test.each(['cancelled', 'canceled', 'stopped', 'aborted'])(
+      'status=%s → null (not a known terminal status name)',
+      (status) => {
+        const line = JSON.stringify({
+          type: 'queue-operation',
+          content: `<task-notification><task-id>aacd1234567890ab</task-id><status>${status}</status></task-notification>`,
+        });
+        expect(parseQueueOperationCompletion(line)).toBeNull();
+      }
+    );
+
+    test('missing <status> tag → null', () => {
+      // prefilter 過後 type 與 content 都對，但 content 缺 <status>
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><task-id>aacd1234567890ab</task-id></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
     test('wrong top-level type → null', () => {
       const line = JSON.stringify({
         type: 'user',

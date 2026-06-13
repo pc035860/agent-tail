@@ -183,13 +183,14 @@ export function createOnLineHandler(
       }
     }
 
-    // queue-operation + task-notification: Claude Code 對 subagent 完成的真正訊號
-    // 包含主 spawn 與 nested。實測 nested 完成的 task-notification 只寫進主 session
-    // （不在 parent subagent JSONL），所以這條路徑只在 MAIN 觸發。
+    // queue-operation + task-notification: Claude Code 對 subagent 終止的真正訊號
+    // （status ∈ {completed, failed, killed}）。包含主 spawn 與 nested；實測 nested
+    // 終止的 task-notification 只寫進主 session（不在 parent subagent JSONL），
+    // 所以這條路徑只在 MAIN 觸發。
     if (label === MAIN_LABEL) {
-      const completedTaskId = parseQueueOperationCompletion(line);
-      if (completedTaskId) {
-        config.detector.handleFallbackDetection(completedTaskId);
+      const terminalTaskId = parseQueueOperationCompletion(line);
+      if (terminalTaskId) {
+        config.detector.handleFallbackDetection(terminalTaskId);
       }
     }
 
