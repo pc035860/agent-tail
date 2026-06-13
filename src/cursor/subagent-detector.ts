@@ -23,6 +23,13 @@ const SUBAGENT_FILE_RETRY: RetryConfig = {
   initialDelay: 50,
 };
 
+/**
+ * Polling backup 間隔 — Cursor 是純 directory-watch 模式（無 JSONL event
+ * 補強），fs.watch event miss 影響更大。定期掃描補漏；scheduleScan() +
+ * knownAgentIds dedup，安全重入。
+ */
+const SUBAGENTS_DIR_POLL_BACKUP_MS = 500;
+
 // ============================================================
 // CursorSubagentDetector
 // ============================================================
@@ -46,6 +53,7 @@ export class CursorSubagentDetector {
   private scanTimer: ReturnType<typeof setTimeout> | null = null;
   private isWatching = false;
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
+  private dirPollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
   constructor(
@@ -83,6 +91,13 @@ export class CursorSubagentDetector {
 
     this.isWatching = true;
     this.tryWatchSubagentsDir();
+
+    // Polling backup — fs.watch event miss 時主動排掃描，scheduleScan()
+    // 自帶 debounce + knownAgentIds dedup，安全重入。
+    this.dirPollTimer = setInterval(() => {
+      if (!this.isWatching) return;
+      this.scheduleScan();
+    }, SUBAGENTS_DIR_POLL_BACKUP_MS);
   }
 
   /**
@@ -96,6 +111,10 @@ export class CursorSubagentDetector {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
+    if (this.dirPollTimer) {
+      clearInterval(this.dirPollTimer);
+      this.dirPollTimer = null;
+    }
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();

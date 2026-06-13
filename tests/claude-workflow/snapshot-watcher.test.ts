@@ -267,8 +267,10 @@ describe('SnapshotWatcher', () => {
       snapshotPath,
       JSON.stringify(makeSnapshot({ status: 'completed' }))
     );
-    // Slack of 50ms * 3 + 50 = 200ms.
-    await new Promise((r) => setTimeout(r, 200));
+    // Slack 必須 > polling backup 間隔 (DEFAULT_POLL_BACKUP_MS=200ms) 才不會
+    // 在 fs.watch event miss 時邊界打架。50ms debounce * 3 + polling 200ms
+    // + IO slack = 400ms。
+    await new Promise((r) => setTimeout(r, 400));
 
     expect(received).toHaveLength(2);
     expect(received[1]!.status).toBe('completed');

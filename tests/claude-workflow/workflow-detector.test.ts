@@ -72,7 +72,9 @@ describe('WorkflowDetector — path B (directory watch)', () => {
       join(workflowsDir, 'wf_12345678-abc.json'),
       JSON.stringify({ runId: 'wf_12345678-abc', status: 'running' })
     );
-    await waitMs(500);
+    // Slack 必須 > polling backup 間隔 (DIR_POLL_BACKUP_MS=500ms) 才不會在
+    // fs.watch event miss 時邊界打架。500ms 間隔 + 1 次 tick + async slack。
+    await waitMs(900);
 
     expect(events.length).toBeGreaterThanOrEqual(1);
     const evt = events[0]!;
@@ -198,7 +200,9 @@ describe('WorkflowDetector — path B (directory watch)', () => {
       join(workflowsDir, 'wf_cccccccc-ccc.json'),
       JSON.stringify({ runId: 'wf_cccccccc-ccc' })
     );
-    await waitMs(600); // retry happens after ~100ms
+    // 最壞時序：fs.watch event miss → polling 500ms tick → onNewWorkflow reject
+    // → rollback → retry 100ms 後重發。再加 IO/scheduling slack。
+    await waitMs(1200);
 
     expect(attempts).toBeGreaterThanOrEqual(2);
     detector.stop();

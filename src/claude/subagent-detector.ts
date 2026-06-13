@@ -92,6 +92,13 @@ export const PARENT_LOOKUP_DELAY_MS = 50;
 export const SUBAGENTS_DIR_RETRY_DELAY_MS = 1000;
 export const SUBAGENTS_DIR_RETRY_MAX_DELAY_MS = 30000;
 
+/**
+ * Polling backup 間隔 — fs.watch 在 macOS 上對 dir 內新檔事件偶發 miss
+ * （特別是 watch start 後立刻有檔案出現的情況）。定期掃描補漏；
+ * scheduleScan() / knownAgentIds 在 registerNewAgent 內 dedup，安全重入。
+ */
+export const SUBAGENTS_DIR_POLL_BACKUP_MS = 500;
+
 /** 建立 subagent 檔案路徑 */
 export function buildSubagentPath(
   subagentsDir: string,
@@ -404,6 +411,7 @@ export class SubagentDetector {
   private dirWatcher: FSWatcher | null = null;
   private parentWatcher: FSWatcher | null = null;
   private scanTimer: ReturnType<typeof setTimeout> | null = null;
+  private dirPollTimer: ReturnType<typeof setInterval> | null = null;
   private isWatching = false;
   // 追蹤所有 pending 的 setTimeout 句柄，用於 stop() 時清除
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
@@ -432,6 +440,13 @@ export class SubagentDetector {
 
     this.isWatching = true;
     this.tryWatchSubagentsDir();
+
+    // Polling backup — fs.watch event miss 時主動排掃描，
+    // scheduleScan() 自帶 100ms debounce + knownAgentIds dedup，安全重入。
+    this.dirPollTimer = setInterval(() => {
+      if (!this.isWatching) return;
+      this.scheduleScan();
+    }, SUBAGENTS_DIR_POLL_BACKUP_MS);
   }
 
   /**
@@ -448,6 +463,10 @@ export class SubagentDetector {
     this.pendingDescriptions = [];
     this.spawnRegistry.clear();
     this.dirRetryAttempts = 0;
+    if (this.dirPollTimer) {
+      clearInterval(this.dirPollTimer);
+      this.dirPollTimer = null;
+    }
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();

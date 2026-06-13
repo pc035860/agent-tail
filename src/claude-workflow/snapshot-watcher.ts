@@ -17,7 +17,7 @@ export interface SnapshotWatcherConfig {
   onChange: (snapshot: WorkflowSnapshot) => void;
   onError?: (err: Error) => void;
   debounceMs?: number;
-  /** Polling backup 間隔；設 0 關閉。預設 1000ms。 */
+  /** Polling backup 間隔；設 0 關閉。預設 DEFAULT_POLL_BACKUP_MS (200ms)。 */
   pollBackupMs?: number;
 }
 
