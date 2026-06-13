@@ -119,15 +119,16 @@ describe('buildFzfArgs', () => {
 
 describe('parseSelection (col 6 = HIDDEN_FULL_ID per SPEC §11.4)', () => {
   test('extracts full UUID from col 6 of a main session row', () => {
-    // 6 cols: TYPE \t ID \t TIME \t TITLE \t NOTES \t HIDDEN_FULL_ID
+    // 6 cols: TYPE \t ID \t TIME \t NOTES \t TITLE \t HIDDEN_FULL_ID
     const line =
-      'sess\tabc12345\t3m ago\t(no custom title)\tmy-project\tabc12345-1234-1234-1234-123456789abc\n';
+      'sess\tabc12345\t3m ago\tmy-project\t—\tabc12345-1234-1234-1234-123456789abc\n';
     expect(parseSelection(line)).toBe('abc12345-1234-1234-1234-123456789abc');
   });
 
   test('extracts full runId from col 6 of a workflow row', () => {
+    // 6 cols: TYPE \t ID \t TIME \t NOTES \t TITLE \t HIDDEN_FULL_ID
     const line =
-      'wf\twf_abcd1234-37e\t7m ago\twf:briefshare-impl\tcompleted · in session 5fe53568\twf_abcd1234-37e\n';
+      'wf\twf_abcd1234-37e\t7m ago\tcompleted · in session 5fe53568\twf:briefshare-impl\twf_abcd1234-37e\n';
     expect(parseSelection(line)).toBe('wf_abcd1234-37e');
   });
 

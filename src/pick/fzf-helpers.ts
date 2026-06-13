@@ -54,7 +54,7 @@ export function buildFzfArgs(config: {
     '--ansi',
     '--delimiter',
     '\t',
-    // SPEC §11.4: show TYPE/ID/TIME/TITLE/NOTES (cols 1..5); col 6 stays
+    // SPEC §11.4: show TYPE/ID/TIME/NOTES/TITLE (cols 1..5); col 6 stays
     // hidden and carries the full id for parser / bindings.
     '--with-nth',
     '1..5',

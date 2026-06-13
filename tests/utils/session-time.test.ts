@@ -237,7 +237,7 @@ describe('readFirstUserPromptFromHead', () => {
     expect(result).toBe('hihi from list content');
   });
 
-  test('scheduled-task → ⏰ name', async () => {
+  test('scheduled-task → [cron] name (pure-ASCII marker)', async () => {
     const filePath = join(tempDir, 's.jsonl');
     await writeFile(
       filePath,
@@ -246,7 +246,7 @@ describe('readFirstUserPromptFromHead', () => {
       )
     );
     const result = await readFirstUserPromptFromHead(filePath);
-    expect(result).toBe('⏰ samtsan-daily-marketplace');
+    expect(result).toBe('[cron] samtsan-daily-marketplace');
   });
 
   test('command with args → "/cmd args"', async () => {

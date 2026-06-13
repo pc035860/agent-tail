@@ -1157,14 +1157,17 @@ if (wantsWorkflowMode) {
 list pipeline（`listCommand` in `src/index.ts`）回傳的 `SessionListItem[]` 已由 `ClaudeSessionFinder.listSessions` 內部合併 main session + workflow（§7.4），formatter 依 `logType` 與 `customTitle` 分流：
 
 ```
-TYPE  ID                  TIME              TITLE                            NOTES
-wf    wf_6f7d9da9-37e     2026-05-30 14:27  briefshare-impl                  completed · in session 5fe53568
-sess  5fe53568            2026-05-30 14:21  (no custom title)
-sess  d581d8c7            2026-05-30 09:30  (no custom title)
+TYPE  ID                  TIME              NOTES                            TITLE
+wf    wf_6f7d9da9-37e     2026-05-30 14:27  completed · in session 5fe53568  briefshare-impl
+sess  5fe53568            2026-05-30 14:21  ~/code/foo                       › /next
+sess  d581d8c7            2026-05-30 09:30  ~/code/bar                       —
 ```
 
 - 第 1 欄 `TYPE`：`sess` | `wf`，依 `logType`（未設視為 `sess`）
-- 第 5 欄 `NOTES`：workflow 顯示 `workflowStatus` + 所屬 main session 短 UUID
+- 第 4 欄 `NOTES`：workflow 顯示 `workflowStatus` + 所屬 main session 短 UUID；main session 顯示 project path
+- 第 5 欄 `TITLE`：`customTitle`（authoritative）/ `dim('› ' + autoTitle)`（derived，see §11.5 auto-title）/ `dim('—')`（neither）
+
+> 欄位順序：bounded `NOTES`（project path 大多在 ~10-50 字元）排在 variable-length `TITLE` 之前，讓視覺右邊吸收 title 的不定長度。col 6 `HIDDEN_FULL_ID` 位置不變。
 
 ### 11.4 `agent-pick` 選 workflow 的路由（S4 + R3-S1）
 
@@ -1173,7 +1176,7 @@ agent-pick 顯示與 `--list` 相同欄位（fzf preview）。
 **fzf 行格式契約**（R3-S1 — 明確規定，給 `src/pick/fzf-helpers.ts` 解析）：
 
 ```
-{TYPE}\t{ID}\t{TIME}\t{TITLE}\t{NOTES}\t{HIDDEN_RUNID_OR_UUID}
+{TYPE}\t{ID}\t{TIME}\t{NOTES}\t{TITLE}\t{HIDDEN_RUNID_OR_UUID}
 ```
 
 - 6 欄、tab 分隔
@@ -1501,7 +1504,7 @@ macOS 的 fs.watch 在重命名/移除/重建檔案時可能不可靠（Node 已
 
 **Resolved (post-shipping cleanup, 2026-05-30):**
 - `--list` / `agent-pick` aligned to strict 6-column SPEC §11.3 + §11.4
-  contract: `TYPE\tID\tTIME\tTITLE\tNOTES\tHIDDEN_FULL_ID`. fzf
+  contract: `TYPE\tID\tTIME\tNOTES\tTITLE\tHIDDEN_FULL_ID` (NOTES/TITLE swapped post-shipping; see §11.3 rationale). fzf
   `--with-nth 1..5`, ctrl-y / preview use `{6}` directly (no awk).
   `parseSelection` returns col 6 (full UUID for main, full runId for
   workflow). Workflow rows show `{status} · in session {uuid8}` in

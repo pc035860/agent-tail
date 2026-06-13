@@ -108,12 +108,18 @@ function formatTitleColumn(item: SessionListItem, color: boolean): string {
  * Format a list of sessions as tab-separated lines per SPEC §11.3 / §11.4.
  *
  * Columns (tab-separated):
- *   0 TYPE   'sess' | 'wf'  (cyan / magenta when color=true)
- *   1 ID     short identifier
- *   2 TIME   relative time
- *   3 TITLE  customTitle | dim('› ' + autoTitle) | dim('—')
- *   4 NOTES  see {@link formatNotes}
- *   5 HID    hidden full id (see {@link hiddenFullId}); fzf --with-nth 1..5 hides it
+ *   0 TYPE    'sess' | 'wf'  (cyan / magenta when color=true)
+ *   1 ID      short identifier
+ *   2 TIME    relative time
+ *   3 NOTES   see {@link formatNotes} — project path (main) or workflow status
+ *   4 TITLE   customTitle | dim('› ' + autoTitle) | dim('—')
+ *   5 HID     hidden full id (see {@link hiddenFullId}); fzf --with-nth 1..5 hides it
+ *
+ * Column order rationale: project paths are bounded (~10-50 chars, mostly
+ * `~/code/foo` or `~/git/foo` shape), while titles can range from `/clear`
+ * (6 chars) to long bilingual prompts (80+). Putting the bounded column
+ * first keeps the variable-length TITLE on the right edge where wrapping is
+ * visually acceptable.
  */
 export function formatSessionList(
   items: SessionListItem[],
@@ -135,8 +141,8 @@ export function formatSessionList(
       typeStr,
       sanitizeColumn(item.shortId),
       formatRelativeTime(item.lastActivityTime ?? item.mtime),
-      formatTitleColumn(item, options.color),
       sanitizeColumn(formatNotes(item)),
+      formatTitleColumn(item, options.color),
       hiddenFullId(item),
     ];
 

@@ -125,10 +125,10 @@ export async function readLastTimestampFromJSONL(
  * Read the first meaningful user prompt from a Claude JSONL session, head-read.
  * Used as a `customTitle` fallback in `--list` so unnamed sessions still convey
  * what was being worked on (e.g. `/eshop-deploy ec-frontend, stag+prod, v1.97.0`,
- * `⏰ samtsan-daily-marketplace`, or the raw first-turn user message).
+ * `[cron] samtsan-daily-marketplace`, or the raw first-turn user message).
  *
  * Filtering:
- * - <scheduled-task name="X">  → `⏰ X`
+ * - <scheduled-task name="X">  → `[cron] X`
  * - <command-name>/cmd</command-name> with optional <command-args>X</command-args>
  *                              → `/cmd X` (args trimmed to single line)
  * - lines with only XML tags / Caveat: prefix / empty → skipped
@@ -203,9 +203,10 @@ function tryExtractUserPrompt(line: string): string | null {
   text = text.trim();
   if (!text) return null;
 
-  // <scheduled-task name="X" ...>  →  ⏰ X
+  // <scheduled-task name="X" ...>  →  [cron] X  (pure-ASCII marker;
+  // emoji like ⏰ render brightly in terminals and visually dominate the row)
   const sched = text.match(/<scheduled-task[^>]*name="([^"]+)"/);
-  if (sched?.[1]) return `⏰ ${sched[1]}`;
+  if (sched?.[1]) return `[cron] ${sched[1]}`;
 
   // <command-name>/cmd</command-name> with optional <command-args>
   const cmd = text.match(/<command-name>([^<]+)<\/command-name>/);

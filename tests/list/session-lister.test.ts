@@ -95,10 +95,11 @@ describe('extractFullId', () => {
  *   0  TYPE   'sess' | 'wf'
  *   1  ID     short identifier (shortId for main, short runId for workflow)
  *   2  TIME   relative time string
- *   3  TITLE  customTitle ?? '(no custom title)'
- *   4  NOTES  main: project ?? '' ; workflow: '{status} · in session {uuid8}'
+ *   3  NOTES  main: project ?? '' ; workflow: '{status} · in session {uuid8}'
+ *   4  TITLE  customTitle | dim('› ' + autoTitle) | dim('—')
  *   5  HID    hidden full id (UUID for main, full runId for workflow)
  *
+ * NOTES (bounded) precedes TITLE (unbounded) intentionally — see SPEC §11.3.
  * fzf shows cols 1..5; col 6 is hidden and used by parseSelection / ctrl-y.
  */
 describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
@@ -124,8 +125,10 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     expect(parts[0]).toBe('sess');
     expect(parts[1]).toBe('abc12345');
     expect(parts[2]).toBe('3m ago');
-    expect(parts[3]).toBe('My session');
-    expect(parts[4]).toBe('my-project');
+    // Column order swapped: NOTES (col 3) before TITLE (col 4) — project paths
+    // are bounded, titles aren't, so swap keeps variable-length data on right.
+    expect(parts[3]).toBe('my-project');
+    expect(parts[4]).toBe('My session');
     expect(parts[5]).toBe('abc12345-1234-1234-1234-123456789abc');
   });
 
@@ -138,7 +141,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     });
     // color=false (plain) → raw '—'
     const plain = formatSessionList([item], { color: false });
-    expect(plain[0]!.split('\t')[3]).toBe('—');
+    expect(plain[0]!.split('\t')[4]).toBe('—');
   });
 
   test('main session with autoTitle but no customTitle: TITLE prefixed "› "', () => {
@@ -150,7 +153,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     });
     item.autoTitle = '/eshop-deploy ec-frontend, stag+prod';
     const plain = formatSessionList([item], { color: false });
-    expect(plain[0]!.split('\t')[3]).toBe(
+    expect(plain[0]!.split('\t')[4]).toBe(
       '› /eshop-deploy ec-frontend, stag+prod'
     );
   });
@@ -165,7 +168,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     });
     item.autoTitle = 'fallback derived';
     const plain = formatSessionList([item], { color: false });
-    expect(plain[0]!.split('\t')[3]).toBe('real user-set title');
+    expect(plain[0]!.split('\t')[4]).toBe('real user-set title');
   });
 
   test('main session without project: NOTES is empty string (tabs preserved)', () => {
@@ -178,7 +181,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     const parts = result[0]!.split('\t');
     expect(parts).toHaveLength(6);
     expect(parts[0]).toBe('sess');
-    expect(parts[4]).toBe('');
+    expect(parts[3]).toBe(''); // NOTES is now col 3
     expect(parts[5]).toBe('abc12345');
   });
 
@@ -200,8 +203,8 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     expect(parts[0]).toBe('wf');
     expect(parts[1]).toBe('wf_abcd1234-37e');
     expect(parts[2]).toBe('7m ago');
-    expect(parts[3]).toBe('wf:briefshare-impl');
-    expect(parts[4]).toBe('completed · in session 5fe53568');
+    expect(parts[3]).toBe('completed · in session 5fe53568'); // NOTES col 3
+    expect(parts[4]).toBe('wf:briefshare-impl'); // TITLE col 4
     expect(parts[5]).toBe('wf_abcd1234-37e');
   });
 
@@ -217,7 +220,7 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     });
     const result = formatSessionList([item], { color: false });
     const parts = result[0]!.split('\t');
-    expect(parts[4]).toBe('in session 5fe53568');
+    expect(parts[3]).toBe('in session 5fe53568'); // NOTES col 3
   });
 
   test('all rows have exactly 6 tab-separated columns', () => {
