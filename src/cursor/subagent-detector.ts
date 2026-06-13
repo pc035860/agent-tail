@@ -91,13 +91,26 @@ export class CursorSubagentDetector {
 
     this.isWatching = true;
     this.tryWatchSubagentsDir();
+  }
 
-    // Polling backup — fs.watch event miss 時主動排掃描，scheduleScan()
-    // 自帶 debounce + knownAgentIds dedup，安全重入。
+  /**
+   * 啟動 polling backup（僅在 subagents/ 成功 attach 後呼叫）。
+   * 避免在 dir 不存在時做無止境的 500ms 輪詢。
+   */
+  private _startDirPollBackup(): void {
+    if (!this.isWatching) return;
+    if (this.dirPollTimer) return;
     this.dirPollTimer = setInterval(() => {
       if (!this.isWatching) return;
       this.scheduleScan();
     }, SUBAGENTS_DIR_POLL_BACKUP_MS);
+  }
+
+  private _clearDirPollBackup(): void {
+    if (this.dirPollTimer) {
+      clearInterval(this.dirPollTimer);
+      this.dirPollTimer = null;
+    }
   }
 
   /**
@@ -111,10 +124,7 @@ export class CursorSubagentDetector {
       clearTimeout(timer);
     }
     this.pendingTimers.clear();
-    if (this.dirPollTimer) {
-      clearInterval(this.dirPollTimer);
-      this.dirPollTimer = null;
-    }
+    this._clearDirPollBackup();
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -161,7 +171,12 @@ export class CursorSubagentDetector {
       this.dirWatcher.on('error', () => {
         this.dirWatcher?.close();
         this.dirWatcher = null;
+        // dir 掉了 → 停 polling；cursor 沒有指數退避 retry，再 attach 由
+        // 上層或下次 startDirectoryWatch 處理
+        this._clearDirPollBackup();
       });
+      // 成功 attach → 啟動 polling backup
+      this._startDirPollBackup();
       // 目錄建立後先掃描一次
       this.scheduleScan();
     } catch {

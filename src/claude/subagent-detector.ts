@@ -440,13 +440,26 @@ export class SubagentDetector {
 
     this.isWatching = true;
     this.tryWatchSubagentsDir();
+  }
 
-    // Polling backup — fs.watch event miss 時主動排掃描，
-    // scheduleScan() 自帶 100ms debounce + knownAgentIds dedup，安全重入。
+  /**
+   * 啟動 polling backup（僅在 subagents/ 成功 attach 後呼叫）。
+   * 避免在 dir 不存在時繞過 scheduleSubagentsDirRetry 的指數退避。
+   */
+  private _startDirPollBackup(): void {
+    if (!this.isWatching) return;
+    if (this.dirPollTimer) return;
     this.dirPollTimer = setInterval(() => {
       if (!this.isWatching) return;
       this.scheduleScan();
     }, SUBAGENTS_DIR_POLL_BACKUP_MS);
+  }
+
+  private _clearDirPollBackup(): void {
+    if (this.dirPollTimer) {
+      clearInterval(this.dirPollTimer);
+      this.dirPollTimer = null;
+    }
   }
 
   /**
@@ -463,10 +476,7 @@ export class SubagentDetector {
     this.pendingDescriptions = [];
     this.spawnRegistry.clear();
     this.dirRetryAttempts = 0;
-    if (this.dirPollTimer) {
-      clearInterval(this.dirPollTimer);
-      this.dirPollTimer = null;
-    }
+    this._clearDirPollBackup();
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -668,15 +678,18 @@ export class SubagentDetector {
       this.dirWatcher.on('error', () => {
         this.dirWatcher?.close();
         this.dirWatcher = null;
-        // 排程 retry，否則 dir 重新出現時無法再 attach
+        // dir 掉了 → 停 polling、退到 retry 退避；dir 回來再重啟 polling
+        this._clearDirPollBackup();
         this.scheduleSubagentsDirRetry();
       });
-      // 成功 attach → 重置 retry 計數
+      // 成功 attach → 重置 retry 計數 + 啟動 polling backup
       this.dirRetryAttempts = 0;
+      this._startDirPollBackup();
       // 目錄建立後先掃描一次，避免錯過已存在的新檔案
       this.scheduleScan();
     } catch {
       // subagents 目錄可能尚未建立，改監控父層目錄
+      // 不啟動 polling — 由 scheduleSubagentsDirRetry 的指數退避處理
       this.watchParentForSubagentsDir();
     }
   }

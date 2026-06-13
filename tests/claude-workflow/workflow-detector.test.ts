@@ -104,7 +104,9 @@ describe('WorkflowDetector — path B (directory watch)', () => {
     await writeFile(path, JSON.stringify({ runId: 'wf_aaaaaaaa-aaa' }));
     await waitMs(50);
     await writeFile(path, JSON.stringify({ runId: 'wf_aaaaaaaa-aaa' }));
-    await waitMs(500);
+    // Slack 需 > DIR_POLL_BACKUP_MS (500ms) 才不會在 fs.watch event miss
+    // 時邊界打架。
+    await waitMs(900);
 
     expect(callCount).toBe(1);
     detector.stop();
