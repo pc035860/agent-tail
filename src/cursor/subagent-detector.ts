@@ -63,6 +63,8 @@ export class CursorSubagentDetector {
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   private dirPollTimer: ReturnType<typeof setInterval> | null = null;
   private dirRetryAttempts = 0;
+  // 單一 pending retry timer：多次 schedule 互相疊加會讓 dirRetryAttempts 飛漲
+  private pendingDirRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
 
   constructor(
@@ -135,6 +137,7 @@ export class CursorSubagentDetector {
     this.pendingTimers.clear();
     this._clearDirPollBackup();
     this.dirRetryAttempts = 0;
+    this.pendingDirRetryTimer = null;
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -226,18 +229,23 @@ export class CursorSubagentDetector {
    */
   private _scheduleSubagentsDirRetry(): void {
     if (!this.isWatching) return;
+    // 已有 pending retry 就跳過，避免疊加讓 dirRetryAttempts 飛漲
+    if (this.pendingDirRetryTimer) return;
     const delay = Math.min(
       SUBAGENTS_DIR_RETRY_DELAY_MS * 2 ** this.dirRetryAttempts,
       SUBAGENTS_DIR_RETRY_MAX_DELAY_MS
     );
     this.dirRetryAttempts++;
     const timer = setTimeout(() => {
+      this.pendingDirRetryTimer = null;
       this.pendingTimers.delete(timer);
       if (!this.isWatching) return;
-      // 同時間其他路徑（parent watch 觸發）已 attach 就跳過
       if (this.dirWatcher) return;
+      // 注意：parent watcher 可能漏 event，這裡仍要 retry
+      // （tryWatchSubagentsDir 自身有 catch 處理 dir 不存在的情況）
       this.tryWatchSubagentsDir();
     }, delay);
+    this.pendingDirRetryTimer = timer;
     this.pendingTimers.add(timer);
   }
 

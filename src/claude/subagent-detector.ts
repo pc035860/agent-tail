@@ -412,6 +412,8 @@ export class SubagentDetector {
   private parentWatcher: FSWatcher | null = null;
   private scanTimer: ReturnType<typeof setTimeout> | null = null;
   private dirPollTimer: ReturnType<typeof setInterval> | null = null;
+  // 單一 pending retry timer，避免多次 schedule 互相疊加導致 dirRetryAttempts 飛漲
+  private pendingDirRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private isWatching = false;
   // 追蹤所有 pending 的 setTimeout 句柄，用於 stop() 時清除
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
@@ -476,6 +478,7 @@ export class SubagentDetector {
     this.pendingDescriptions = [];
     this.spawnRegistry.clear();
     this.dirRetryAttempts = 0;
+    this.pendingDirRetryTimer = null;
     this._clearDirPollBackup();
     this.dirWatcher?.close();
     this.dirWatcher = null;
@@ -728,16 +731,27 @@ export class SubagentDetector {
    */
   private scheduleSubagentsDirRetry(): void {
     if (!this.isWatching) return;
+    // 已有 pending retry 就跳過：parentWatcher fs.watch event 與 dirWatcher
+    // error 可能同時間多次 schedule，疊加會讓 dirRetryAttempts 飛漲、退避失效。
+    if (this.pendingDirRetryTimer) return;
     // 1s, 2s, 4s, 8s, 16s, 30s, 30s...
     const delay = Math.min(
       SUBAGENTS_DIR_RETRY_DELAY_MS * 2 ** this.dirRetryAttempts,
       SUBAGENTS_DIR_RETRY_MAX_DELAY_MS
     );
     this.dirRetryAttempts++;
-    this.schedulePending(delay, () => {
-      if (this.dirWatcher || this.parentWatcher) return; // 同時間其他路徑已 attach
+    const timer = setTimeout(() => {
+      this.pendingDirRetryTimer = null;
+      this.pendingTimers.delete(timer);
+      if (!this.isWatching) return;
+      if (this.dirWatcher) return; // 已 attach 跳過
+      // 注意：不檢查 parentWatcher — parent fs.watch 可能漏 creation event，
+      // 即使 parent watcher 存在仍要 retry tryWatchSubagentsDir
+      // （tryWatchSubagentsDir 自身有 dirWatcher dedup guard）
       this.tryWatchSubagentsDir();
-    });
+    }, delay);
+    this.pendingDirRetryTimer = timer;
+    this.pendingTimers.add(timer);
   }
 
   /**
