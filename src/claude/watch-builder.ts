@@ -15,13 +15,24 @@ export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
 
 /**
- * 解析主 session 內 queue-operation + task-notification 訊號，
- * 回傳 status === 'completed' 的 task-id（其他狀態 / 解析失敗皆回 null）。
+ * Claude Code 主 session JSONL 內 queue-operation + task-notification 的
+ * **終止** status — 實測涵蓋這三種（其他 status 視為非終止；in-progress 訊號
+ * 不在此路徑處理）。task-id 非 hex 的條目（例如 background bash task）會在
+ * 下游 handleFallbackDetection 的 isValidAgentId guard 被擋掉，這裡不必過濾。
+ */
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'killed']);
+
+/**
+ * 解析主 session 內 queue-operation + task-notification 訊號，回傳處於
+ * **終止狀態**（completed / failed / killed）的 task-id；非終止 / 未知
+ * status / 解析失敗皆回 null。
  *
  * 為什麼這條路徑必要：Claude Code 對 nested subagent 完成的通知只寫進主 session
  * （以 type=queue-operation 包 task-notification XML 字串），parent subagent
  * 的 JSONL 完全沒有 toolUseResult.agentId=nested 這類事件。要關 nested pane /
  * 在 -i Tab 列打 ✓ 必須走這條。
+ *
+ * 函數名保留 "Completion" 為了相容外部 caller — 語意已擴張到「Terminal」。
  *
  * Exported for direct testing.
  */
@@ -40,7 +51,8 @@ export function parseQueueOperationCompletion(line: string): string | null {
     }
     const taskIdMatch = data.content.match(/<task-id>([^<]+)<\/task-id>/);
     const statusMatch = data.content.match(/<status>([^<]+)<\/status>/);
-    if (!taskIdMatch?.[1] || statusMatch?.[1] !== 'completed') return null;
+    if (!taskIdMatch?.[1] || !statusMatch?.[1]) return null;
+    if (!TERMINAL_TASK_STATUSES.has(statusMatch[1])) return null;
     return taskIdMatch[1];
   } catch {
     return null;
