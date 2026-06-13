@@ -2,6 +2,12 @@ import { Glob } from 'bun';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { makeAgentLabel, MAIN_SOURCE } from '../core/detector-interfaces.ts';
+import { isSubagentTool, SUBAGENT_TOOL_NAMES } from '../utils/format-tool.ts';
+
+/** 子字串前置過濾：避免每行都 JSON.parse；涵蓋所有 spawn tool 名稱 */
+const SPAWN_TOOL_PREFILTER: string[] = [...SUBAGENT_TOOL_NAMES].map(
+  (n) => `"name":"${n}"`
+);
 import type {
   OutputHandler,
   SessionHandler,
@@ -163,6 +169,109 @@ export function getSubagentsDir(sessionFilePath: string): string {
  */
 export function isValidAgentId(agentId: string): boolean {
   return /^[0-9a-f]{7,40}$/i.test(agentId);
+}
+
+/**
+ * 從一個 JSONL 檔案內所有 assistant message 的 tool_use 區段中，
+ * 收集 subagent spawn tool（Task / Agent — Claude Code 版本演進過的名稱）的
+ * (toolUseId, source) 配對。
+ * source 表示「誰呼叫了這次 tool_use」（主 session 或某個 subagent）。
+ *
+ * 用於 cold attach 時預跑：把所有歷史 spawn 關係蒐齊，再對應到每個既存
+ * subagent 的 meta.toolUseId，補出 [child◂parent] label。
+ */
+async function collectAgentSpawnsFromJsonl(
+  filePath: string,
+  source: string
+): Promise<Array<[string, string]>> {
+  const pairs: Array<[string, string]> = [];
+  try {
+    const text = await Bun.file(filePath).text();
+    for (const line of text.split('\n')) {
+      // 前置子字串檢查避免每行都 JSON.parse（熱路徑優化）
+      // 涵蓋 Task 與 Agent 兩種 spawn tool 名稱（與 isSubagentTool 一致）
+      if (!SPAWN_TOOL_PREFILTER.some((pat) => line.includes(pat))) continue;
+      try {
+        const data = JSON.parse(line) as {
+          type?: string;
+          message?: {
+            content?: Array<{ type?: string; name?: string; id?: string }>;
+          };
+        };
+        if (data.type !== 'assistant') continue;
+        const content = data.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const c of content) {
+          if (
+            c &&
+            c.type === 'tool_use' &&
+            typeof c.name === 'string' &&
+            isSubagentTool(c.name) &&
+            typeof c.id === 'string'
+          ) {
+            pairs.push([c.id, source]);
+          }
+        }
+      } catch {
+        /* skip non-JSON */
+      }
+    }
+  } catch {
+    /* skip missing/unreadable file */
+  }
+  return pairs;
+}
+
+/**
+ * Cold attach 時對所有既存 subagent 預解析 parent 關係。
+ *
+ * 流程：
+ * 1. 平行讀主 session 與每個 subagent JSONL，收集所有 Agent tool_use 的
+ *    (toolUseId → source) 配對（source = MAIN_SOURCE 或某 agentId）。
+ * 2. 平行讀每個 subagent 的 meta.json，用 meta.toolUseId 反查上表。
+ *
+ * @param subagentsDir subagents 目錄
+ * @param mainSessionPath 主 session JSONL 路徑
+ * @param agentIds 既存 subagent 的 id 集合
+ * @returns Map<agentId, parentAgentId | undefined>
+ *   - undefined：parent 是主 session（label 維持 `[child]`）或查不到
+ *   - 字串：nested parent 的 agentId（label 為 `[child◂parent]`）
+ */
+export async function resolveExistingParents(
+  subagentsDir: string,
+  mainSessionPath: string,
+  agentIds: Iterable<string>
+): Promise<Map<string, string | undefined>> {
+  const ids = [...agentIds];
+  const parentMap = new Map<string, string | undefined>();
+  if (ids.length === 0) return parentMap;
+
+  // 1. 平行收集所有 Agent tool_use 的 (toolUseId → source)
+  const collectionTasks: Array<Promise<Array<[string, string]>>> = [
+    collectAgentSpawnsFromJsonl(mainSessionPath, MAIN_SOURCE),
+    ...ids.map((id) =>
+      collectAgentSpawnsFromJsonl(buildSubagentPath(subagentsDir, id), id)
+    ),
+  ];
+  const collected = await Promise.all(collectionTasks);
+  const spawnSources = new Map(collected.flat());
+
+  // 2. 平行讀每個 subagent 的 meta.json（cold attach 檔案穩定，retry=0）
+  const metaResults = await Promise.all(
+    ids.map(async (id) => ({
+      id,
+      meta: await readSubagentMeta(subagentsDir, id, 0, 0),
+    }))
+  );
+
+  // 3. 反查
+  for (const { id, meta } of metaResults) {
+    const source = meta?.toolUseId
+      ? spawnSources.get(meta.toolUseId)
+      : undefined;
+    parentMap.set(id, source && source !== MAIN_SOURCE ? source : undefined);
+  }
+  return parentMap;
 }
 
 /**
