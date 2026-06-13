@@ -87,13 +87,31 @@ function sanitizeColumn(s: string): string {
 }
 
 /**
+ * Render the TITLE column with explicit visual distinction:
+ *   - customTitle (user-set / `/rename`): plain text — full visual weight
+ *   - autoTitle (derived from first user prompt): `› TEXT` dimmed — subtle signal
+ *     that this is a derived hint, not authoritative
+ *   - neither: dim em-dash `—`
+ */
+function formatTitleColumn(item: SessionListItem, color: boolean): string {
+  if (item.customTitle) {
+    return sanitizeColumn(item.customTitle);
+  }
+  if (item.autoTitle) {
+    const text = sanitizeColumn(`› ${item.autoTitle}`);
+    return color ? colorChalk.dim(text) : text;
+  }
+  return color ? colorChalk.dim('—') : '—';
+}
+
+/**
  * Format a list of sessions as tab-separated lines per SPEC §11.3 / §11.4.
  *
  * Columns (tab-separated):
  *   0 TYPE   'sess' | 'wf'  (cyan / magenta when color=true)
  *   1 ID     short identifier
  *   2 TIME   relative time
- *   3 TITLE  customTitle ?? '(no custom title)'
+ *   3 TITLE  customTitle | dim('› ' + autoTitle) | dim('—')
  *   4 NOTES  see {@link formatNotes}
  *   5 HID    hidden full id (see {@link hiddenFullId}); fzf --with-nth 1..5 hides it
  */
@@ -117,7 +135,7 @@ export function formatSessionList(
       typeStr,
       sanitizeColumn(item.shortId),
       formatRelativeTime(item.lastActivityTime ?? item.mtime),
-      sanitizeColumn(item.customTitle ?? '(no custom title)'),
+      formatTitleColumn(item, options.color),
       sanitizeColumn(formatNotes(item)),
       hiddenFullId(item),
     ];

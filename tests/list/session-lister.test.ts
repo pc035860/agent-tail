@@ -129,16 +129,43 @@ describe('formatSessionList (SPEC §11.3 + §11.4 6-col contract)', () => {
     expect(parts[5]).toBe('abc12345-1234-1234-1234-123456789abc');
   });
 
-  test('main session without custom title: TITLE renders "(no custom title)"', () => {
+  test('main session without custom title or auto title: TITLE renders dim em-dash', () => {
     const item = makeItem({
       shortId: 'abc12345',
       agentType: 'claude',
       project: 'my-project',
       path: '/tmp/abc12345-1234-1234-1234-123456789abc.jsonl',
     });
-    const result = formatSessionList([item], { color: false });
-    const parts = result[0]!.split('\t');
-    expect(parts[3]).toBe('(no custom title)');
+    // color=false (plain) → raw '—'
+    const plain = formatSessionList([item], { color: false });
+    expect(plain[0]!.split('\t')[3]).toBe('—');
+  });
+
+  test('main session with autoTitle but no customTitle: TITLE prefixed "› "', () => {
+    const item = makeItem({
+      shortId: 'abc12345',
+      agentType: 'claude',
+      project: 'my-project',
+      path: '/tmp/abc12345-1234-1234-1234-123456789abc.jsonl',
+    });
+    item.autoTitle = '/eshop-deploy ec-frontend, stag+prod';
+    const plain = formatSessionList([item], { color: false });
+    expect(plain[0]!.split('\t')[3]).toBe(
+      '› /eshop-deploy ec-frontend, stag+prod'
+    );
+  });
+
+  test('customTitle wins over autoTitle (autoTitle ignored)', () => {
+    const item = makeItem({
+      shortId: 'abc12345',
+      agentType: 'claude',
+      project: 'my-project',
+      path: '/tmp/abc12345-1234-1234-1234-123456789abc.jsonl',
+      customTitle: 'real user-set title',
+    });
+    item.autoTitle = 'fallback derived';
+    const plain = formatSessionList([item], { color: false });
+    expect(plain[0]!.split('\t')[3]).toBe('real user-set title');
   });
 
   test('main session without project: NOTES is empty string (tabs preserved)', () => {
