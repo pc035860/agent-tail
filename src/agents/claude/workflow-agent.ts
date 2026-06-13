@@ -175,8 +175,10 @@ export class WorkflowSessionFinder implements SessionFinder {
           status = snap.status;
         }
       } catch {
-        // Snapshot read/parse failure — degrade gracefully (entry still
-        // listed with runId-derived fallback customTitle).
+        // Snapshot read/parse failure — degrade gracefully. listSessions 不再
+        // 用 runId 補 fallback autoTitle（看不出資訊量）；findLatest /
+        // findBySessionId 內部仍保留 customTitle='wf:<runId>' 作為 dispatcher
+        // 模式判斷的契約（見下方 isWorkflowMode 在 src/index.ts:382 的用法）。
       }
 
       const title = workflowName ?? runId;

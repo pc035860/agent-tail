@@ -92,9 +92,11 @@ export interface SessionListItem extends SessionFile {
   /** 最後活動時間（從 session 內容讀取，比 file mtime 更準確） */
   lastActivityTime?: Date;
   /**
-   * 自動推導的標題，從首個 user prompt 抽出（slash command、scheduled-task name、
-   * 或裸 text）。只有 customTitle 缺席時才填，formatSessionList 會視覺區分。
-   * Claude only。
+   * 自動推導的標題（不是使用者透過 /rename 設定的權威名稱）。
+   *  - main session（Claude only）：從首個 user prompt 抽出
+   *    （slash command / scheduled-task name / 裸 text）；只有 customTitle 缺席時才填。
+   *  - workflow row：由 snapshot 的 workflowName 帶入。
+   * formatSessionList 統一渲染為 `dim('› TEXT')` 與 customTitle 視覺區分。
    */
   autoTitle?: string;
   /** 類型：main session 或 workflow run（default 視為 'session'） */
