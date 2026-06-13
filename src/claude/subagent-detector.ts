@@ -667,6 +667,9 @@ export class SubagentDetector {
 
   private tryWatchSubagentsDir(): void {
     if (!this.isWatching) return;
+    // 防 duplicate：parent fs.watch 可能連續多次 fire（同步 queued events），
+    // 已 attach 就跳過避免蓋寫 dirWatcher handle 與 leak 前一個 watcher
+    if (this.dirWatcher) return;
 
     try {
       this.parentWatcher?.close();

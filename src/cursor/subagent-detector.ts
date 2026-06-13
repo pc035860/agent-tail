@@ -30,6 +30,14 @@ const SUBAGENT_FILE_RETRY: RetryConfig = {
  */
 const SUBAGENTS_DIR_POLL_BACKUP_MS = 500;
 
+/**
+ * subagents/ 與其父目錄都不存在時的指數退避 retry，1s, 2s, 4s, 8s, 16s, 30s, 30s...
+ * Cursor 不像 Claude 有 JSONL event fallback，必須持續輪詢直到 dir 出現，
+ * 否則漏掉 parent fs.watch event 會永久 stuck。
+ */
+const SUBAGENTS_DIR_RETRY_DELAY_MS = 1000;
+const SUBAGENTS_DIR_RETRY_MAX_DELAY_MS = 30000;
+
 // ============================================================
 // CursorSubagentDetector
 // ============================================================
@@ -54,6 +62,7 @@ export class CursorSubagentDetector {
   private isWatching = false;
   private pendingTimers: Set<ReturnType<typeof setTimeout>> = new Set();
   private dirPollTimer: ReturnType<typeof setInterval> | null = null;
+  private dirRetryAttempts = 0;
   private stopped = false;
 
   constructor(
@@ -125,6 +134,7 @@ export class CursorSubagentDetector {
     }
     this.pendingTimers.clear();
     this._clearDirPollBackup();
+    this.dirRetryAttempts = 0;
     this.dirWatcher?.close();
     this.dirWatcher = null;
     this.parentWatcher?.close();
@@ -171,17 +181,20 @@ export class CursorSubagentDetector {
       this.dirWatcher.on('error', () => {
         this.dirWatcher?.close();
         this.dirWatcher = null;
-        // dir 掉了 → 停 polling；cursor 沒有指數退避 retry，再 attach 由
-        // 上層或下次 startDirectoryWatch 處理
+        // dir 掉了 → 停 polling、退到 retry 退避；dir 回來再 attach
         this._clearDirPollBackup();
+        this._scheduleSubagentsDirRetry();
       });
-      // 成功 attach → 啟動 polling backup
+      // 成功 attach → 重置 retry 計數 + 啟動 polling backup
+      this.dirRetryAttempts = 0;
       this._startDirPollBackup();
       // 目錄建立後先掃描一次
       this.scheduleScan();
     } catch {
-      // subagents 目錄可能尚未建立，改監控父層目錄
+      // subagents 目錄可能尚未建立，改監控父層目錄 + 排程退避 retry
+      // （fs.watch 漏 parent event 也有 retry 兜底）
       this.watchParentForSubagentsDir();
+      this._scheduleSubagentsDirRetry();
     }
   }
 
@@ -197,10 +210,35 @@ export class CursorSubagentDetector {
       this.parentWatcher.on('error', () => {
         this.parentWatcher?.close();
         this.parentWatcher = null;
+        // parent watcher 掉了 → 排 retry，否則永久 stuck
+        this._scheduleSubagentsDirRetry();
       });
     } catch {
-      // ignore
+      // 父層也不存在 → 排 retry
+      this._scheduleSubagentsDirRetry();
     }
+  }
+
+  /**
+   * subagents/ 與其父目錄都不存在時排程 retry（指數退避，上限 30s）。
+   * Cursor 沒有 JSONL spawn event 補強，必須持續 retry 直到目錄出現，
+   * 否則漏 fs.watch event 後永遠不會 attach。
+   */
+  private _scheduleSubagentsDirRetry(): void {
+    if (!this.isWatching) return;
+    const delay = Math.min(
+      SUBAGENTS_DIR_RETRY_DELAY_MS * 2 ** this.dirRetryAttempts,
+      SUBAGENTS_DIR_RETRY_MAX_DELAY_MS
+    );
+    this.dirRetryAttempts++;
+    const timer = setTimeout(() => {
+      this.pendingTimers.delete(timer);
+      if (!this.isWatching) return;
+      // 同時間其他路徑（parent watch 觸發）已 attach 就跳過
+      if (this.dirWatcher) return;
+      this.tryWatchSubagentsDir();
+    }, delay);
+    this.pendingTimers.add(timer);
   }
 
   private registerNewAgent(agentId: string): void {
