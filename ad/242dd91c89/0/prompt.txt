@@ -130,3 +130,24 @@ None. The new additions don't duplicate any clearly reusable existing utility ve
 Net: no must-fix duplication. The biggest win is unifying the two file-retry shapes (#1) under `RetryConfig`.</result>
 <usage><subagent_tokens>74233</subagent_tokens><tool_uses>19</tool_uses><duration_ms>85158</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>bo1u70z52</task-id>
+<summary>Monitor event: "watch nested label appearance in e2e-smoke log"</summary>
+<event>&lt;summary&gt;Agent "smoke L1" completed&lt;/summary&gt;
+New subagent detected: a57cb1790a39bb01e [a57cb1790a39bb01e◂a91ba165633b5875c]
+[pane] Opening pane for a57cb1790a39bb01e...</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b35m46xdd</task-id>
+<tool-use-id>toolu_01HDAbofZnPAZGGVfP5AE33i</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-git-agent-tail/030aecf6-cf9d-4c77-8308-cac279d87004/tasks/b35m46xdd.output</output-file>
+<status>completed</status>
+<summary>Background command "等到 nested label 出現" completed (exit code 0)</summary>
+</task-notification>
