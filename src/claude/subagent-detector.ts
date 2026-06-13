@@ -546,8 +546,8 @@ export class SubagentDetector {
 
     if (isAlreadyMonitored) {
       // 已經監控中，表示之前透過 early detection 發現過
-      // 輸出完成訊息，觸發 onSubagentDone（關閉 pane）
-      this.config.output.warn(`Subagent completed: ${agentId}`);
+      // 輸出終止訊息（涵蓋 completed/failed/killed），觸發 onSubagentDone（關閉 pane）
+      this.config.output.warn(`Subagent finished: ${agentId}`);
     } else {
       // 首次發現且已完成：不開 pane，只註冊監控
       this.knownAgentIds.add(agentId);
@@ -567,7 +567,7 @@ export class SubagentDetector {
 
       if (this.config.enabled) {
         this.config.output.warn(
-          `New subagent detected (completed): ${agentId}`
+          `New subagent detected (already finished): ${agentId}`
         );
 
         // 非阻塞式新增檔案監控（但不觸發 onNewSubagent，因為已完成）
@@ -593,7 +593,7 @@ export class SubagentDetector {
     // toolUseResult 表示 subagent 已完成
     if (this.config.session?.markSessionDone) {
       this.config.session.markSessionDone(agentId);
-      this.config.output.debug(`Subagent completed: ${agentId}`);
+      this.config.output.debug(`Subagent finished: ${agentId}`);
     }
     this.config.session?.updateUI?.();
 
