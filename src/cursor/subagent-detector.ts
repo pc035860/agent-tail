@@ -188,8 +188,13 @@ export class CursorSubagentDetector {
         this._clearDirPollBackup();
         this._scheduleSubagentsDirRetry();
       });
-      // 成功 attach → 重置 retry 計數 + 啟動 polling backup
+      // 成功 attach → 重置 retry 計數 + 清 stale pending retry + 啟動 polling
       this.dirRetryAttempts = 0;
+      if (this.pendingDirRetryTimer) {
+        clearTimeout(this.pendingDirRetryTimer);
+        this.pendingTimers.delete(this.pendingDirRetryTimer);
+        this.pendingDirRetryTimer = null;
+      }
       this._startDirPollBackup();
       // 目錄建立後先掃描一次
       this.scheduleScan();
