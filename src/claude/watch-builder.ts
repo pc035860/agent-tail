@@ -15,6 +15,39 @@ export const SUPER_FOLLOW_POLL_MS = 500;
 export const SUPER_FOLLOW_DELAY_MS = 5000;
 
 /**
+ * 解析主 session 內 queue-operation + task-notification 訊號，
+ * 回傳 status === 'completed' 的 task-id（其他狀態 / 解析失敗皆回 null）。
+ *
+ * 為什麼這條路徑必要：Claude Code 對 nested subagent 完成的通知只寫進主 session
+ * （以 type=queue-operation 包 task-notification XML 字串），parent subagent
+ * 的 JSONL 完全沒有 toolUseResult.agentId=nested 這類事件。要關 nested pane /
+ * 在 -i Tab 列打 ✓ 必須走這條。
+ *
+ * Exported for direct testing.
+ */
+export function parseQueueOperationCompletion(line: string): string | null {
+  // 子字串前置過濾，避免每行都 JSON.parse
+  if (
+    !line.includes('"queue-operation"') ||
+    !line.includes('<task-notification>')
+  ) {
+    return null;
+  }
+  try {
+    const data = JSON.parse(line) as { type?: string; content?: string };
+    if (data.type !== 'queue-operation' || typeof data.content !== 'string') {
+      return null;
+    }
+    const taskIdMatch = data.content.match(/<task-id>([^<]+)<\/task-id>/);
+    const statusMatch = data.content.match(/<status>([^<]+)<\/status>/);
+    if (!taskIdMatch?.[1] || statusMatch?.[1] !== 'completed') return null;
+    return taskIdMatch[1];
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 從 subagent JSONL 檔案讀取最後一條 assistant 訊息的所有 ParsedLine parts
  * 用於在 pane 關閉前回顯 subagent 的最終報告
  */
@@ -138,6 +171,16 @@ export function createOnLineHandler(
       }
     }
 
+    // queue-operation + task-notification: Claude Code 對 subagent 完成的真正訊號
+    // 包含主 spawn 與 nested。實測 nested 完成的 task-notification 只寫進主 session
+    // （不在 parent subagent JSONL），所以這條路徑只在 MAIN 觸發。
+    if (label === MAIN_LABEL) {
+      const completedTaskId = parseQueueOperationCompletion(line);
+      if (completedTaskId) {
+        config.detector.handleFallbackDetection(completedTaskId);
+      }
+    }
+
     let parser = config.parsers.get(label);
     if (!parser) {
       const newAgent = new ClaudeAgent({ verbose: config.verbose });
@@ -179,6 +222,8 @@ export function createOnLineHandler(
       }
 
       // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
+      // 注意：main 的 toolUseResult.agentId 在 spawn 時就出現（status=async_launched），
+      // 真正的「完成」訊號要看 queue-operation / task-notification（下方處理）。
       if (label === MAIN_LABEL) {
         const raw = parsed.raw as {
           toolUseResult?: {

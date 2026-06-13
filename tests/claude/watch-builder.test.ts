@@ -10,10 +10,12 @@ import {
   buildSubagentFiles,
   createOnLineHandler,
   createSuperFollowController,
+  parseQueueOperationCompletion,
   readLastAssistantMessage,
   SUPER_FOLLOW_POLL_MS,
   type OnLineHandlerConfig,
 } from '../../src/claude/watch-builder';
+import { SubagentDetector as RealSubagentDetector } from '../../src/claude/subagent-detector';
 import {
   MAIN_LABEL,
   makeAgentLabel,
@@ -511,7 +513,12 @@ describe('createOnLineHandler', () => {
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
   });
 
-  test('non-[MAIN] label does NOT trigger earlyDetection or pushDescription', () => {
+  test('non-[MAIN] label does NOT trigger earlyDetection / pushDescription / fallbackDetection', () => {
+    // earlyDetection / pushDescription are MAIN-only by design.
+    // Fallback detection (toolUseResult.agentId) is also MAIN-only — nested
+    // completion does NOT show up in parent subagent's JSONL; it's emitted as
+    // queue-operation/task-notification in MAIN. See `queue-operation` handler
+    // below for nested completion routing.
     const detector = createMockDetector();
     const parsed = createMockParsedLine({
       isTaskToolUse: true,
@@ -546,6 +553,201 @@ describe('createOnLineHandler', () => {
     expect(detector.earlyDetectionCalls).toBe(0);
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
     expect(detector.pushDescriptionCalls).toHaveLength(0);
+  });
+
+  // Phase 4: nested subagent completion is reported only in MAIN's
+  // queue-operation lines (the parent subagent's JSONL doesn't carry the
+  // task-notification). Parsing the embedded XML and routing through
+  // handleFallbackDetection drives markSessionDone (✓ tick) + onSubagentDone
+  // (close nested pane).
+  test('[MAIN] queue-operation with task-notification status=completed → fallbackDetection(taskId)', () => {
+    const detector = createMockDetector();
+    const config: OnLineHandlerConfig = {
+      parsers: new Map(),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+    const handler = createOnLineHandler(config);
+
+    const line = JSON.stringify({
+      type: 'queue-operation',
+      operation: 'enqueue',
+      content:
+        '<task-notification>\n<task-id>aacdade58f602a790</task-id>\n<tool-use-id>toolu_xyz</tool-use-id>\n<status>completed</status>\n</task-notification>',
+    });
+    handler(line, '[MAIN]');
+
+    expect(detector.fallbackDetectionCalls).toEqual(['aacdade58f602a790']);
+  });
+
+  test('[MAIN] queue-operation with status != completed → no fallbackDetection', () => {
+    const detector = createMockDetector();
+    const config: OnLineHandlerConfig = {
+      parsers: new Map(),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+    const handler = createOnLineHandler(config);
+
+    const line = JSON.stringify({
+      type: 'queue-operation',
+      operation: 'enqueue',
+      content:
+        '<task-notification>\n<task-id>aacdade58f602a790</task-id>\n<status>running</status>\n</task-notification>',
+    });
+    handler(line, '[MAIN]');
+
+    expect(detector.fallbackDetectionCalls).toHaveLength(0);
+  });
+
+  // Helper-level tests — covers regex/JSON edge cases without going through
+  // the full createOnLineHandler pipeline.
+  describe('parseQueueOperationCompletion (helper)', () => {
+    test('happy path: returns task-id', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification>\n<task-id>aacd1234567890ab</task-id>\n<status>completed</status>\n</task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBe('aacd1234567890ab');
+    });
+
+    test('status=running → null', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><task-id>x</task-id><status>running</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('status=failed → null (only completed is treated as terminal)', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><task-id>x</task-id><status>failed</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('wrong top-level type → null', () => {
+      const line = JSON.stringify({
+        type: 'user',
+        content:
+          '<task-notification><task-id>x</task-id><status>completed</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('missing <task-id> → null', () => {
+      const line = JSON.stringify({
+        type: 'queue-operation',
+        content:
+          '<task-notification><status>completed</status></task-notification>',
+      });
+      expect(parseQueueOperationCompletion(line)).toBeNull();
+    });
+
+    test('non-JSON line → null', () => {
+      expect(parseQueueOperationCompletion('not json at all')).toBeNull();
+    });
+
+    test('prefilter rejects unrelated lines fast (no JSON parse)', () => {
+      // Line lacks both prefilter substrings — must short-circuit to null.
+      expect(parseQueueOperationCompletion('{"type":"assistant"}')).toBeNull();
+    });
+  });
+
+  // Integration: real SubagentDetector — drive a queue-operation completion
+  // event and verify ✓ tick + onSubagentDone (pane close) end-to-end.
+  test('queue-operation drives markSessionDone + onSubagentDone via real detector', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wb-qo-int-'));
+    try {
+      const subagentsDir = join(tmpDir, 'subagents');
+      await mkdir(subagentsDir, { recursive: true });
+
+      // Track session lifecycle and pane events
+      const sessionDoneCalls: string[] = [];
+      const subagentDoneCalls: string[] = [];
+
+      const detector = new RealSubagentDetector(
+        new Set(['aacdade1']), // nested already known (cold attach scenario)
+        {
+          subagentsDir,
+          output: {
+            info: () => {},
+            warn: () => {},
+            error: () => {},
+            debug: () => {},
+          },
+          watcher: { addFile: async () => {} },
+          enabled: true,
+          watchDir: false,
+          session: {
+            addSession: () => {},
+            markSessionDone: (id: string) => {
+              sessionDoneCalls.push(id);
+            },
+            updateUI: () => {},
+          },
+          // hasPane returns true → triggers onSubagentDone
+          hasPane: () => true,
+          onSubagentDone: (id: string) => {
+            subagentDoneCalls.push(id);
+          },
+        }
+      );
+
+      const config: OnLineHandlerConfig = {
+        parsers: new Map(),
+        formatter: createMockFormatter(),
+        detector,
+        onOutput: () => {},
+        verbose: false,
+      };
+      const handler = createOnLineHandler(config);
+
+      const completionLine = JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        content:
+          '<task-notification>\n<task-id>aacdade1</task-id>\n<status>completed</status>\n</task-notification>',
+      });
+
+      handler(completionLine, '[MAIN]');
+
+      expect(sessionDoneCalls).toContain('aacdade1');
+      expect(subagentDoneCalls).toContain('aacdade1');
+
+      detector.stop();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('non-[MAIN] queue-operation does NOT trigger fallbackDetection (defensive)', () => {
+    const detector = createMockDetector();
+    const config: OnLineHandlerConfig = {
+      parsers: new Map(),
+      formatter: createMockFormatter(),
+      detector,
+      onOutput: () => {},
+      verbose: false,
+    };
+    const handler = createOnLineHandler(config);
+
+    const line = JSON.stringify({
+      type: 'queue-operation',
+      content:
+        '<task-notification><task-id>xxxxxxx</task-id><status>completed</status></task-notification>',
+    });
+    handler(line, '[someagent]');
+
+    expect(detector.fallbackDetectionCalls).toHaveLength(0);
   });
 
   // Phase 2: recordSpawn is the only detector hook called from non-MAIN labels.
