@@ -234,25 +234,12 @@ export function createOnLineHandler(
         config.workflowDetector?.handleMainLine(parsed);
       }
 
-      // 備援機制：從主 session 的 toolUseResult 檢查新 subagent
-      // 注意：main 的 toolUseResult.agentId 在 spawn 時就出現（status=async_launched），
-      // 真正的「完成」訊號要看 queue-operation / task-notification（下方處理）。
-      if (label === MAIN_LABEL) {
-        const raw = parsed.raw as {
-          toolUseResult?: {
-            agentId?: string;
-            commandName?: string;
-            status?: string;
-          };
-        };
-        const agentId = raw?.toolUseResult?.agentId;
-        const commandName = raw?.toolUseResult?.commandName;
-        const status = raw?.toolUseResult?.status;
-
-        if (agentId && !commandName && status !== 'forked') {
-          config.detector.handleFallbackDetection(agentId);
-        }
-      }
+      // NOTE: 移除舊的 toolUseResult.agentId fallback 路徑。
+      // 主 session 的 toolUseResult.agentId 只在 spawn 時出現（status=async_launched），
+      // 與「完成」毫無關係。完成偵測由上面 queue-operation/task-notification 路徑負責，
+      // spawn-time 偵測由 recordSpawn + early detection 負責。舊條件 `status !== 'forked'`
+      // 沒擋住 async_launched → 每次 spawn 都會誤觸發 markSessionDone → Tab 在 subagent
+      // 還在跑時就打 ✓。此整段不再需要。
 
       // === Output (subject to suppression) ===
       // Phase 2.3: 過濾已有 pane 的 subagent 輸出
