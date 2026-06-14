@@ -412,44 +412,20 @@ describe('createOnLineHandler', () => {
     expect(detector.agentProgressCalls).toHaveLength(0);
   });
 
-  test('label [MAIN] with toolUseResult.agentId (no commandName) triggers handleFallbackDetection', () => {
-    const detector = createMockDetector();
-    const parsed = createMockParsedLine({
-      raw: { toolUseResult: { agentId: 'abc1234' } },
-    });
-
-    const mockParser: LineParser = {
-      parse: (() => {
-        let called = false;
-        return () => {
-          if (!called) {
-            called = true;
-            return parsed;
-          }
-          return null;
-        };
-      })(),
-    };
-
-    const config: OnLineHandlerConfig = {
-      parsers: new Map([['[MAIN]', mockParser]]),
-      formatter: createMockFormatter(),
-      detector,
-      onOutput: () => {},
-      verbose: false,
-    };
-
-    const handler = createOnLineHandler(config);
-    handler('{}', '[MAIN]');
-
-    expect(detector.fallbackDetectionCalls).toContain('abc1234');
-  });
-
-  test('forked slash command (commandName present) does NOT trigger fallback', () => {
+  // Regression: 主 session 的 toolUseResult.agentId 在 spawn 時就出現
+  // （status='async_launched'），它**不是**完成訊號。舊版的 fallback path
+  // 用 `status !== 'forked'` 當守門，沒擋住 async_launched → 每次 spawn 都
+  // 誤觸發 handleFallbackDetection → markSessionDone → -i Tab 在 subagent
+  // 還在跑時就打 ✓。修法：直接拆掉整段 fallback；完成由 queue-operation
+  // 路徑負責，spawn 由 recordSpawn + early detection 負責。
+  test('async_launched toolUseResult on [MAIN] does NOT trigger handleFallbackDetection (regression)', () => {
     const detector = createMockDetector();
     const parsed = createMockParsedLine({
       raw: {
-        toolUseResult: { agentId: 'abc1234', commandName: '/some-command' },
+        toolUseResult: {
+          agentId: 'aecfdcaa4a7654af0',
+          status: 'async_launched',
+        },
       },
     });
 
@@ -480,50 +456,14 @@ describe('createOnLineHandler', () => {
     expect(detector.fallbackDetectionCalls).toHaveLength(0);
   });
 
-  test('forked slash command (status=forked) does NOT trigger fallback', () => {
-    const detector = createMockDetector();
-    const parsed = createMockParsedLine({
-      raw: { toolUseResult: { agentId: 'abc1234', status: 'forked' } },
-    });
-
-    const mockParser: LineParser = {
-      parse: (() => {
-        let called = false;
-        return () => {
-          if (!called) {
-            called = true;
-            return parsed;
-          }
-          return null;
-        };
-      })(),
-    };
-
-    const config: OnLineHandlerConfig = {
-      parsers: new Map([['[MAIN]', mockParser]]),
-      formatter: createMockFormatter(),
-      detector,
-      onOutput: () => {},
-      verbose: false,
-    };
-
-    const handler = createOnLineHandler(config);
-    handler('{}', '[MAIN]');
-
-    expect(detector.fallbackDetectionCalls).toHaveLength(0);
-  });
-
-  test('non-[MAIN] label does NOT trigger earlyDetection / pushDescription / fallbackDetection', () => {
+  test('non-[MAIN] label does NOT trigger earlyDetection / pushDescription', () => {
     // earlyDetection / pushDescription are MAIN-only by design.
-    // Fallback detection (toolUseResult.agentId) is also MAIN-only — nested
-    // completion does NOT show up in parent subagent's JSONL; it's emitted as
-    // queue-operation/task-notification in MAIN. See `queue-operation` handler
-    // below for nested completion routing.
+    // Nested-spawn detection happens via the parent's queue-operation in MAIN
+    // (see `queue-operation` handler below), not via the parent subagent's JSONL.
     const detector = createMockDetector();
     const parsed = createMockParsedLine({
       isTaskToolUse: true,
       taskDescription: 'should not push',
-      raw: { toolUseResult: { agentId: 'abc1234' } },
     });
 
     const mockParser: LineParser = {
@@ -551,7 +491,6 @@ describe('createOnLineHandler', () => {
     handler('{}', '[abc1234]');
 
     expect(detector.earlyDetectionCalls).toBe(0);
-    expect(detector.fallbackDetectionCalls).toHaveLength(0);
     expect(detector.pushDescriptionCalls).toHaveLength(0);
   });
 
