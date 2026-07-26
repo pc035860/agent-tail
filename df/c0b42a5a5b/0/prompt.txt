@@ -1,0 +1,29 @@
+我最近跑 agent-pick 覺得啟動時間有點久，幫我檢查一下可能原因
+整理一下，跟我討論下一步動作
+
+---
+
+我 codex 跟 claude 都蠻常看的
+
+---
+
+先只做 phase 1 好了
+我用一陣子看看再考慮後續
+
+---
+
+跑 /review-loop (codex)
+
+---
+
+suggestion 挑 roi 高的做掉
+
+---
+
+做完後續跑 review-loop
+完成後
+Run
+
+- commit + push\
+- lap:checkpoint\
+- session-note
