@@ -1,0 +1,19 @@
+你 checkpoint 是怎麼跑的
+
+---
+
+你 checkpoint 是怎麼跑的
+是有用 subagent 嗎？  你能開 forked subagent ?
+
+---
+
+是說 fzf 的預覽快速鍵是 ctrl + /
+這是可以改的嗎？  因為我跑在 herdr 裡時這個快速鍵好像用不了
+
+---
+
+試試 ctrl-p
+
+---
+
+試一下 ctrl-e
