@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "05b20a72fff2",
+  "strategy": "manual-commit",
+  "branch": "feat/auto-title-from-prompt",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/agents/claude/claude-agent.ts",
+    "src/core/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/05/b20a72fff2/0/metadata.json",
+      "transcript": "/05/b20a72fff2/0/full.jsonl",
+      "content_hash": "/05/b20a72fff2/0/content_hash.txt",
+      "prompt": "/05/b20a72fff2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1419,
+    "cache_creation_tokens": 3261490,
+    "cache_read_tokens": 192104044,
+    "output_tokens": 355009,
+    "api_call_count": 486
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "ab1b56884b70",
+  "session_id": "030aecf6-cf9d-4c77-8308-cac279d87004",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T05:17:43.740142Z",
+  "branch": "feat/nested-subagent-display",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "7230daf39ea9",
+  "token_usage": {
+    "input_tokens": 1168,
+    "cache_creation_tokens": 936510,
+    "cache_read_tokens": 105924302,
+    "output_tokens": 250877,
+    "api_call_count": 338
+  },
+  "session_metrics": {
+    "turn_count": 7
+  }
+}

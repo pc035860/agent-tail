@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "8a48d6a65619",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/claude-workflow/snapshot-watcher.ts",
+    "src/claude/subagent-detector.ts",
+    "src/cursor/subagent-detector.ts",
+    "tests/claude-workflow/snapshot-watcher.test.ts",
+    "tests/claude-workflow/workflow-detector.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8a/48d6a65619/0/metadata.json",
+      "transcript": "/8a/48d6a65619/0/full.jsonl",
+      "content_hash": "/8a/48d6a65619/0/content_hash.txt",
+      "prompt": "/8a/48d6a65619/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 44804,
+    "cache_read_tokens": 6265957,
+    "output_tokens": 19160,
+    "api_call_count": 34
+  }
+}

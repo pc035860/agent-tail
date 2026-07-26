@@ -1,0 +1,176 @@
+<task-notification>
+<task-id>a4e7b481fee52951e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-git-agent-tail/030aecf6-cf9d-4c77-8308-cac279d87004/tasks/a4e7b481fee52951e.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency Review" completed</summary>
+<result>I have sufficient context. Here are the efficiency findings:
+
+---
+
+## Efficiency Review: `feat/nested-subagent-display`
+
+### HIGH
+
+**H1. `readSubagentMeta` worst-case latency = 300ms per registration** (`src/claude/subagent-detector.ts:123-146`)
+Loop bound is `attempt &lt;= retries` (i.e. 6 iterations when `retries=5`), with a sleep on every non-final iteration. Worst case for a missing meta.json: 6 stat-checks + 5×50ms sleeps = **250ms**, not 250ms inclusive. Then `lookupParentWithRetry` adds up to another **150ms** sequentially (4 attempts × 50ms × 3 sleeps). Total worst case to register a subagent whose meta.json never lands: **~400ms** of timer-blocked latency before `tryAddSubagentFile` is even scheduled (which itself adds `retryConfig.initialDelay`).
+
+Since `finalizeRegistration` is fire-and-forget per agent, parallel spawns each pay this independently — fine for concurrency, but the per-agent floor for `--pane` open is now noticeably higher than before. **Recommendation**: lower default `retries` to 3 (≈150ms cap) for the common-case main-spawn where meta.json should already exist at write-time, or skip meta entirely when `queuedDescription` is present AND label is being built without a parent (MAIN spawn path). Per your context: "always read meta.json" was the fix — the trade-off (added latency on the hot path) is not documented in the code, only in the inline comment about FIFO drift.
+
+**H2. `scheduleSubagentsDirRetry` polls forever with no backoff** (`subagent-detector.ts:581-590`)
+For a session that never spawns subagents (or where the user passed `--with-subagents` speculatively), this fires every 1000ms for the entire session lifetime. Each tick re-enters `tryWatchSubagentsDir` → catches → falls into `watchParentForSubagentsDir` → catches → reschedules. **Recommendation**: exponential backoff capped at e.g. 30s, or cap at N attempts (Claude Code typically creates the dir within the first few seconds if it's going to). Even a simple jitter+cap would prevent the indefinite 1Hz timer churn for sessions that never produce subagents.
+
+### MEDIUM
+
+**M1. `readSubagentMeta` uses TOCTOU exists+text** (`subagent-detector.ts:132-134`)
+`Bun.file(metaPath).exists()` then `.text()` = two syscalls per attempt. Call `.text()` directly and catch `ENOENT` in the existing `try/catch`. Saves one syscall per attempt × up to 6 attempts × N subagents. Bonus: removes a real (if minor) TOCTOU window.
+
+**M2. Sequential meta-read → parent-lookup is theoretically parallelizable, but as you noted depends on `meta.toolUseId`** — confirmed not parallelizable. Skip.
+
+### LOW
+
+**L1. `recordSpawn` Map grows unbounded for session lifetime** (`subagent-detector.ts:307, 483-485`)
+~36 bytes/entry × total Task tool_uses. For a long-running session with hundreds of Task calls, this is still &lt;100KB. Cleared in `stop()`. Acceptable.
+
+**L2. Hot-path per-line cost negligible** (`watch-builder.ts:166-174`) — `parsed.isTaskToolUse &amp;&amp; parsed.taskToolUseId` is two property reads; `extractAgentIdFromLabel` is a `slice` + `indexOf`. Per-line cost is dominated by JSON.parse upstream. Skip.
+
+**L3. `pendingDescriptions` can still accumulate stale entries** when `registerNewAgent` skips a `knownAgentIds` hit (`subagent-detector.ts:597`) — but the meta-first fix means description mismatches no longer cause label mis-attribution. The list still grows, but bounded by Task count and cleared on `stop()`. Acceptable.
+
+**L4. `pendingTimers` cleanup**: `scheduleSubagentsDirRetry` correctly adds via `pendingTimers.add(timer)` and deletes inside the callback. `stop()` clears the set. Correct.
+
+### Summary
+
+The dominant real concern is **H1** (worst-case 400ms registration latency from the "always read meta.json" fix) and **H2** (forever-1Hz polling for sessions without subagents). Both are bounded and not catastrophic, but worth either tightening the retry budget or documenting the trade-off explicitly in code comments. Everything else is acceptable.</result>
+<usage><subagent_tokens>65500</subagent_tokens><tool_uses>4</tool_uses><duration_ms>44058</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afd4bb5cd32fa7880</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-git-agent-tail/030aecf6-cf9d-4c77-8308-cac279d87004/tasks/afd4bb5cd32fa7880.output</output-file>
+<status>completed</status>
+<summary>Agent "Code Quality Review" completed</summary>
+<result>Now I have everything I need. Writing concise findings.
+
+---
+
+## Code Quality Findings — `feat/nested-subagent-display`
+
+### HIGH
+
+**H1. `spawnRegistry` is monotonically growing in-memory map** — `src/claude/subagent-detector.ts:307`. Cleared only on `stop()`. Long sessions can accumulate thousands of `toolUseId → parentLabel` entries that are dead after their consumer subagent registers. The `lookupParentWithRetry` only reads each key once. Consider deleting on successful lookup (`spawnRegistry.delete(toolUseId)` inside `lookupParentWithRetry` after the hit) — same applies if non-hit after MAX_ATTEMPTS (TTL eviction). Not a bug, but unbounded growth in a long-lived TUI is a real quality issue.
+
+**H2. `pendingDescriptions` FIFO is now ambiguously used** — `subagent-detector.ts:303` + comment at 654-657. The diff's own comment admits the FIFO can carry stale entries that misroute. With meta.json now authoritative for `description`, `pendingDescriptions` only matters as a fallback when meta is missing. But it is still `shift()`-ed unconditionally at line 607, so even with meta present we burn a queue slot. If two parallel Tasks fire and meta is present for both, the stale-entry hazard described in the comment still applies on the *next* unrelated nested subagent. Suggestion: only `shift()` when `meta?.description` is absent — keeps FIFO aligned with its semantic purpose. This was the *whole point* of the "always read meta" change (per task context) but the FIFO consumption wasn't moved with it.
+
+### MEDIUM
+
+**M1. `finalizeRegistration` has 5 params, one (`message`) is dead-ish** — `subagent-detector.ts:647`. `message` is only used at 327 to build `annotatedMessage`. Easy win: build `message` inside `finalizeRegistration` from `agentId` (the only variable input), drop the param. Brings it to 4 params and removes a string-passed-through-async hop. Alternatively group into an options object as you suggested, but message-inlining is the simpler fix.
+
+**M2. `tryAddSubagentFile` 6th param `parentAgentId` is positional** — `subagent-detector.ts:255`. The function already takes a `config` object for retry. Cleaner: add `parentAgentId` into the call-site label builder and pass the pre-built label as a string param, OR fold `parentAgentId` into the `config` shape. The current signature now requires callers to know two label-related concepts.
+
+**M3. `lookupParentWithRetry` aliases module constants to local UPPER_CASE** — `subagent-detector.ts:625-626`. `const MAX_ATTEMPTS = PARENT_LOOKUP_MAX_ATTEMPTS` and `const DELAY_MS = PARENT_LOOKUP_DELAY_MS` are noise; use the module constants directly. The constants were already named for clarity.
+
+**M4. `scheduleSubagentsDirRetry` vs `scheduleScan` duplication** — `subagent-detector.ts:581`. Both: `if (!isWatching) return` → `setTimeout` → `pendingTimers.add/delete` → guard re-entry. `scheduleScan` (existing code) uses `SCAN_DEBOUNCE_MS`; new one uses `SUBAGENTS_DIR_RETRY_DELAY_MS`. Worth extracting `scheduleTimer(delay, fn)` private helper now that there are two of these. Not urgent.
+
+### LOW
+
+**L1. `MAIN_SOURCE` vs `MAIN_LABEL` naming** — `detector-interfaces.ts:53,60`. `MAIN_LABEL = '[MAIN]'` (output form), `MAIN_SOURCE = 'MAIN'` (spawnRegistry sentinel). The relationship `MAIN_SOURCE === MAIN_LABEL.slice(1,-1)` is implicit. Minor: derive one from the other (`MAIN_SOURCE = MAIN_LABEL.slice(1,-1)`) so they can't drift. Or document the invariant in a comment.
+
+**L2. `SubagentMeta` interface exported but only used internally** — `subagent-detector.ts:107`. Grep confirms no external consumers. Drop `export` until needed.
+
+**L3. `extractParentAgentIdFromLabel` exported but unused in src/** — `detector-interfaces.ts:93`. Only tests reference it. Either drop the export (test imports still work via the file path) or leave it for symmetry with `extractAgentIdFromLabel`. Mild dead-API concern.
+
+**L4. `extractAgentIdFromLabel` coupling to `◂`** — `detector-interfaces.ts:86`. Acceptable: core already owned the `[…]` label convention, so `◂` is a label-format extension, not a Claude leak. The function correctly handles both forms. Worth a one-line comment noting nested-subagent assumption is Claude-only today but the format is intentionally agent-neutral (Codex/Cursor could adopt).
+
+**L5. `parentLabel` parameter on `recordSpawn` is stringly-typed** — `subagent-detector.ts:482`. Could be `string | typeof MAIN_SOURCE` discriminated, but the cost (more types) vs. benefit (one extra compile-time check at one callsite) doesn't pay off. Leave it; the comment at the callsite (watch-builder.ts:173) is clear.
+
+**L6. Comment block re-ordering in `createOnLineHandler`** — `watch-builder.ts:154-208`. The "Metadata extraction" / "Output" split is fine, but the original "FIFO push + early detection scan" comment now reads slightly out-of-context at 158-159 since `recordSpawn` (also metadata) is separated from `pushDescription`+`handleEarlyDetection` by the `label === MAIN_LABEL` guard. Consider a single ordered list comment: "1. main-only: FIFO + early scan / 2. main+nested: recordSpawn / 3. (later) workflow / 4. output suppression".
+
+### Verification of "metadata before suppression" change
+Traced `createOnLineHandler` (watch-builder.ts:148-211): the suppression block now wraps both `onOutput` AND the title-update branch. Title updates require `label === MAIN_LABEL`, and `shouldOutput([MAIN])` is typically `true` in `--pane` mode (only subagents are suppressed). So titles still fire. **Verified correct.** But there is a subtle behavior change worth flagging: if a future caller passes `shouldOutput` that suppresses `[MAIN]`, real-time title updates die silently. Probably fine; just noting.</result>
+<usage><subagent_tokens>73840</subagent_tokens><tool_uses>7</tool_uses><duration_ms>63451</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a24b133cefec5fc12</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-git-agent-tail/030aecf6-cf9d-4c77-8308-cac279d87004/tasks/a24b133cefec5fc12.output</output-file>
+<status>completed</status>
+<summary>Agent "Code Reuse Review" completed</summary>
+<result>Now I have enough context. Let me write up the findings.
+
+---
+
+**Code Reuse Review: `feat/nested-subagent-display`**
+
+### HIGH
+None. The new additions don't duplicate any clearly reusable existing utility verbatim. `readSubagentMeta` is a whole-file JSON read against a tiny `agent-*.meta.json`; `session-time.ts` utilities are JSONL **tail/head chunk** readers with line-splitting and per-line `JSON.parse` — different shape, different use case, no clean reuse.
+
+### MEDIUM
+
+1. **Retry-loop shape inconsistency between `readSubagentMeta` and `tryAddSubagentFile`** (`src/claude/subagent-detector.ts:111-126` vs `:258-282`). Both are "exists() → retry" loops over the same `agent-*.{jsonl,meta.json}` filenames, but use opposite shapes:
+   - `tryAddSubagentFile` — recursive `doTry(retriesLeft)` driven by a `RetryConfig` (`maxRetries / retryDelay / initialDelay`), waits `initialDelay` first.
+   - `readSubagentMeta` — `for (attempt = 0; attempt &lt;= retries; attempt++)` with bare `retries` / `retryDelayMs` numbers, no `initialDelay`.
+   `RetryConfig` already exists in `src/core/detector-interfaces.ts` precisely for this (cited in CLAUDE.md as the canonical way to avoid magic numbers). Recommend defining `META_READ_RETRY: RetryConfig` and reusing the same `for`-loop shape — or extracting an `existsWithRetry(path, config)` helper used by both. `lookupParentWithRetry` (`:600-616`) is a third unrelated retry shape (`PARENT_LOOKUP_MAX_ATTEMPTS / PARENT_LOOKUP_DELAY_MS`), but it polls an in-memory `Map`, not a file — sharing isn't worth it there.
+
+2. **`scheduleSubagentsDirRetry` (`:583-592`) vs `scheduleScan` (`:508-529`) vs `handleEarlyDetection` setTimeout (`:353-374`)** all use the same idiom: `isWatching` guard → `setTimeout` → `pendingTimers.add/delete`. A tiny `schedulePending(cb, delayMs)` helper would deduplicate three call sites and reduce risk of forgetting to register the timer in `pendingTimers` (which is the leak path). Low-risk refactor.
+
+### LOW
+
+3. **`makeAgentLabel(parent?)` placement**: keeping the parent-aware variant in `core/detector-interfaces.ts` is correct. `makeCodexAgentLabel`/`makeCursorAgentLabel` already delegate to `makeAgentLabel`, so they automatically inherit parent support if Codex/Cursor ever need nested labels. Don't move it.
+
+4. **`recordSpawn(toolUseId, parentLabel: string)` parameter naming**: name says "Label" but values are agent **IDs** or `MAIN_SOURCE` sentinel — not bracket-wrapped labels. Rename to `parentSource` for clarity (`MAIN_SOURCE` already implies "source").
+
+5. **Watch-builder `MAIN_SOURCE` ternary** (`src/claude/watch-builder.ts:171-174`): `label === MAIN_LABEL ? MAIN_SOURCE : extractAgentIdFromLabel(label)` could be a one-liner helper `labelToParentSource(label)` colocated with `extractAgentIdFromLabel` in `core/detector-interfaces.ts`, since this is the canonical "label → spawnRegistry value" mapping.
+
+Net: no must-fix duplication. The biggest win is unifying the two file-retry shapes (#1) under `RetryConfig`.</result>
+<usage><subagent_tokens>74233</subagent_tokens><tool_uses>19</tool_uses><duration_ms>85158</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bo1u70z52</task-id>
+<summary>Monitor event: "watch nested label appearance in e2e-smoke log"</summary>
+<event>&lt;summary&gt;Agent "smoke L1" completed&lt;/summary&gt;
+New subagent detected: a57cb1790a39bb01e [a57cb1790a39bb01e◂a91ba165633b5875c]
+[pane] Opening pane for a57cb1790a39bb01e...</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b35m46xdd</task-id>
+<tool-use-id>toolu_01HDAbofZnPAZGGVfP5AE33i</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-git-agent-tail/030aecf6-cf9d-4c77-8308-cac279d87004/tasks/b35m46xdd.output</output-file>
+<status>completed</status>
+<summary>Background command "等到 nested label 出現" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+現在預期的 nested subagent 顯示會長怎麼樣
+
+---
+
+可是我實測怎麼都沒看到那個 nested 的箭頭效果？   你剛剛 tmux pane 有成功嗎？
+我是跑 agent-pick -> agent-tail -i -v 這樣
+
+---
+
+OK
+做完一樣跑 tmux 驗證 + review-loop 再 commit
+
+---
+
+好奇問一下 nested subagent 在 interactive tab 不會顯示 ✓  是嗎？
+  還有目前怎麼處理 --pane 參數的 nested subagent ?
+
+---
+
+OK，照之前的流程跑實作

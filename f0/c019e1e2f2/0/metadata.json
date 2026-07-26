@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "f0c019e1e2f2",
+  "session_id": "ab612241-8936-4c4c-8700-a37b749a42a0",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T09:53:50.059827Z",
+  "branch": "main",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "src/claude-workflow/snapshot-watcher.ts",
+    "src/claude-workflow/watch-builder.ts",
+    "src/claude-workflow/workflow-detector.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "57034a779e1a",
+  "checkpoint_transcript_start": 229,
+  "transcript_lines_at_start": 229,
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 47293,
+    "cache_read_tokens": 5868101,
+    "output_tokens": 21170,
+    "api_call_count": 43
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T09:53:49.934144Z",
+    "agent_lines": 0,
+    "human_added": 73,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 73,
+    "agent_percentage": 0
+  }
+}
