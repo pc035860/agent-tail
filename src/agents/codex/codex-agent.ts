@@ -54,53 +54,30 @@ class CodexSessionFinder implements SessionFinder {
 
   /**
    * 收集所有主 session 檔案（共用邏輯）
-   * 使用 readMainSessionMeta 過濾 subagent 並取得 cwd
+   * 透過 CodexSessionCache（parallel meta + disk cache + filesystem sync）
    */
   private async _collectMainSessions(options: {
     project?: string;
   }): Promise<SessionListItem[]> {
-    const glob = new Glob('**/*.jsonl');
-    const files: SessionListItem[] = [];
     // Extract UUID from rollout filename: rollout-{timestamp}-{UUID}.jsonl
     const uuidPattern =
       /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
 
-    for await (const file of glob.scan({
-      cwd: this._baseDir,
-      absolute: true,
-    })) {
-      const filename = file.split('/').pop() || '';
-      if (!filename.startsWith('rollout-')) continue;
+    const cached = await this._cache.listAllSessions({
+      project: options.project,
+    });
 
-      // 排除 subagent session & 取得 cwd
-      const meta = await readMainSessionMeta(file);
-      if (!meta) continue;
-
-      // Project filter：match against cwd (not file path, which only has dates)
-      if (options.project) {
-        const pattern = options.project.toLowerCase();
-        if (!meta.cwd.toLowerCase().includes(pattern)) continue;
-      }
-
-      try {
-        const stats = await stat(file);
-        const match = uuidPattern.exec(filename);
-        const shortId = match?.[1]?.slice(0, 8) ?? filename.slice(0, 8);
-
-        files.push({
-          path: file,
-          mtime: stats.mtime,
-          agentType: 'codex',
-          shortId,
-          project: meta.cwd,
-        });
-      } catch {
-        // 忽略無法讀取的檔案
-      }
-    }
-
-    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
-    return files;
+    return cached.map((session) => {
+      const filename = session.path.split('/').pop() || '';
+      const match = uuidPattern.exec(filename);
+      return {
+        path: session.path,
+        mtime: new Date(session.mtime),
+        agentType: 'codex' as const,
+        shortId: match?.[1]?.slice(0, 8) ?? filename.slice(0, 8),
+        project: session.cwd,
+      };
+    });
   }
 
   async findLatest(options: { project?: string }): Promise<SessionFile | null> {
