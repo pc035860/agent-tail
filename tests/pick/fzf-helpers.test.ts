@@ -103,6 +103,17 @@ describe('buildFzfArgs', () => {
     expect(hasReload).toBe(true);
   });
 
+  test('includes ctrl-e toggle-preview bind (herdr-friendly vs ctrl-/)', () => {
+    const args = buildFzfArgs({
+      agentType: 'claude',
+      agentTailPath: '/path/to/agent-tail',
+    });
+    const binds = args.filter((_, i) => i > 0 && args[i - 1] === '--bind');
+    expect(binds.some((b) => b === 'ctrl-e:toggle-preview')).toBe(true);
+    const header = args[args.indexOf('--header') + 1]!;
+    expect(header).toContain('Ctrl-E: toggle preview');
+  });
+
   test('includes project filter in preview when provided', () => {
     const args = buildFzfArgs({
       agentType: 'claude',
