@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "c25beecd9b47",
+  "session_id": "7b62081a-1894-4b9f-ac30-c76c2d45b973",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T07:59:54.185052Z",
+  "branch": "fix/drop-toolUseResult-fallback",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/claude/watch-builder.ts",
+    "tests/claude/watch-builder.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "6117a97df2b7",
+  "token_usage": {
+    "input_tokens": 167,
+    "cache_creation_tokens": 303516,
+    "cache_read_tokens": 4406754,
+    "output_tokens": 38162,
+    "api_call_count": 41
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T07:59:53.993988Z",
+    "agent_lines": 20,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "agent_percentage": 100
+  }
+}
