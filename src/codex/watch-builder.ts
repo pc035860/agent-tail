@@ -5,6 +5,7 @@ import {
   type CodexSubagentDetector,
 } from './subagent-detector.ts';
 import { MAIN_LABEL } from '../core/detector-interfaces.ts';
+import { joinCustomToolOutput, parseCodeModeCalls } from './code-mode.ts';
 import type { SessionFile, ParsedLine } from '../core/types.ts';
 import type { LineParser } from '../agents/agent.interface.ts';
 
@@ -18,6 +19,80 @@ const CODEX_UUID_IN_PATH =
 /** 從 rollout-*.jsonl 路徑中提取 UUID */
 export function extractUUIDFromPath(filePath: string): string {
   return filePath.match(CODEX_UUID_IN_PATH)?.[1] ?? '';
+}
+
+// ============================================================
+// Code Mode Bridge
+// ============================================================
+
+const AGENT_ID_IN_TEXT =
+  /["']?agent_id["']?\s*:\s*["']([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']/i;
+const NICKNAME_IN_TEXT = /["']?nickname["']?\s*:\s*["']([^"']*)["']/i;
+
+/**
+ * 從 payload 取出 tool 呼叫列表，統一 function_call 與 code mode 兩種格式
+ *
+ * - function_call：payload.name + JSON 字串 arguments
+ * - custom_tool_call（gpt-5.6+ code mode）：payload.input 是 JS，實際呼叫是 tools.xxx(...)
+ */
+function extractToolCalls(
+  payload: Record<string, unknown> | undefined
+): Array<{ name: string; args: Record<string, unknown> }> {
+  if (!payload) return [];
+
+  if (payload.type === 'function_call') {
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse((payload.arguments as string) ?? '{}');
+    } catch {
+      /* ignore */
+    }
+    return [{ name: (payload.name as string) ?? '', args }];
+  }
+
+  if (payload.type === 'custom_tool_call') {
+    return parseCodeModeCalls((payload.input as string) ?? '').map((c) => ({
+      name: c.name,
+      args: c.args,
+    }));
+  }
+
+  return [];
+}
+
+/**
+ * 從 tool output 取出 spawn_agent 的結果
+ *
+ * function_call_output 是 JSON 字串，可直接 parse；code mode 的
+ * custom_tool_call_output 只是 script 的 stdout，agent_id 混在文字裡，
+ * 所以退而用 regex 掃描（UUID 格式仍會經 isValidCodexAgentId 驗證）。
+ */
+function extractSpawnResult(
+  payload: Record<string, unknown> | undefined
+): { agent_id: string; nickname?: string } | null {
+  if (!payload) return null;
+
+  if (payload.type === 'function_call_output') {
+    try {
+      const output = JSON.parse((payload.output as string) ?? '{}');
+      if (output.agent_id) {
+        return { agent_id: output.agent_id, nickname: output.nickname };
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  if (payload.type === 'custom_tool_call_output') {
+    const text = joinCustomToolOutput(payload.output);
+    const agentId = text.match(AGENT_ID_IN_TEXT)?.[1];
+    if (!agentId) return null;
+    const nickname = text.match(NICKNAME_IN_TEXT)?.[1];
+    return { agent_id: agentId, ...(nickname && { nickname }) };
+  }
+
+  return null;
 }
 
 // ============================================================
@@ -44,14 +119,10 @@ export async function extractCodexSubagentIds(
     if (!line.trim()) continue;
     try {
       const data = JSON.parse(line);
-      if (
-        data.type === 'response_item' &&
-        data.payload?.type === 'function_call_output'
-      ) {
-        const output = JSON.parse(data.payload.output ?? '{}');
-        const agentId = output.agent_id;
-        if (agentId && isValidCodexAgentId(agentId)) {
-          seen.add(agentId);
+      if (data.type === 'response_item') {
+        const result = extractSpawnResult(data.payload);
+        if (result && isValidCodexAgentId(result.agent_id)) {
+          seen.add(result.agent_id);
         }
       }
     } catch {
@@ -112,39 +183,28 @@ export function createCodexOnLineHandler(
   return (line: string, label: string) => {
     if (label !== MAIN_LABEL) return;
 
-    if (line.includes('"spawn_agent"')) {
+    if (
+      line.includes('spawn_agent') ||
+      line.includes('resume_agent') ||
+      line.includes('send_input')
+    ) {
       try {
         const data = JSON.parse(line);
-        if (
-          data.type === 'response_item' &&
-          data.payload?.type === 'function_call' &&
-          data.payload?.name === 'spawn_agent'
-        ) {
-          const args = JSON.parse(data.payload.arguments ?? '{}');
-          detector.handleSpawnAgent(
-            data.payload.call_id,
-            args.agent_type ?? '',
-            args.message ?? ''
-          );
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    if (line.includes('"function_call_output"')) {
-      try {
-        const data = JSON.parse(line);
-        if (
-          data.type === 'response_item' &&
-          data.payload?.type === 'function_call_output'
-        ) {
-          const output = JSON.parse(data.payload.output ?? '{}');
-          if (output.agent_id) {
-            detector.handleSpawnAgentOutput(data.payload.call_id, {
-              agent_id: output.agent_id,
-              nickname: output.nickname,
-            });
+        if (data.type === 'response_item') {
+          for (const call of extractToolCalls(data.payload)) {
+            if (call.name === 'spawn_agent') {
+              detector.handleSpawnAgent(
+                data.payload.call_id,
+                (call.args.agent_type as string) ?? '',
+                (call.args.message as string) ?? ''
+              );
+            } else if (
+              call.name === 'resume_agent' ||
+              call.name === 'send_input'
+            ) {
+              const agentId = call.args.agent_id as string | undefined;
+              if (agentId) detector.handleSubagentResume(agentId);
+            }
           }
         }
       } catch {
@@ -152,18 +212,16 @@ export function createCodexOnLineHandler(
       }
     }
 
-    if (line.includes('"resume_agent"') || line.includes('"send_input"')) {
+    if (
+      line.includes('"function_call_output"') ||
+      line.includes('"custom_tool_call_output"')
+    ) {
       try {
         const data = JSON.parse(line);
-        if (
-          data.type === 'response_item' &&
-          data.payload?.type === 'function_call' &&
-          (data.payload?.name === 'resume_agent' ||
-            data.payload?.name === 'send_input')
-        ) {
-          const args = JSON.parse(data.payload.arguments ?? '{}');
-          if (args.agent_id) {
-            detector.handleSubagentResume(args.agent_id);
+        if (data.type === 'response_item') {
+          const result = extractSpawnResult(data.payload);
+          if (result) {
+            detector.handleSpawnAgentOutput(data.payload.call_id, result);
           }
         }
       } catch {

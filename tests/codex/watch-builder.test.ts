@@ -129,6 +129,27 @@ describe('extractCodexSubagentIds', () => {
     expect(ids).toHaveLength(2);
   });
 
+  test('也能從 code mode 的 custom_tool_call_output 提取 agent_id', async () => {
+    const sessionFile = join(tmpDir, 'session-code-mode.jsonl');
+    const lines = [
+      JSON.stringify({ type: 'session_meta', payload: {} }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'custom_tool_call_output',
+          call_id: 'c1',
+          output: [
+            { type: 'input_text', text: 'Output:\n' },
+            { type: 'input_text', text: `{"agent_id":"${VALID_UUID}"}` },
+          ],
+        },
+      }),
+    ];
+    writeFileSync(sessionFile, lines.join('\n') + '\n');
+
+    expect(await extractCodexSubagentIds(sessionFile)).toEqual([VALID_UUID]);
+  });
+
   test('TC10: 去重（同一 agent_id 出現多次）', async () => {
     const sessionFile = join(tmpDir, 'session.jsonl');
     const lines = [
@@ -309,6 +330,88 @@ describe('createCodexOnLineHandler', () => {
 
     expect(detector.doneCalls).toHaveLength(1);
     expect(detector.doneCalls[0]).toBe(VALID_UUID);
+  });
+
+  // code mode（gpt-5.6+）：工具呼叫包在 exec 的 JS input 內
+  test('解析 code mode 的 spawn_agent 呼叫', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call',
+        name: 'exec',
+        call_id: 'c-code',
+        input:
+          'const a = await tools.spawn_agent({agent_type:"software-engineer",message:"do task"});\ntext(JSON.stringify(a));\n',
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+
+    expect(detector.spawnCalls).toEqual([
+      {
+        callId: 'c-code',
+        agentType: 'software-engineer',
+        message: 'do task',
+      },
+    ]);
+  });
+
+  test('解析 code mode 的 resume_agent 呼叫', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call',
+        name: 'exec',
+        call_id: 'c-code',
+        input: `const r = await tools.resume_agent({agent_id:"${VALID_UUID}"});`,
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+    expect(detector.resumeCalls).toEqual([VALID_UUID]);
+  });
+
+  test('從 code mode output 文字中抽出 agent_id', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'c-code',
+        output: [
+          {
+            type: 'input_text',
+            text: 'Script completed\nWall time 0.4 seconds\nOutput:\n',
+          },
+          {
+            type: 'input_text',
+            text: `{"agent_id":"${VALID_UUID}","nickname":"Kant"}`,
+          },
+        ],
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+
+    expect(detector.outputCalls).toEqual([
+      {
+        callId: 'c-code',
+        output: { agent_id: VALID_UUID, nickname: 'Kant' },
+      },
+    ]);
+  });
+
+  test('code mode output 無 agent_id 時不呼叫 handleSpawnAgentOutput', () => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: 'c-code',
+        output: [{ type: 'input_text', text: 'just some stdout' }],
+      },
+    });
+
+    handler(line, MAIN_LABEL);
+    expect(detector.outputCalls).toHaveLength(0);
   });
 
   test('TC9: 非 MAIN_LABEL 的行被完全忽略', () => {

@@ -18,6 +18,10 @@ import {
   buildCodexSubagentFiles,
   extractCodexSubagentIds,
 } from '../../codex/watch-builder.ts';
+import {
+  formatCustomToolOutput,
+  parseCodeModeCalls,
+} from '../../codex/code-mode.ts';
 
 /**
  * Codex Session Finder
@@ -386,16 +390,24 @@ class CodexLineParser implements LineParser {
   }
 
   /**
-   * 取得 tool 名稱（僅 function_call 類型）
+   * 取得 tool 名稱（function_call 與 code mode 的 custom_tool_call）
    */
   private getToolName(data: Record<string, unknown>): string | undefined {
     const type = data.type as string;
     if (type !== 'response_item') return undefined;
 
     const payload = data.payload as Record<string, unknown>;
-    if (payload.type !== 'function_call') return undefined;
+    if (payload.type === 'function_call') {
+      return payload.name as string | undefined;
+    }
 
-    return payload.name as string | undefined;
+    // code mode：實際工具名藏在 exec 的 JS input 裡
+    if (payload.type === 'custom_tool_call') {
+      const calls = parseCodeModeCalls((payload.input as string) ?? '');
+      return calls[0]?.name ?? (payload.name as string | undefined);
+    }
+
+    return undefined;
   }
 
   /**
@@ -414,8 +426,13 @@ class CodexLineParser implements LineParser {
         const role = payload.role as string;
         return role || 'message';
       }
-      if (subType === 'function_call') return 'function_call';
-      if (subType === 'function_call_output') return 'output';
+      if (subType === 'function_call' || subType === 'custom_tool_call')
+        return 'function_call';
+      if (
+        subType === 'function_call_output' ||
+        subType === 'custom_tool_call_output'
+      )
+        return 'output';
       if (subType === 'reasoning') return 'reasoning';
     }
 
@@ -462,6 +479,31 @@ class CodexLineParser implements LineParser {
               /* ignore */
             }
             return formatToolUse(name, args, { verbose: this.verbose });
+          }
+
+          // code mode（gpt-5.6+）：所有工具呼叫包在名為 exec 的 custom tool 內
+          case 'custom_tool_call': {
+            const input = (payload.input as string) ?? '';
+            const calls = parseCodeModeCalls(input);
+            if (calls.length > 0) {
+              return calls
+                .map((c) =>
+                  formatToolUse(c.name, c.args, { verbose: this.verbose })
+                )
+                .join('\n');
+            }
+            // 沒有 tools.* 呼叫（純 JS 運算）：直接顯示程式碼
+            if (!input.trim()) return '';
+            const name = (payload.name as string) || 'exec';
+            const preview = truncateByLines(input, { verbose: this.verbose });
+            return `[TOOL: ${name}]${formatMultiline(preview)}`;
+          }
+
+          case 'custom_tool_call_output': {
+            const content = formatCustomToolOutput(payload.output);
+            if (!content.trim()) return '';
+            const preview = truncateByLines(content, { verbose: this.verbose });
+            return formatMultiline(preview);
           }
 
           case 'function_call_output': {
