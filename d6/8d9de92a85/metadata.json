@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "d68d9de92a85",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md",
+    "src/agents/codex/codex-agent.ts",
+    "src/codex/code-mode.ts",
+    "src/codex/watch-builder.ts",
+    "tests/codex/code-mode.test.ts",
+    "tests/codex/watch-builder.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d6/8d9de92a85/0/metadata.json",
+      "transcript": "/d6/8d9de92a85/0/full.jsonl",
+      "content_hash": "/d6/8d9de92a85/0/content_hash.txt",
+      "prompt": "/d6/8d9de92a85/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 125,
+    "cache_creation_tokens": 243535,
+    "cache_read_tokens": 7085443,
+    "output_tokens": 39066,
+    "api_call_count": 66
+  }
+}

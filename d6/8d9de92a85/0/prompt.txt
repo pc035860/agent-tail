@@ -1,0 +1,18 @@
+最近幾天 codex session 我用 agent tail 看好像都只有出現 thinking directive
+但 7 天前的就還是有 tool use 的 directive
+幫我看一下問題出在哪邊？
+
+另外我的 studio 那台好像沒有碰到這個問題
+雖然 codex 的版本好像是 studio 新一點點
+
+---
+
+你去 studio 看一隙
+
+---
+
+你去 studio 看一下
+
+---
+
+好動手修吧

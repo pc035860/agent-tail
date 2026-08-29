@@ -17,8 +17,3 @@
 ---
 
 試一下 ctrl-e
-
----
-
-好  就 ctrl-e 了 commit + push
-跑 checkpoint + 補 session note
