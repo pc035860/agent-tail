@@ -10,7 +10,7 @@ agent-tail is a CLI tool for tailing AI agent session logs (Codex, Claude Code, 
 
 ```bash
 # Run the CLI
-bun run src/index.ts <agent-type>  # agent-type: codex | claude | gemini | cursor
+bun run src/index.ts <agent-type>  # agent-type: codex | claude | gemini | cursor | agy | pi
 
 # Or via npm script
 bun start                          # requires agent-type argument
@@ -71,6 +71,14 @@ agent-tail cursor -i               # interactive mode (Tab to switch sessions)
 agent-tail cursor -a               # show all content (verbose + subagents + auto-switch)
 agent-tail cursor --pane           # auto-open tmux pane for each new subagent
 
+# Pi-specific options (main session tail only; no subagent/interactive/pane)
+agent-tail pi                      # tail latest pi session
+agent-tail pi -p myproject         # filter by project (fuzzy match on encoded cwd dir)
+agent-tail pi --auto-switch        # auto-switch to latest session in project (header cwd)
+agent-tail pi <uuid-prefix>        # load specific session (partial UUID match)
+agent-tail pi --list               # list recent sessions (session_info name → TITLE col)
+agent-tail pi --summary            # head+tail summary
+
 # Session listing and browsing
 agent-tail claude --list              # list recent sessions (tab-separated)
 agent-tail codex --list -p myproject  # list with project filter
@@ -106,7 +114,8 @@ src/
 │   │   └── session-cache.ts  # Cwd-indexed cache with incremental refresh
 │   ├── claude/claude-agent.ts
 │   ├── cursor/cursor-agent.ts  # CursorSessionFinder (with findSubagent) + CursorLineParser (stateful multi-emit for assistant tool_use, no timestamps)
-│   └── gemini/gemini-agent.ts # GeminiSessionFinder with .project_root support
+│   ├── gemini/gemini-agent.ts # GeminiSessionFinder with .project_root support
+│   └── pi/pi-agent.ts         # PiSessionFinder + PiLineParser (JSONL v3, tree active-path replay filter)
 ├── claude/                   # Claude-specific modules
 │   ├── subagent-detector.ts  # Detect and monitor subagent sessions (with directory watch)
 │   ├── auto-switch.ts        # Find latest session in project for auto-switch mode
@@ -221,6 +230,7 @@ src/
 
 **Gotchas:**
 - **FileWatcher hot path must NOT use `Bun.file().slice()`**: repeated BunFile/Blob creation accumulates unreclaimable IOAccelerator pages on macOS (17 GB footprint observed). `FileWatcher` uses a persistent `FileHandle` + reusable Buffer for incremental JSONL reads (`src/core/file-watcher.ts:40-43`); close + reopen the fd on truncate/atomic replace. Bun >=1.3.13 required (`package.json` engines) — older Bun leaks IOAccelerator slabs regardless (oven-sh/bun#28234).
+- **FileWatcher baseline must describe "processed content", not a stat instant**: size baseline is aligned to what was actually read (`alignSizeBaseline()`: JSONL → `lastReadOffset` incl. 0; jsonMode → `lastContentLength`), and `updateMtime()` runs BEFORE the read inside `readCycle()` — a post-read stat would swallow appends/rewrites landing in that gap (poll then sees "no change" forever and the data is never emitted). `scheduleRead()`'s pending drain is a `while` loop inside the same `isProcessing` window, NOT recursion — a recursive call hits its own guard and the pending read never re-runs. `start()` wraps the initial read in the same `isProcessing` guard but re-throws errors (WorkflowAttachment.attachAgent rollback depends on "initial read failure → throw"); pending events arriving during initial read are drained by the same loop.
 - **Gemini parser has state** (`processedMessageIds`). Must recreate parser when switching sessions to avoid message skip bugs.
 - **`Bun.file(dir).exists()` returns false for directories**. Use `stat(dir)` instead.
 - **Codex cache only scans "today"** for incremental refresh. Cross-midnight sessions handled on next startup.
@@ -269,6 +279,17 @@ src/
 - **`--list` row alignment uses fixed-width padding, not raw `\t`**: `formatSessionList` pads visible cols 0..3 (`TYPE_COLUMN_WIDTH=4` / `ID_COLUMN_WIDTH=15` / `TIME_COLUMN_WIDTH=8` / `NOTES_COLUMN_WIDTH=36`) so every row writes the same cumulative cell count before each `\t`. Terminal tabs then land at deterministic stops (8 → 24 → 40 → 80) and TITLE always starts at cell 80 — without the pad, `3m ago` vs `just now` (6 vs 8 cells) shift TITLE 8 cells row-to-row. Padding helpers live in `src/utils/visible-width.ts` (`visibleWidth` / `padVisibleEnd` / `truncateVisible` — CJK is 2 cells, SGR escapes stripped before counting; ranges are hand-rolled, not a full Unicode width table). fzf delimiter remains `\t`, column count remains 6, so `parseSelection` / ctrl-y / `{6}` are unaffected. `tests/list/session-lister.test.ts` simulates tab expansion (`ceil((cursor+1)/8)*8`) and asserts TITLE start cell is identical across rows with mixed widths — break the widths and the test fires.
 - **`--list` auto title fallback (Claude only)**: sessions without a `customTitle` get an `autoTitle` derived from the first meaningful user prompt via `readFirstUserPromptFromHead(filePath, maxLength=80)` in `src/utils/session-time.ts`. Filter knows about `<scheduled-task name="X">` → `[cron] X` (pure-ASCII marker), `<command-name>/cmd</command-name>` + `<command-args>` → `/cmd args`, `Caveat:` skip, plus an explicit `INTERNAL_WRAPPER_TAG_RE` whitelist (`system-reminder`, `bash-stdout|stderr|input`, `local-command-stdout|stderr`, `attached-files`, `user-prompt-submit-hook`, …) — those wrappers are SKIPPED entirely (do NOT generic-XML-strip them, or the reminder content surfaces as the title). Read uses progressive chunks 16K → 64K → 256K and breaks only after the current chunk covers the whole file — the loop condition was inverted in an earlier pass and silently dropped ~20KB files; tests in `tests/utils/session-time.test.ts` lock the regression. `formatTitleColumn` in `src/list/session-lister.ts` renders the visual contract: `customTitle` plain (full weight), `autoTitle` `chalk.dim('› ' + text)` (subtle dim with `›` prefix), neither `chalk.dim('—')`. `SessionListItem.autoTitle` (in `src/core/types.ts`) carries the value — only `customTitle` is loaded in `_collectAndEnrichMainSessions`'s first parallel pass; `autoTitle` is read AFTER `sort + slice(limit)` so only the returned items pay the head-read I/O.
 - **`autoTitle` has two producers; `customTitle` has dual semantics on workflow rows**: main rows fill `autoTitle` from the first user prompt (above); workflow rows fill it from snapshot `workflowName`. `formatTitleColumn` treats both identically (`dim('› TEXT')`) — derived label, not user-authored. The dual semantics live in `WorkflowSessionFinder`: `_collectWorkflows` sets `file.customTitle = 'wf:<workflowName>'` (or `'wf:<runId>'` fallback) so `src/index.ts:382` `isWorkflowMode` can detect workflow mode via `customTitle.startsWith('wf:')` on the return of `findBySessionId`. `listSessions` strips that customTitle via rest destructuring before re-emitting as `SessionListItem`, and only sets `autoTitle` when `workflowName` is actually present (snapshot read failure → neither field → row falls back to `dim('—')`; the ID column already shows the runId, no point repeating it). When changing the workflow finder, do NOT remove the internal `customTitle='wf:'` set — the dispatcher mode contract depends on it.
+
+**Pi Agent (main-session tail, A' scope):**
+- **Storage layout**: `~/.pi/agent/sessions/--<cwd-with-`/`→`-`>--/<ISO-ts>_<uuid>.jsonl`. Per-project dirs like Claude; JSONL v3 with per-entry ISO timestamps like Codex. First line is a `type:"session"` header carrying the authoritative `cwd` — `readPiCwdFromHead` reads only the first line (do NOT reuse `readCwdFromHead`, which `~`-substitutes and would break `findLatestInProject` round-tripping).
+- **Tree structure / active-path replay filter (A')**: pi sessions are trees (`id`/`parentId`); `/tree` edit-and-resend leaves dead branches in the file. `PiLineParser` buffers message entries during the initial dump (`beginHistory()`), then `flushHistory()` — called by `startSingleWatch` right after `watcher.start()` resolves (it awaits the initial read) — walks `parentId` from the last entry back to root and emits only the active path, then switches to live mode. Live appends are always on the active leaf, so no filtering needed there. `-n` truncation works naturally: the walk stops at the buffer edge.
+- **`beginHistory`/`flushHistory` are optional on `LineParser`**: generic hooks in `startSingleWatch` (no-op for other agents). If a pi parser is used WITHOUT flush (e.g. `--summary`), it stays in live mode and emits directly — summary never calls beginHistory, so it works unchanged.
+- **`encodePiProjectDir` must strip the LEADING `/`**: real cwds always start with `/`; splitting without stripping yields `---Users-...` (three dashes) which matches nothing. Trailing-slash strip is also needed (`/foo/` → `--foo--`).
+- **`-p` filter matches the encoded dir name, not the raw cwd** (Cursor-style irreversibility: `-` in the dir name could be a separator or a literal hyphen). Header `cwd` is authoritative but only read in `getProjectInfo` (auto-switch), not per-file during `--list`.
+- **`session_info` entries map to Claude's custom-title semantics**: pi `/name` writes `type:"session_info"` with `name`. Parser emits it as a `custom-title` ParsedLine; `listSessions` tail-reads it via `readPiSessionNameFromTail` (8KB) into `customTitle`. No `autoTitle` for pi (first-prompt extraction is Claude-specific).
+- **Subagents NOT supported**: pi subagent sessions live under `~/.pi/agent/ferris-pi-subagents/` (extension-owned layout, not core format) — do not wire `--subagent`/`--interactive`/`--pane` for pi until that format stabilizes.
+- **`bashExecution` role renders as `OUT`** (`type: 'output'`), `custom` role as `CUST` (skipped when `display: false`); `model_change`/`thinking_level_change`/`compaction`/`branch_summary`/`label` entries are skipped entirely.
+- **Finder param defaults matter**: `_collectSessions(options = {})` / `findBySessionId(id, options = {})` — an undefined options object throws inside the try/catch and gets silently swallowed into an empty result (caught by `findBySessionId` returning null). Always default the options param in finders whose helpers sit inside a broad try/catch.
 
 ## Code Quality
 

@@ -7,12 +7,12 @@ function createProgram(): Command {
   program
     .name('agent-tail')
     .description(
-      'Tail agent session logs (Codex, Claude Code, Gemini CLI, Cursor & Antigravity CLI) in real-time'
+      'Tail agent session logs (Codex, Claude Code, Gemini CLI, Cursor, Antigravity CLI & Pi) in real-time'
     )
     .version('0.1.0')
     .argument(
       '<agent-type>',
-      'Agent type: codex, claude, gemini, cursor, or agy'
+      'Agent type: codex, claude, gemini, cursor, agy, or pi'
     )
     .argument(
       '[session-id]',
@@ -52,7 +52,7 @@ function createProgram(): Command {
     .option('--no-with-subagents', 'Exclude subagent content (default)')
     .option(
       '--auto-switch',
-      'Auto-switch to latest session in project (Claude/Gemini/Codex/Cursor)'
+      'Auto-switch to latest session in project (Claude/Gemini/Codex/Cursor/Pi)'
     )
     .option('--no-auto-switch', 'Disable auto-switch (default)')
     .option(
@@ -116,10 +116,11 @@ export function parseArgs(args: string[]): CliOptions {
     agentTypeArg !== 'claude' &&
     agentTypeArg !== 'gemini' &&
     agentTypeArg !== 'cursor' &&
-    agentTypeArg !== 'agy'
+    agentTypeArg !== 'agy' &&
+    agentTypeArg !== 'pi'
   ) {
     console.error(
-      `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", "cursor", or "agy".`
+      `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", "cursor", "agy", or "pi".`
     );
     process.exit(1);
   }

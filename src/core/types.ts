@@ -1,7 +1,7 @@
 /**
  * Agent 類型
  */
-export type AgentType = 'codex' | 'claude' | 'gemini' | 'cursor' | 'agy';
+export type AgentType = 'codex' | 'claude' | 'gemini' | 'cursor' | 'agy' | 'pi';
 
 /**
  * CLI 選項

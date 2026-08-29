@@ -22,6 +22,8 @@ export class FileWatcher {
   private isWatching = false;
   private jsonMode = false;
   private lastContentHash = '';
+  /** jsonMode：已讀內容的 byte 長度（size baseline 對齊用） */
+  private lastContentLength = 0;
   private lastMtimeMs = 0;
   private lastSize = 0;
   private filePath: string | null = null;
@@ -52,9 +54,24 @@ export class FileWatcher {
     this.pollInterval = options.pollInterval || 2000;
     this.isFirstRead = true;
 
-    // 初始讀取現有內容（直接呼叫，不需排程）
-    await this.readAndProcess(filePath, options.onLine);
-    await this.updateMtime(filePath);
+    this.isFirstRead = true;
+
+    // 初始讀取與後續事件共用同一套 isProcessing guard + pending 消化
+    // （避免 onLine 回呼期間到達的 fs.watch 事件與初始讀取交錯），
+    // 但錯誤直接往上拋 — caller（如 WorkflowAttachment.attachAgent）
+    // 依賴「初始讀取失敗 → throw」觸發 rollback，不能走 onError 吞掉。
+    // readCycle() 會先 updateMtime（baseline 先行）再讀取。
+    this.isProcessing = true;
+    this.pendingRead = false;
+    try {
+      await this.readCycle();
+      while (this.pendingRead) {
+        this.pendingRead = false;
+        await this.readCycle();
+      }
+    } finally {
+      this.isProcessing = false;
+    }
 
     // 如果需要持續監控
     if (options.follow) {
@@ -81,19 +98,50 @@ export class FileWatcher {
     this.pendingRead = false;
 
     try {
-      await this.readAndProcess(this.filePath, this.options.onLine);
-      await this.updateMtime(this.filePath);
+      await this.readCycle();
 
-      // 處理完成後，如果有 pending 請求，再執行一次
-      if (this.pendingRead) {
+      // 處理完成後，如果有 pending 請求，在同一個 isProcessing 區間內消化。
+      // 不能遞迴呼叫 scheduleRead()：此時 isProcessing 仍為 true，遞迴會被
+      // 開頭 guard 立即擋回（只再把 pendingRead 設回 true），pending 永遠
+      // 不會被實際重跑，導致 read 期間 append 的尾行遺失。
+      while (this.pendingRead) {
         this.pendingRead = false;
-        await this.scheduleRead();
+        await this.readCycle();
       }
     } catch (error) {
       this.options.onError?.(error as Error);
     } finally {
       this.isProcessing = false;
     }
+  }
+
+  /**
+   * 一輪讀取 + baseline 更新。
+   * size baseline 在讀取後對齊「已處理內容」（alignSizeBaseline），
+   * 而非 stat 瞬間值 — 兩者之間的 append / rewrite 不能被 baseline 吞掉。
+   * 注意：updateMtime 在 read 之前跑（baseline 先行），mtime baseline
+   * 因此是「讀取開始前」的值 — read 期間的同長度 rewrite 會讓真實 mtime
+   * 偏離 baseline，poll 能正確觸發重讀。
+   */
+  private async readCycle(): Promise<void> {
+    await this.updateMtime(this.filePath!);
+    await this.readAndProcess(this.filePath!, this.options!.onLine);
+    this.alignSizeBaseline();
+  }
+
+  /**
+   * 將 size baseline 對齊「已處理內容」：
+   * - JSONL：lastReadOffset（含 0 — 空檔案也要對齊，否則第一行寫入會被
+   *   read 後的 stat 吞進 baseline，poll 永遠不觸發）
+   * - jsonMode：已讀內容的 byte 長度（rewrite 變長/變短都能被 poll 偵測）
+   * updateMtime 在 read 之前跑（baseline 先行），若 read 期間/之後有寫入，
+   * 真實 size 會偏離已處理內容 — baseline 若含這段資料，poll 的比對會
+   * 誤判「沒有新資料」而永遠跳過。對齊後差異會正確觸發增量讀取。
+   */
+  private alignSizeBaseline(): void {
+    this.lastSize = this.jsonMode
+      ? this.lastContentLength
+      : this.lastReadOffset;
   }
 
   /**
@@ -111,6 +159,9 @@ export class FileWatcher {
     if (this.jsonMode) {
       const file = Bun.file(filePath);
       const content = await file.text();
+      // 記錄已讀內容長度 — alignSizeBaseline 用它對齊 size baseline，
+      // rewrite 變長/變短都能被 poll 的 size 比對偵測
+      this.lastContentLength = Buffer.byteLength(content, 'utf8');
       const contentHash = Bun.hash(content).toString();
       if (contentHash !== this.lastContentHash) {
         this.lastContentHash = contentHash;

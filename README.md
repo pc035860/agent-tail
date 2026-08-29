@@ -4,7 +4,7 @@ Real-time log viewer for AI coding assistants. See what your AI is thinking and 
 
 ## What is this?
 
-When you use AI coding assistants like **Claude Code**, **Codex**, **Gemini CLI**, or **Cursor**, they create session logs that record every conversation and action. These logs are stored in hidden folders and are hard to read.
+When you use AI coding assistants like **Claude Code**, **Codex**, **Gemini CLI**, **Cursor**, **Antigravity CLI**, or **Pi**, they create session logs that record every conversation and action. These logs are stored in hidden folders and are hard to read.
 
 **agent-tail** makes it easy to watch these logs in real-time, just like `tail -f` for regular log files. This helps you:
 
@@ -197,13 +197,14 @@ bun start claude --auto-switch    # project-based
 bun start codex --auto-switch     # cwd-based (with cache)
 bun start gemini --auto-switch    # .project_root based
 bun start cursor --auto-switch    # workspace-slug based
+bun start pi --auto-switch        # session header cwd based
 
 # The session will automatically switch when:
 # - A new main session starts in the same project
 # - Switch occurs after a 5-second delay to avoid instant switching
 ```
 
-> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined. Supported for Claude, Codex, Gemini, and Cursor.
+> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined. Supported for Claude, Codex, Gemini, Cursor, Antigravity, and Pi.
 
 ### Tmux Pane Mode
 
@@ -296,7 +297,7 @@ sessions (sorted by activity time).
 **Positional Arguments:**
 | Argument | Description |
 |----------|-------------|
-| `<agent-type>` | Required: `claude`, `codex`, `gemini`, or `cursor` |
+| `<agent-type>` | Required: `claude`, `codex`, `gemini`, `cursor`, `agy`, or `pi` |
 | `[session-id]` | Optional: load specific session by ID (partial match supported) |
 
 ## How It Works
@@ -309,6 +310,8 @@ Each AI assistant stores its session logs in a specific location:
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
 | Gemini CLI | `~/.gemini/tmp/{project}/chats/session-*.json` |
 | Cursor | `~/.cursor/projects/{workspace}/agent-transcripts/{UUID}/{UUID}.jsonl` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.pb` |
+| Pi | `~/.pi/agent/sessions/--{project}--/{timestamp}_{uuid}.jsonl` |
 
 agent-tail automatically finds the most recent session and displays it in a readable format.
 
@@ -318,7 +321,7 @@ agent-tail automatically finds the most recent session and displays it in a read
 
 This means the AI assistant hasn't created any logs yet. Make sure you've:
 1. Used the AI assistant at least once
-2. Specified the correct agent type (`claude`, `codex`, `gemini`, or `cursor`)
+2. Specified the correct agent type (`claude`, `codex`, `gemini`, `cursor`, `agy`, or `pi`)
 
 ### Logs look garbled
 
