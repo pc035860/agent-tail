@@ -18,6 +18,7 @@ import {
 } from '../../utils/text.ts';
 import { formatToolUse } from '../../utils/format-tool.ts';
 import {
+  readLastTimestampFromJSONL,
   readPiCwdFromHead,
   readPiSessionNameFromTail,
 } from '../../utils/session-time.ts';
@@ -128,14 +129,28 @@ export class PiSessionFinder implements SessionFinder {
     options: { project?: string; limit?: number } = {}
   ): Promise<SessionListItem[]> {
     const files = await this._collectSessions(options);
-    const sliced = files.slice(0, options.limit ?? 20);
-    // enrich：session_info.name → customTitle（tail-read）
-    return Promise.all(
-      sliced.map(async (f) => {
-        const customTitle = await readPiSessionNameFromTail(f.path);
-        return customTitle ? { ...f, customTitle } : f;
+    // enrich 全部 collected sessions，再依 (lastActivityTime ?? mtime) 排序後
+    // 才 slice — 先 slice 會把「mtime 排名外但 activity 最新」的 session
+    // 永久排除（與 Claude 的 enrich-before-slice 一致）。
+    const enriched = await Promise.all(
+      files.map(async (f) => {
+        const [customTitle, lastActivityTime] = await Promise.all([
+          readPiSessionNameFromTail(f.path),
+          readLastTimestampFromJSONL(f.path),
+        ]);
+        return {
+          ...f,
+          ...(customTitle ? { customTitle } : {}),
+          ...(lastActivityTime ? { lastActivityTime } : {}),
+        };
       })
     );
+    enriched.sort(
+      (a, b) =>
+        (b.lastActivityTime ?? b.mtime).getTime() -
+        (a.lastActivityTime ?? a.mtime).getTime()
+    );
+    return enriched.slice(0, options.limit ?? 20);
   }
 
   async findBySessionId(
@@ -174,7 +189,12 @@ export class PiSessionFinder implements SessionFinder {
           cwdMatches.push(f);
         }
       }
-      if (cwdMatches.length > 0) matches = cwdMatches;
+      if (cwdMatches.length > 0) {
+        matches = cwdMatches;
+      } else {
+        // project 完全不符 → 回傳 null（-p 過濾不該靜默導向錯誤 session）
+        return null;
+      }
     }
 
     const found = matches[0]!;
@@ -188,8 +208,34 @@ export class PiSessionFinder implements SessionFinder {
   }
 
   async findLatestInProject(projectDir: string): Promise<SessionFile | null> {
-    const files = await this._collectSessions();
+    // 先用 encodePiProjectDir 限縮到專案目錄（super-follow 每 500ms 執行，
+    // 避免掃描並 stat 所有 session），再以 header cwd 驗證碰撞（encoded 目錄
+    // 名不可逆，不同 cwd 可能碰撞到同一目錄）。
+    const encoded = encodePiProjectDir(projectDir);
+    const projectDirPath = join(this.baseDir, encoded);
+    const glob = new Glob('*.jsonl');
+    const files: { path: string; mtime: Date }[] = [];
+
+    try {
+      for await (const file of glob.scan({
+        cwd: projectDirPath,
+        absolute: true,
+      })) {
+        try {
+          const stats = await stat(file);
+          files.push({ path: file, mtime: stats.mtime });
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // 專案目錄不存在
+      return null;
+    }
+    if (files.length === 0) return null;
+
     // mtime 降序 + 第一個 header cwd 吻合即返回（碰撞安全）
+    files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
     for (const f of files) {
       const cwd = await readPiCwdFromHead(f.path);
       if (cwd === projectDir) {
@@ -273,7 +319,7 @@ export class PiLineParser extends MultiEmitParser {
         return this.parseMessage(data, timestamp);
 
       case 'custom_message': {
-        // extension 注入訊息（頂層 entry）
+        // extension 注入訊息（頂層 entry）— 與 message-level custom 一致套 truncate
         if (data.display === false) return [];
         const text = blocksToText(data.content);
         if (!text.trim()) return [];
@@ -282,7 +328,9 @@ export class PiLineParser extends MultiEmitParser {
             type: 'custom',
             timestamp,
             raw: data,
-            formatted: formatMultiline(text),
+            formatted: formatMultiline(
+              truncateByLines(text, { verbose: this.verbose })
+            ),
           },
         ];
       }
@@ -322,39 +370,54 @@ export class PiLineParser extends MultiEmitParser {
         return this.parseAssistantBlocks(data, timestamp, content);
 
       case 'toolResult': {
+        const msg = message as { isError?: boolean };
         const text = blocksToText(content);
-        if (!text.trim()) return [];
+        // isError 時即使無文字也要輸出（`[error] `），否則工具失敗完全消失
+        if (!text.trim() && !msg.isError) return [];
+        const prefix = msg.isError ? '[error] ' : '';
         return [
           {
             type: 'tool_result',
             timestamp,
             raw: data,
             formatted: formatMultiline(
-              truncateByLines(text, { verbose: this.verbose })
+              truncateByLines(prefix + text, { verbose: this.verbose })
             ),
           },
         ];
       }
 
       case 'bashExecution': {
-        // OUT（type: 'output'）
-        const text = blocksToText(content);
-        if (!text.trim()) return [];
+        // OUT（type: 'output'）— v3 格式：command / output / exitCode（無 content）
+        const msg = message as {
+          command?: string;
+          output?: string;
+          exitCode?: number;
+        };
+        const output = typeof msg.output === 'string' ? msg.output : '';
+        const command = typeof msg.command === 'string' ? msg.command : '';
+        const text = output.trim() || command.trim();
+        if (!text) return [];
+        const exitInfo =
+          typeof msg.exitCode === 'number' && msg.exitCode !== 0
+            ? ` [exit ${msg.exitCode}]`
+            : '';
         return [
           {
             type: 'output',
             timestamp,
             raw: data,
             formatted: formatMultiline(
-              truncateByLines(text, { verbose: this.verbose })
+              truncateByLines(text + exitInfo, { verbose: this.verbose })
             ),
           },
         ];
       }
 
       case 'custom': {
-        // CUST（display: false 時跳過）
-        if (data.display === false) return [];
+        // CUST（display: false 時跳過）— v3 的 display 在 message 層級
+        const msg = message as { display?: boolean };
+        if (msg.display === false) return [];
         const text = blocksToText(content);
         if (!text.trim()) return [];
         return [
@@ -402,6 +465,7 @@ export class PiLineParser extends MultiEmitParser {
         });
       } else if (
         blockType === 'thinking' &&
+        this.verbose &&
         typeof b.thinking === 'string' &&
         b.thinking.trim()
       ) {

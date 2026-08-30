@@ -203,13 +203,15 @@ bun start claude --auto-switch    # project-based
 bun start codex --auto-switch     # cwd-based (with cache)
 bun start gemini --auto-switch    # .project_root based
 bun start cursor --auto-switch    # workspace-slug based
+bun start agy --auto-switch       # workspace mapping based
+bun start pi --auto-switch        # session header cwd based
 
 # The session will automatically switch when:
 # - A new main session starts in the same project
 # - Switch occurs after a 5-second delay to avoid instant switching
 ```
 
-> **Note:** Can be used with or without interactive mode. Use with `--with-subagents` to include subagent content when switching. Use `-a` / `--all` for verbose + subagents + auto-switch combined. Supported for Claude, Codex, Gemini, and Cursor.
+> **Note:** `--auto-switch` is supported for Claude, Codex, Gemini, Cursor, Antigravity, and Pi. The subagent features it pairs with (`--with-subagents` / `--all`) are Claude/Codex/Cursor only.
 
 ### Tmux Pane Mode
 
@@ -334,7 +336,7 @@ sessions (sorted by activity time).
 **Positional Arguments:**
 | Argument | Description |
 |----------|-------------|
-| `<agent-type>` | Required: `claude`, `codex`, `gemini`, or `cursor` |
+| `<agent-type>` | Required: `claude`, `codex`, `gemini`, `cursor`, `agy`, or `pi` |
 | `[session-id]` | Optional: load specific session by ID (partial match supported) |
 
 ## How It Works
@@ -347,6 +349,8 @@ Each AI assistant stores its session logs in a specific location:
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
 | Gemini CLI | `~/.gemini/tmp/{project}/chats/session-*.json` |
 | Cursor | `~/.cursor/projects/{workspace}/agent-transcripts/{UUID}/{UUID}.jsonl` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/conversations/*.pb` |
+| Pi | `~/.pi/agent/sessions/--{project}--/{timestamp}_{uuid}.jsonl` |
 
 agent-tail automatically finds the most recent session and displays it in a readable format.
 

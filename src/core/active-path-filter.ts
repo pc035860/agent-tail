@@ -53,8 +53,8 @@ export class ActivePathFilter implements LineParser {
           parentId: this.walkParent(entry),
         });
       } catch {
-        // 無法解析的行（非 JSONL）也緩衝，flush 時照原樣輸出
-        this.buffered.push({ line, id: null, parentId: null });
+        // malformed 行（半寫 JSON）不 buffer — 若它是最後一行會被當 leaf，
+        // flushHistory 的 walk 停在這裡，排除全部有效歷史（Codex review 抓到）
       }
       return null;
     }

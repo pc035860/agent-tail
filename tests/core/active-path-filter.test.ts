@@ -92,6 +92,22 @@ describe('ActivePathFilter (SPEC §4.3)', () => {
     expect(emitted).toEqual(['b', 'c']);
   });
 
+  test('malformed trailing line is not treated as leaf (valid history preserved)', () => {
+    const filter = new ActivePathFilter(new MockParser(), walkParent);
+    filter.beginHistory();
+    filter.parse('{"id": "a", "parentId": null}');
+    filter.parse('{"id": "b", "parentId": "a"}');
+    filter.parse('{"id": "c", "parentId": "b"}');
+    filter.parse('{"id": "d", "parentId": "c"}');
+    // 半寫 malformed 行（JSON.parse 失敗）— 不應被當 leaf
+    filter.parse('{"id": "e", "parentId": "d"');
+
+    const parts = filter.flushHistory();
+    const emitted = parts.map((p) => p.formatted);
+    // walk 從最後一個有效 entry（d）開始，全部有效歷史保留
+    expect(emitted).toEqual(['a', 'b', 'c', 'd']);
+  });
+
   test('empty buffer flush returns empty', () => {
     const filter = new ActivePathFilter(new MockParser(), walkParent);
     filter.beginHistory();

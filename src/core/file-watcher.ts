@@ -257,7 +257,27 @@ export class FileWatcher {
   ): Promise<void> {
     const file = Bun.file(filePath);
     const content = await file.text();
-    const lines = content.split('\n').filter(Boolean);
+    const hasTrailingNewline = content.endsWith('\n');
+    const allLines = content.split('\n').filter(Boolean);
+
+    // 沒有 trailing newline → 最後一個片段可能是：
+    // (a) 完整合法 JSON（只是沒換行）→ 當完整行 emit（不丟失）
+    // (b) 半寫 entry（JSON.parse 失敗，檔案正在被寫入）→ 進 pendingBuffer
+    //     等 newline 重組，不能當完整行 emit（會拆成無效片段且 offset 推到
+    //     檔尾，補上的 newline + 剩餘內容被當新行，訊息永久遺失 — Codex
+    //     review 抓到）
+    let lines = allLines;
+    let partial = '';
+    if (!hasTrailingNewline && allLines.length > 0) {
+      const last = allLines[allLines.length - 1]!;
+      try {
+        JSON.parse(last);
+        // 完整合法 JSON：保留為完整行
+      } catch {
+        partial = last;
+        lines = allLines.slice(0, -1);
+      }
+    }
 
     let linesToProcess: string[];
     if (this.options?.initialLines !== undefined) {
@@ -281,9 +301,12 @@ export class FileWatcher {
 
     this.processedLines = lines.length;
     this.isFirstRead = false;
-    // 用實際讀到的 byte 長度當作 offset，下次只讀新增區塊
+    // offset 停在檔尾（partial 已在 firstRead 讀過，只是沒 emit — 由
+    // pendingBuffer 持有）。incremental read 從檔尾讀新增，combined =
+    // pendingBuffer + 新增，組合成完整行。若 offset 停在 partial 開頭，
+    // incremental 會重讀 partial → 內容重複。
     this.lastReadOffset = Buffer.byteLength(content, 'utf8');
-    this.pendingBuffer = '';
+    this.pendingBuffer = partial;
   }
 
   /**

@@ -395,6 +395,45 @@ describe('FileWatcher', () => {
       expect(received).toEqual(['{"a": 1}']);
     });
 
+    test('race#6b: first read emits complete JSON without trailing newline', async () => {
+      const testFile = join(tempDir, 'race6b.jsonl');
+      // 完整合法 JSON 但沒有 trailing newline（不是半寫）— 應當完整行 emit
+      await writeFile(testFile, '{"id": "a"}\n{"id": "b"}');
+
+      const received: string[] = [];
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: false,
+        onLine: (line) => received.push(line),
+      });
+
+      expect(received).toEqual(['{"id": "a"}', '{"id": "b"}']);
+    });
+
+    test('race#6: first read buffers partial trailing line (half-written entry)', async () => {
+      const testFile = join(tempDir, 'race6.jsonl');
+      // 檔案正在被寫入：最後一行沒有 newline（半寫 entry）
+      await writeFile(testFile, '{"id": "a"}\n{"id": "b');
+
+      const received: string[] = [];
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: true,
+        pollInterval: 50,
+        onLine: (line) => received.push(line),
+      });
+
+      // 半行不應被當完整行 emit（offset 停在檔尾，partial 由 pendingBuffer 保存）
+      expect(received).toEqual(['{"id": "a"}']);
+
+      // 補上 newline + 剩餘 → 組合成完整行
+      await appendFile(testFile, '"}\n{"id": "c"}\n');
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(received).toEqual(['{"id": "a"}', '{"id": "b"}', '{"id": "c"}']);
+      w.stop();
+    });
+
     test('race#5: jsonMode same-size rewrite detected via mtime + hash', async () => {
       const testFile = join(tempDir, 'race5.json');
       await writeFile(testFile, '{"a": 1}'); // 8 bytes

@@ -252,6 +252,15 @@ export function parseArgs(args: string[]): CliOptions {
   const finalAutoSwitch = opts.autoSwitch ?? false;
   const finalPane = opts.pane ?? false;
 
+  // auto-switch 選項（registry.supportsAutoSwitch）
+  if (finalAutoSwitch && !caps.supportsAutoSwitch) {
+    const list = agentsWithCapability((c) => c.supportsAutoSwitch).join('", "');
+    console.error(
+      `Error: --auto-switch option is only available for "${list}" agent types.`
+    );
+    process.exit(1);
+  }
+
   // interactive 選項（registry.supportsInteractive）
   if (finalInteractive && !caps.supportsInteractive) {
     const list = agentsWithCapability((c) => c.supportsInteractive).join(

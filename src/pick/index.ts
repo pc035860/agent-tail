@@ -15,7 +15,12 @@ import {
   extractPickListArgs,
   extractTailPassthroughArgs,
 } from './arg-passthrough.ts';
-import { AGENT_TYPES } from '../agents/registry.ts';
+import { AGENT_TYPES, AGENT_REGISTRY } from '../agents/registry.ts';
+
+/** agent-pick 只列出 pickEnabled 的 agent（registry 單一來源） */
+const PICK_AGENT_TYPES = AGENT_TYPES.filter(
+  (t) => AGENT_REGISTRY[t].pickEnabled
+);
 
 function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
@@ -39,14 +44,16 @@ async function main(): Promise<void> {
     console.error(
       'Usage: agent-pick <agent-type> [-p project] [-n count] [agent-tail-options...]'
     );
-    console.error(`Agent types: ${AGENT_TYPES.join(', ')}`);
+    console.error(`Agent types: ${PICK_AGENT_TYPES.join(', ')}`);
     process.exit(1);
   }
 
   const agentType = rawArgs[0]!;
-  if (!AGENT_TYPES.includes(agentType as (typeof AGENT_TYPES)[number])) {
+  if (
+    !PICK_AGENT_TYPES.includes(agentType as (typeof PICK_AGENT_TYPES)[number])
+  ) {
     console.error(
-      `Error: Invalid agent type "${agentType}". Use: ${AGENT_TYPES.join(', ')}`
+      `Error: Invalid agent type "${agentType}". Use: ${PICK_AGENT_TYPES.join(', ')}`
     );
     process.exit(1);
   }

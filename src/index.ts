@@ -297,12 +297,10 @@ async function main(): Promise<void> {
     }
     logSessionMeta(sessionFile, options.quiet);
   } else if (
-    (options.agentType === 'claude' ||
-      options.agentType === 'codex' ||
-      options.agentType === 'cursor') &&
+    AGENT_REGISTRY[options.agentType].supportsSubagent &&
     options.subagent !== undefined
   ) {
-    // Claude/Codex/Cursor subagent 模式（使用 --subagent 選項）
+    // subagent 模式（使用 --subagent 選項；registry.supportsSubagent 驅動）
     log(
       options.quiet,
       chalk.gray(`Searching for latest ${options.agentType} subagent...`)
