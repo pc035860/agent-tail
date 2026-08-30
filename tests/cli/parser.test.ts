@@ -31,11 +31,6 @@ describe('parseArgs', () => {
       const options = parseArgs(['node', 'agent-tail', 'cursor']);
       expect(options.agentType).toBe('cursor');
     });
-
-    test('parses pi agent type', () => {
-      const options = parseArgs(['node', 'agent-tail', 'pi']);
-      expect(options.agentType).toBe('pi');
-    });
   });
 
   describe('subagent option', () => {

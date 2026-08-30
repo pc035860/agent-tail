@@ -1,19 +1,32 @@
 import { Command } from 'commander';
 import type { AgentType, CliOptions } from '../core/types.ts';
+import {
+  AGENT_TYPES,
+  AGENT_REGISTRY,
+  agentsWithCapability,
+} from '../agents/registry.ts';
 
 function createProgram(): Command {
   const program = new Command();
 
+  const subagentAgents = agentsWithCapability((c) => c.supportsSubagent).join(
+    '/'
+  );
+  const interactiveAgents = agentsWithCapability(
+    (c) => c.supportsInteractive
+  ).join('/');
+  const paneAgents = agentsWithCapability((c) => c.supportsPane).join('/');
+  const autoSwitchAgents = agentsWithCapability(
+    (c) => c.supportsAutoSwitch
+  ).join('/');
+
   program
     .name('agent-tail')
     .description(
-      'Tail agent session logs (Codex, Claude Code, Gemini CLI, Cursor, Antigravity CLI & Pi) in real-time'
+      `Tail agent session logs (${AGENT_TYPES.join(', ')}) in real-time`
     )
     .version('0.1.0')
-    .argument(
-      '<agent-type>',
-      'Agent type: codex, claude, gemini, cursor, agy, or pi'
-    )
+    .argument('<agent-type>', `Agent type: ${AGENT_TYPES.join(', ')}`)
     .argument(
       '[session-id]',
       'Optional session ID to load (partial match supported)'
@@ -28,7 +41,7 @@ function createProgram(): Command {
     .option('--no-quiet', 'Show informational messages (default)')
     .option(
       '--subagent [id]',
-      'Claude/Codex/Cursor: tail subagent log (latest if no ID)'
+      `${subagentAgents}: tail subagent log (latest if no ID)`
     )
     .option(
       '-s, --sleep-interval <ms>',
@@ -42,27 +55,27 @@ function createProgram(): Command {
     )
     .option(
       '-i, --interactive',
-      'Claude/Codex/Cursor: interactive mode for switching between sessions (Tab to switch)'
+      `${interactiveAgents}: interactive mode for switching between sessions (Tab to switch)`
     )
     .option('--no-interactive', 'Disable interactive mode (default)')
     .option(
       '--with-subagents',
-      'Claude/Codex/Cursor: include subagent content in output'
+      `${subagentAgents}: include subagent content in output`
     )
     .option('--no-with-subagents', 'Exclude subagent content (default)')
     .option(
       '--auto-switch',
-      'Auto-switch to latest session in project (Claude/Gemini/Codex/Cursor/Pi)'
+      `Auto-switch to latest session in project (${autoSwitchAgents})`
     )
     .option('--no-auto-switch', 'Disable auto-switch (default)')
     .option(
       '-a, --all',
-      'Claude/Codex/Cursor: show all content (verbose + with-subagents + auto-switch)',
+      `${subagentAgents}: show all content (verbose + with-subagents + auto-switch)`,
       false
     )
     .option(
       '--pane',
-      'Claude/Codex/Cursor: auto-open tmux pane for each new subagent'
+      `${paneAgents}: auto-open tmux pane for each new subagent`
     )
     .option('--no-pane', 'Disable pane auto-open (default)')
     .option('-l, --list', 'List recent sessions instead of tailing')
@@ -110,20 +123,14 @@ export function parseArgs(args: string[]): CliOptions {
   const sessionIdArg = program.args[1];
   const opts = program.opts();
 
-  // 驗證 agent 類型
-  if (
-    agentTypeArg !== 'codex' &&
-    agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'gemini' &&
-    agentTypeArg !== 'cursor' &&
-    agentTypeArg !== 'agy' &&
-    agentTypeArg !== 'pi'
-  ) {
+  // 驗證 agent 類型（從 registry 導出）
+  if (!agentTypeArg || !AGENT_TYPES.includes(agentTypeArg as AgentType)) {
     console.error(
-      `Error: Invalid agent type "${agentTypeArg}". Use "codex", "claude", "gemini", "cursor", "agy", or "pi".`
+      `Error: Invalid agent type "${agentTypeArg}". Use ${AGENT_TYPES.join(', ')}.`
     );
     process.exit(1);
   }
+  const caps = AGENT_REGISTRY[agentTypeArg as AgentType];
 
   // --summary 模式（自動 no-follow，互斥同 --list）
   const finalSummary = opts.summary ?? false;
@@ -181,15 +188,11 @@ export function parseArgs(args: string[]): CliOptions {
     }
   }
 
-  // subagent 選項對 claude、codex、cursor 有效
-  if (
-    opts.subagent !== undefined &&
-    agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex' &&
-    agentTypeArg !== 'cursor'
-  ) {
+  // subagent 選項（registry.supportsSubagent）
+  if (opts.subagent !== undefined && !caps.supportsSubagent) {
+    const list = agentsWithCapability((c) => c.supportsSubagent).join('", "');
     console.error(
-      'Error: --subagent option is only available for "claude", "codex", and "cursor" agent types.'
+      `Error: --subagent option is only available for "${list}" agent types.`
     );
     process.exit(1);
   }
@@ -224,15 +227,11 @@ export function parseArgs(args: string[]): CliOptions {
     }
   }
 
-  // --all preset 選項對 claude、codex、cursor 有效（需要在展開前驗證）
-  if (
-    opts.all &&
-    agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex' &&
-    agentTypeArg !== 'cursor'
-  ) {
+  // --all preset 選項（需要在展開前驗證）
+  if (opts.all && !caps.supportsSubagent) {
+    const list = agentsWithCapability((c) => c.supportsSubagent).join('", "');
     console.error(
-      'Error: --all option is only available for "claude", "codex", and "cursor" agent types.'
+      `Error: --all option is only available for "${list}" agent types.`
     );
     process.exit(1);
   }
@@ -253,15 +252,22 @@ export function parseArgs(args: string[]): CliOptions {
   const finalAutoSwitch = opts.autoSwitch ?? false;
   const finalPane = opts.pane ?? false;
 
-  // interactive 選項對 claude、codex、cursor 有效
-  if (
-    finalInteractive &&
-    agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex' &&
-    agentTypeArg !== 'cursor'
-  ) {
+  // auto-switch 選項（registry.supportsAutoSwitch）
+  if (finalAutoSwitch && !caps.supportsAutoSwitch) {
+    const list = agentsWithCapability((c) => c.supportsAutoSwitch).join('", "');
     console.error(
-      'Error: --interactive option is only available for "claude", "codex", and "cursor" agent types.'
+      `Error: --auto-switch option is only available for "${list}" agent types.`
+    );
+    process.exit(1);
+  }
+
+  // interactive 選項（registry.supportsInteractive）
+  if (finalInteractive && !caps.supportsInteractive) {
+    const list = agentsWithCapability((c) => c.supportsInteractive).join(
+      '", "'
+    );
+    console.error(
+      `Error: --interactive option is only available for "${list}" agent types.`
     );
     process.exit(1);
   }
@@ -282,15 +288,11 @@ export function parseArgs(args: string[]): CliOptions {
     process.exit(1);
   }
 
-  // pane 選項對 claude、codex、cursor 有效
-  if (
-    finalPane &&
-    agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex' &&
-    agentTypeArg !== 'cursor'
-  ) {
+  // pane 選項（registry.supportsPane）
+  if (finalPane && !caps.supportsPane) {
+    const list = agentsWithCapability((c) => c.supportsPane).join('", "');
     console.error(
-      'Error: --pane option is only available for "claude", "codex", and "cursor" agent types.'
+      `Error: --pane option is only available for "${list}" agent types.`
     );
     process.exit(1);
   }
@@ -324,15 +326,11 @@ export function parseArgs(args: string[]): CliOptions {
     finalWithSubagents = true;
   }
 
-  // withSubagents 選項對 claude、codex、cursor 有效
-  if (
-    finalWithSubagents &&
-    agentTypeArg !== 'claude' &&
-    agentTypeArg !== 'codex' &&
-    agentTypeArg !== 'cursor'
-  ) {
+  // withSubagents 選項（registry.supportsSubagent）
+  if (finalWithSubagents && !caps.supportsSubagent) {
+    const list = agentsWithCapability((c) => c.supportsSubagent).join('", "');
     console.error(
-      'Error: --with-subagents option is only available for "claude", "codex", and "cursor" agent types.'
+      `Error: --with-subagents option is only available for "${list}" agent types.`
     );
     process.exit(1);
   }

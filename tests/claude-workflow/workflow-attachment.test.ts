@@ -150,7 +150,8 @@ describe('WorkflowAttachment', () => {
     });
     await attachment.start();
 
-    // Write new agent transcript after start
+    // Write new agent transcript after start (complete JSON line, no trailing
+    // newline — firstRead must still emit it)
     const agentPath = join(fixture.transcriptDir, `agent-${AGENT_ID_1}.jsonl`);
     await writeFile(agentPath, makeAssistantLine('dynamic'));
     // 增加 slack 以涵蓋 Bun 1.3.14 上 fs.watch directory 偵測偶發較慢

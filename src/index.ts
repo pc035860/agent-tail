@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { basename, dirname } from 'node:path';
 import { parseArgs } from './cli/parser.ts';
 import { FileWatcher } from './core/file-watcher.ts';
+import { ActivePathFilter } from './core/active-path-filter.ts';
 import {
   MultiFileWatcher,
   type WatchedFile,
@@ -14,12 +15,10 @@ import {
   registerInteractiveCleanup,
 } from './interactive/keyboard.ts';
 import type { Agent, LineParser } from './agents/agent.interface.ts';
+import { AGENT_REGISTRY } from './agents/registry.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
-import { GeminiAgent } from './agents/gemini/gemini-agent.ts';
 import { CursorAgent } from './agents/cursor/cursor-agent.ts';
-import { AgyAgent } from './agents/agy/agy-agent.ts';
-import { PiAgent } from './agents/pi/pi-agent.ts';
 import type { Formatter } from './formatters/formatter.interface.ts';
 import { RawFormatter } from './formatters/raw-formatter.ts';
 import { PrettyFormatter } from './formatters/pretty-formatter.ts';
@@ -165,8 +164,7 @@ async function summaryCommand(
     agent.parser.setConversationId?.(uuid);
   }
 
-  const jsonMode =
-    options.agentType === 'gemini' || options.agentType === 'agy';
+  const jsonMode = AGENT_REGISTRY[options.agentType].jsonMode;
   const lines = await formatSummary(sessionFile.path, agent.parser, formatter, {
     headLines: 5,
     tailLines,
@@ -219,19 +217,10 @@ async function listCommand(agent: Agent, options: CliOptions): Promise<void> {
 async function main(): Promise<void> {
   const options = parseArgs(process.argv);
 
-  // 選擇 Agent
-  const agent: Agent =
-    options.agentType === 'codex'
-      ? new CodexAgent({ verbose: options.verbose })
-      : options.agentType === 'gemini'
-        ? new GeminiAgent({ verbose: options.verbose })
-        : options.agentType === 'cursor'
-          ? new CursorAgent({ verbose: options.verbose })
-          : options.agentType === 'agy'
-            ? new AgyAgent({ verbose: options.verbose })
-            : options.agentType === 'pi'
-              ? new PiAgent({ verbose: options.verbose })
-              : new ClaudeAgent({ verbose: options.verbose });
+  // 選擇 Agent（從 registry 實例化，取代三元鏈）
+  const agent: Agent = AGENT_REGISTRY[options.agentType].factory({
+    verbose: options.verbose,
+  });
 
   // --list 模式：列出 session 後退出
   if (options.list) {
@@ -308,12 +297,10 @@ async function main(): Promise<void> {
     }
     logSessionMeta(sessionFile, options.quiet);
   } else if (
-    (options.agentType === 'claude' ||
-      options.agentType === 'codex' ||
-      options.agentType === 'cursor') &&
+    AGENT_REGISTRY[options.agentType].supportsSubagent &&
     options.subagent !== undefined
   ) {
-    // Claude/Codex/Cursor subagent 模式（使用 --subagent 選項）
+    // subagent 模式（使用 --subagent 選項；registry.supportsSubagent 驅動）
     log(
       options.quiet,
       chalk.gray(`Searching for latest ${options.agentType} subagent...`)
@@ -2537,11 +2524,27 @@ async function startSingleWatch(
     currentParser.setConversationId?.(uuid);
   }
 
-  // Pi：歷史 dump 緩衝在 parser 內，dump 完成後沿 parentId 過濾輸出 active 路徑。
-  // 其他 parser 沒有這兩個方法（optional chaining no-op）。
-  const flushHistoryOutput = (parser: LineParser): void => {
-    for (const parsed of parser.flushHistory?.() ?? []) {
-      console.log(formatter.format(parsed));
+  // 樹狀 active-path replay（v2 §4.3）：registry.treeReplay 存在時包
+  // ActivePathFilter（初始 dump 緩衝 → onInitialDumpComplete flush → live 透傳）。
+  let replayFilter: ActivePathFilter | null = null;
+  const wrapForReplay = (parser: LineParser): LineParser => {
+    const replay = AGENT_REGISTRY[options.agentType].treeReplay;
+    if (replay) {
+      replayFilter = new ActivePathFilter(parser, replay.walkParent);
+      replayFilter.beginHistory();
+      return replayFilter;
+    }
+    return parser;
+  };
+  currentParser = wrapForReplay(currentParser);
+
+  // 初始 dump 完成 → flush replay filter（只輸出 active 路徑）
+  const flushReplay = (): void => {
+    if (replayFilter) {
+      const parts = replayFilter.flushHistory();
+      for (const part of parts) {
+        console.log(formatter.format(part));
+      }
     }
   };
 
@@ -2549,18 +2552,13 @@ async function startSingleWatch(
   const makeSingleLineHandler =
     (parser: LineParser) =>
     (line: string): void => {
-      if (
-        options.agentType === 'gemini' ||
-        options.agentType === 'cursor' ||
-        options.agentType === 'agy' ||
-        options.agentType === 'pi'
-      ) {
-        // Stateful parsers (Gemini/Cursor/Agy/Pi): drain until null
+      if (AGENT_REGISTRY[options.agentType].statefulParser) {
+        // Stateful parsers: drain until null
         drainParser(parser, line, (parsed) => {
           console.log(formatter.format(parsed));
         });
       } else {
-        // Codex JSONL：每行一個事件，單次處理
+        // Stateless JSONL：每行一個事件，單次處理
         const parsed = parser.parse(line);
         if (parsed) {
           console.log(formatter.format(parsed));
@@ -2578,34 +2576,32 @@ async function startSingleWatch(
       chalk.gray(`--- Switched to ${basename(nextFile.path)} ---`)
     );
 
-    // Gemini/Agy/Pi 需要重建 parser 以清除狀態（processedMessageIds 等）
-    if (options.agentType === 'gemini') {
-      const newAgent = new GeminiAgent({ verbose: options.verbose });
+    // recreateOnSwitch：重建 parser 以清除狀態（processedMessageIds 等）
+    if (AGENT_REGISTRY[options.agentType].recreateOnSwitch) {
+      const newAgent = AGENT_REGISTRY[options.agentType].factory({
+        verbose: options.verbose,
+      });
       currentParser = newAgent.parser;
-    } else if (options.agentType === 'agy') {
-      const newAgent = new AgyAgent({ verbose: options.verbose });
-      currentParser = newAgent.parser;
-      const uuid = basename(nextFile.path, '.pb');
-      currentParser.setConversationId?.(uuid);
-    } else if (options.agentType === 'pi') {
-      const newAgent = new PiAgent({ verbose: options.verbose });
-      currentParser = newAgent.parser;
+      if (options.agentType === 'agy') {
+        const uuid = basename(nextFile.path, '.pb');
+        currentParser.setConversationId?.(uuid);
+      }
     }
+    // 重新包 treeReplay filter（新 session 需要新的 filter 狀態）
+    currentParser = wrapForReplay(currentParser);
 
     watcher = new FileWatcher();
-    // Pi：新 session 的歷史 dump 先緩衝，dump 完成後沿 parentId 過濾輸出
-    currentParser.beginHistory?.();
     await watcher.start(nextFile.path, {
       follow: true,
       pollInterval: options.sleepInterval,
       initialLines: options.lines,
-      jsonMode: options.agentType === 'gemini' || options.agentType === 'agy',
+      jsonMode: AGENT_REGISTRY[options.agentType].jsonMode,
       onLine: makeSingleLineHandler(currentParser),
+      onInitialDumpComplete: flushReplay,
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
       },
     });
-    flushHistoryOutput(currentParser);
   };
 
   // 建立 super-follow 控制器（如果支援）
@@ -2631,20 +2627,18 @@ async function startSingleWatch(
   });
 
   // 開始監控
-  currentParser.beginHistory?.();
   await watcher.start(sessionFile.path, {
     follow: options.follow,
     pollInterval: options.sleepInterval,
     initialLines: options.lines,
-    // Gemini 使用完整 JSON 檔案格式，需要啟用 jsonMode
-    jsonMode: options.agentType === 'gemini' || options.agentType === 'agy',
+    // jsonMode（registry：Gemini/Agy 使用完整 JSON 檔案格式）
+    jsonMode: AGENT_REGISTRY[options.agentType].jsonMode,
     onLine: makeSingleLineHandler(currentParser),
+    onInitialDumpComplete: flushReplay,
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
     },
   });
-  // Pi：初始 dump 完成，沿 parentId 過濾輸出 active 路徑（其他 parser no-op）
-  flushHistoryOutput(currentParser);
 
   // 如果不是 follow 模式，結束程式
   if (!options.follow) {
