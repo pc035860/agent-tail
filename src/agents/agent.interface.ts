@@ -80,18 +80,6 @@ export interface LineParser {
    * 設定會話 ID（可選，如 AgyAgent 需要它來識別解析對象）
    */
   setConversationId?(id: string): void;
-
-  /**
-   * 進入歷史緩衝模式（可選，Pi 用於樹狀 active-path 過濾）。
-   * 緩衝期間 parse() 只收集不輸出，直到 flushHistory()。
-   */
-  beginHistory?(): void;
-
-  /**
-   * 輸出緩衝的歷史並切換為 live 模式（可選，Pi 用於 parentId 樹狀過濾）。
-   * 在 FileWatcher 初始 dump 完成後呼叫（watcher.start() await 初始讀取）。
-   */
-  flushHistory?(): ParsedLine[];
 }
 
 /**

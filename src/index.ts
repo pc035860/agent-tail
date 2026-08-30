@@ -19,7 +19,6 @@ import { ClaudeAgent } from './agents/claude/claude-agent.ts';
 import { GeminiAgent } from './agents/gemini/gemini-agent.ts';
 import { CursorAgent } from './agents/cursor/cursor-agent.ts';
 import { AgyAgent } from './agents/agy/agy-agent.ts';
-import { PiAgent } from './agents/pi/pi-agent.ts';
 import type { Formatter } from './formatters/formatter.interface.ts';
 import { RawFormatter } from './formatters/raw-formatter.ts';
 import { PrettyFormatter } from './formatters/pretty-formatter.ts';
@@ -229,9 +228,7 @@ async function main(): Promise<void> {
           ? new CursorAgent({ verbose: options.verbose })
           : options.agentType === 'agy'
             ? new AgyAgent({ verbose: options.verbose })
-            : options.agentType === 'pi'
-              ? new PiAgent({ verbose: options.verbose })
-              : new ClaudeAgent({ verbose: options.verbose });
+            : new ClaudeAgent({ verbose: options.verbose });
 
   // --list 模式：列出 session 後退出
   if (options.list) {
@@ -2537,14 +2534,6 @@ async function startSingleWatch(
     currentParser.setConversationId?.(uuid);
   }
 
-  // Pi：歷史 dump 緩衝在 parser 內，dump 完成後沿 parentId 過濾輸出 active 路徑。
-  // 其他 parser 沒有這兩個方法（optional chaining no-op）。
-  const flushHistoryOutput = (parser: LineParser): void => {
-    for (const parsed of parser.flushHistory?.() ?? []) {
-      console.log(formatter.format(parsed));
-    }
-  };
-
   // 建立 onLine handler 函數（單一 agent 用，與 Claude 多檔案的 createOnLineHandler 不同）
   const makeSingleLineHandler =
     (parser: LineParser) =>
@@ -2552,10 +2541,9 @@ async function startSingleWatch(
       if (
         options.agentType === 'gemini' ||
         options.agentType === 'cursor' ||
-        options.agentType === 'agy' ||
-        options.agentType === 'pi'
+        options.agentType === 'agy'
       ) {
-        // Stateful parsers (Gemini/Cursor/Agy/Pi): drain until null
+        // Stateful parsers (Gemini/Cursor/Agy): drain until null
         drainParser(parser, line, (parsed) => {
           console.log(formatter.format(parsed));
         });
@@ -2578,7 +2566,7 @@ async function startSingleWatch(
       chalk.gray(`--- Switched to ${basename(nextFile.path)} ---`)
     );
 
-    // Gemini/Agy/Pi 需要重建 parser 以清除狀態（processedMessageIds 等）
+    // Gemini/Agy 需要重建 parser 以清除狀態（processedMessageIds 等）
     if (options.agentType === 'gemini') {
       const newAgent = new GeminiAgent({ verbose: options.verbose });
       currentParser = newAgent.parser;
@@ -2587,14 +2575,9 @@ async function startSingleWatch(
       currentParser = newAgent.parser;
       const uuid = basename(nextFile.path, '.pb');
       currentParser.setConversationId?.(uuid);
-    } else if (options.agentType === 'pi') {
-      const newAgent = new PiAgent({ verbose: options.verbose });
-      currentParser = newAgent.parser;
     }
 
     watcher = new FileWatcher();
-    // Pi：新 session 的歷史 dump 先緩衝，dump 完成後沿 parentId 過濾輸出
-    currentParser.beginHistory?.();
     await watcher.start(nextFile.path, {
       follow: true,
       pollInterval: options.sleepInterval,
@@ -2605,7 +2588,6 @@ async function startSingleWatch(
         console.error(chalk.red(`Error: ${error.message}`));
       },
     });
-    flushHistoryOutput(currentParser);
   };
 
   // 建立 super-follow 控制器（如果支援）
@@ -2631,7 +2613,6 @@ async function startSingleWatch(
   });
 
   // 開始監控
-  currentParser.beginHistory?.();
   await watcher.start(sessionFile.path, {
     follow: options.follow,
     pollInterval: options.sleepInterval,
@@ -2643,8 +2624,6 @@ async function startSingleWatch(
       console.error(chalk.red(`Error: ${error.message}`));
     },
   });
-  // Pi：初始 dump 完成，沿 parentId 過濾輸出 active 路徑（其他 parser no-op）
-  flushHistoryOutput(currentParser);
 
   // 如果不是 follow 模式，結束程式
   if (!options.follow) {
