@@ -97,10 +97,20 @@ src/
 │   ├── detector-interfaces.ts # Shared interfaces: OutputHandler, WatcherHandler, SessionHandler, RetryConfig
 │   │                         # + MAIN_LABEL, makeAgentLabel, extractAgentIdFromLabel
 │   ├── file-watcher.ts       # Single file monitoring with tail -f behavior
+│   │                         # baseline 語義 = 已處理內容 (readAndUpdateBaseline)；onInitialDumpComplete
+│   ├── active-path-filter.ts # ActivePathFilter (v2 §4.3): 樹狀 replay decorator — 初始 dump 緩衝 →
+│   │                         # flushHistory 沿 parentId 走 active path → live 透傳 (預設 live)
 │   ├── multi-file-watcher.ts # Multi-file monitoring (for subagent support)
 │   └── session-manager.ts    # Session state management for interactive mode
 ├── agents/
 │   ├── agent.interface.ts    # Agent, SessionFinder, LineParser interfaces
+│   ├── registry.ts           # Agent capabilities registry (v2 §4.1): factory/statefulParser/
+│   │                         # recreateOnSwitch/jsonMode/supports*/pickEnabled/treeReplay —
+│   │                         # 單一來源，CLI 驗證 / index.ts 實例化 / drain 清單 / agent-pick 全導出
+│   ├── multi-emit-parser.ts  # MultiEmitParserBase (v2 §4.2): 共用 multi-emit 狀態機
+│   │                         # (drain 佇列 + lastProcessedLine guard)；Claude/Cursor/Pi 子類別只寫 toParts()
+│   ├── pi/
+│   │   └── pi-agent.ts       # PiSessionFinder + PiLineParser (JSONL v3, tree active-path replay)
 │   ├── codex/
 │   │   ├── codex-agent.ts    # CodexSessionFinder with getProjectInfo, findLatestInProject
 │   │   └── session-cache.ts  # Cwd-indexed cache with incremental refresh
@@ -269,6 +279,16 @@ src/
 - **`--list` row alignment uses fixed-width padding, not raw `\t`**: `formatSessionList` pads visible cols 0..3 (`TYPE_COLUMN_WIDTH=4` / `ID_COLUMN_WIDTH=15` / `TIME_COLUMN_WIDTH=8` / `NOTES_COLUMN_WIDTH=36`) so every row writes the same cumulative cell count before each `\t`. Terminal tabs then land at deterministic stops (8 → 24 → 40 → 80) and TITLE always starts at cell 80 — without the pad, `3m ago` vs `just now` (6 vs 8 cells) shift TITLE 8 cells row-to-row. Padding helpers live in `src/utils/visible-width.ts` (`visibleWidth` / `padVisibleEnd` / `truncateVisible` — CJK is 2 cells, SGR escapes stripped before counting; ranges are hand-rolled, not a full Unicode width table). fzf delimiter remains `\t`, column count remains 6, so `parseSelection` / ctrl-y / `{6}` are unaffected. `tests/list/session-lister.test.ts` simulates tab expansion (`ceil((cursor+1)/8)*8`) and asserts TITLE start cell is identical across rows with mixed widths — break the widths and the test fires.
 - **`--list` auto title fallback (Claude only)**: sessions without a `customTitle` get an `autoTitle` derived from the first meaningful user prompt via `readFirstUserPromptFromHead(filePath, maxLength=80)` in `src/utils/session-time.ts`. Filter knows about `<scheduled-task name="X">` → `[cron] X` (pure-ASCII marker), `<command-name>/cmd</command-name>` + `<command-args>` → `/cmd args`, `Caveat:` skip, plus an explicit `INTERNAL_WRAPPER_TAG_RE` whitelist (`system-reminder`, `bash-stdout|stderr|input`, `local-command-stdout|stderr`, `attached-files`, `user-prompt-submit-hook`, …) — those wrappers are SKIPPED entirely (do NOT generic-XML-strip them, or the reminder content surfaces as the title). Read uses progressive chunks 16K → 64K → 256K and breaks only after the current chunk covers the whole file — the loop condition was inverted in an earlier pass and silently dropped ~20KB files; tests in `tests/utils/session-time.test.ts` lock the regression. `formatTitleColumn` in `src/list/session-lister.ts` renders the visual contract: `customTitle` plain (full weight), `autoTitle` `chalk.dim('› ' + text)` (subtle dim with `›` prefix), neither `chalk.dim('—')`. `SessionListItem.autoTitle` (in `src/core/types.ts`) carries the value — only `customTitle` is loaded in `_collectAndEnrichMainSessions`'s first parallel pass; `autoTitle` is read AFTER `sort + slice(limit)` so only the returned items pay the head-read I/O.
 - **`autoTitle` has two producers; `customTitle` has dual semantics on workflow rows**: main rows fill `autoTitle` from the first user prompt (above); workflow rows fill it from snapshot `workflowName`. `formatTitleColumn` treats both identically (`dim('› TEXT')`) — derived label, not user-authored. The dual semantics live in `WorkflowSessionFinder`: `_collectWorkflows` sets `file.customTitle = 'wf:<workflowName>'` (or `'wf:<runId>'` fallback) so `src/index.ts:382` `isWorkflowMode` can detect workflow mode via `customTitle.startsWith('wf:')` on the return of `findBySessionId`. `listSessions` strips that customTitle via rest destructuring before re-emitting as `SessionListItem`, and only sets `autoTitle` when `workflowName` is actually present (snapshot read failure → neither field → row falls back to `dim('—')`; the ID column already shows the runId, no point repeating it). When changing the workflow finder, do NOT remove the internal `customTitle='wf:'` set — the dispatcher mode contract depends on it.
+
+## Pi Agent（v2 rebuild，SPEC specs/pi-support/SPEC.md）
+
+- **Storage layout**: `~/.pi/agent/sessions/--<cwd-with-`/`→`-`>--/<ISO-ts>_<uuid>.jsonl`。Per-project dirs like Claude；JSONL v3 每個 entry 有 ISO timestamp。第一行是 `type:"session"` header 攜帶權威 `cwd` — `readPiCwdFromHead` 只讀第一行且**不 ~-substitute**（`readCwdFromHead` 會替換 homedir，破壞 `findLatestInProject` 的 round-trip 精確比對）。
+- **`encodePiProjectDir` 必須剝 leading `/`**：`/Users/x/code/foo` → `--Users-x-code-foo--`（直接 split 會得到 `---Users-...` 三條 dash）。Trailing-slash 也要剝。
+- **樹狀 active-path replay 是 ActivePathFilter decorator（v2 §4.3），不在 LineParser 介面**：`src/core/active-path-filter.ts` 包任意 LineParser，`beginHistory()` 後緩衝 entries（只記 id/parentId/line），`flushHistory()` 沿 parentId 從最後 entry 走回 root 只輸出 active 路徑（`/tree` 編輯重送的死分支被排除），之後 live 透傳。**預設 live**（`--summary` 不呼叫 beginHistory 時直接透傳）。掛載點是 FileWatcher 的 `onInitialDumpComplete` 事件 — `index.ts` 的 `startSingleWatch` 透過 `registry.treeReplay` capability 泛型包裝（pi 特判消失）。`flushHistory` 用 `drainParser(..., { drainArg: '' })` — inner 可能是 stateless parser，while 迴圈會無限迴圈（測試抓到）。
+- **`PiLineParser` 是 MultiEmitParserBase 子類別**：只寫 `toParts(entry)`。entry 類型：`session` header 跳過；`message` role user/assistant/toolResult/bashExecution/custom；`session_info.name`（`/name`）→ custom-title（TITL）；`custom_message`（頂層 entry）display !== false 時輸出 custom；`model_change`/`thinking_level_change`/`compaction`/`branch_summary`/`label` 跳過。assistant content 是 block 陣列：`text`/`thinking`/`toolCall`（`name`+`arguments`）— multi-emit。bashExecution → `type:'output'`（OUT）、custom → `type:'custom'`（CUST，display:false 跳過）。
+- **`-p` 分層語義（v2 §4.5）**：`findLatest`/`listSessions` 走 encoded dir name fuzzy（成本考量）；`findLatestInProject` header cwd 嚴格（mtime 降序 + 第一個吻合即返回，碰撞安全）；`findBySessionId` 多重匹配 + project filter 時 header cwd 消歧（§4.7，成本只在多重匹配時發生）。
+- **Subagents NOT supported**：`~/.pi/agent/ferris-pi-subagents/` 是 extension 私有格式。registry `supportsSubagent/Interactive/Pane` 全 false — CLI 驗證自動拒絕。
+- **新增 agent 的接線點**：agent 檔案 + `AgentType` union + registry 一行。散落清單（CLI 驗證、help text、drain 清單、jsonMode、agent-pick AGENT_TYPES）全部從 registry 導出 — 新增 agent 不再碰任何散落清單。
 
 ## Code Quality
 

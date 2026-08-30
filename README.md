@@ -4,7 +4,7 @@ Real-time log viewer for AI coding assistants. See what your AI is thinking and 
 
 ## What is this?
 
-When you use AI coding assistants like **Claude Code**, **Codex**, **Gemini CLI**, or **Cursor**, they create session logs that record every conversation and action. These logs are stored in hidden folders and are hard to read.
+When you use AI coding assistants like **Claude Code**, **Codex**, **Gemini CLI**, **Cursor**, **Antigravity (agy)**, or **Pi**, they create session logs that record every conversation and action. These logs are stored in hidden folders and are hard to read.
 
 **agent-tail** makes it easy to watch these logs in real-time, just like `tail -f` for regular log files. This helps you:
 
@@ -60,6 +60,9 @@ bun start gemini
 # Watch Cursor logs
 bun start cursor
 
+# Watch Pi logs
+bun start pi
+
 # Load a specific session by ID (partial match)
 bun start claude abc123
 ```
@@ -79,6 +82,9 @@ agent-pick claude
 
 # Filter by project
 agent-pick codex -p myproject
+
+# Browse Pi sessions
+agent-pick pi
 
 # Forward extra tail flags after selection
 agent-pick claude -v --with-subagents
@@ -235,6 +241,38 @@ bun start claude --all --no-with-subagents
 
 Negation flags override the preset, giving you fine-grained control while keeping the shortcut convenient.
 
+## Pi Agent
+
+Tail Pi (the `pi` coding agent) sessions. Pi stores sessions as JSONL v3 with a
+tree structure (`id`/`parentId`); agent-tail replays only the active path, so
+dead branches from `/tree` edit-and-resend are excluded.
+
+```bash
+# Tail the latest Pi session
+bun start pi
+
+# Filter by project (fuzzy match on encoded cwd dir)
+bun start pi -p myproject
+
+# Load a specific session by UUID prefix
+bun start pi 01a05037
+
+# List recent sessions (session_info name → TITLE)
+bun start pi --list
+
+# Head + tail summary
+bun start pi --summary
+
+# Auto-switch to latest session in project (header cwd authoritative)
+bun start pi --auto-switch
+
+# Browse Pi sessions with fzf
+agent-pick pi
+```
+
+> **Note:** Pi subagent / interactive / pane modes are not supported (the
+> subagent format is extension-private, not part of the core session format).
+
 ## Workflow Mode (Claude only)
 
 Tail a Claude Code **Workflow** run (multi-agent orchestration) — a workflow has its own journal (event stream) plus N parallel subagent transcripts.
@@ -318,7 +356,7 @@ agent-tail automatically finds the most recent session and displays it in a read
 
 This means the AI assistant hasn't created any logs yet. Make sure you've:
 1. Used the AI assistant at least once
-2. Specified the correct agent type (`claude`, `codex`, `gemini`, or `cursor`)
+2. Specified the correct agent type (`claude`, `codex`, `gemini`, `cursor`, `agy`, or `pi`)
 
 ### Logs look garbled
 
