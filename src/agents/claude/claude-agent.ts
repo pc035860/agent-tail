@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Glob } from 'bun';
 import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
+import { MultiEmitParser } from '../multi-emit-parser.ts';
 import type {
   ClaudeSessionResult,
   ParsedLine,
@@ -526,99 +527,65 @@ export class ClaudeSessionFinder implements SessionFinder {
 /**
  * Claude Code JSONL 解析器
  */
-class ClaudeLineParser implements LineParser {
+class ClaudeLineParser extends MultiEmitParser {
   private verbose: boolean;
-  /** 追蹤 assistant message 內部的處理進度 */
-  private currentMessageState: {
-    data: Record<string, unknown>;
-    contentParts: Array<{
-      type: string;
-      text?: string;
-      name?: string;
-      id?: string;
-      input?: Record<string, unknown>;
-    }>;
-    partIndex: number;
-    modelShort: string;
-    hasTextBefore: boolean;
-  } | null = null;
-  /** 追蹤已處理的 line，避免 while 迴圈重複處理 */
-  private lastProcessedLine: string | null = null;
 
   constructor(options: ParserOptions = { verbose: false }) {
+    super();
     this.verbose = options.verbose;
   }
 
-  parse(line: string): ParsedLine | null {
-    // 如果正在處理 assistant message 的內部狀態
-    if (this.currentMessageState) {
-      const result = this.processAssistantPart();
-      if (result) return result;
-      // 處理完畢，清除狀態並回傳 null
-      this.currentMessageState = null;
-      return null;
-    }
+  /**
+   * 一個 JSONL entry → 0..N 個 ParsedLine（v2 MultiEmitParserBase 的純映射函數）。
+   * 狀態機（drain 佇列 / dedup guard / 清 state 保留 guard）由基底類別管理。
+   */
+  protected toParts(entry: unknown): ParsedLine[] {
+    const data = entry as Record<string, unknown>;
+    const type = (data.type as string) || 'unknown';
+    const timestamp = (data.timestamp as string) || '';
 
-    if (!line.trim()) return null;
-
-    // 避免重複處理同一個 line（非 assistant message 不需要 while 迴圈）
-    if (line === this.lastProcessedLine) {
-      return null;
-    }
-    this.lastProcessedLine = line;
-
-    try {
-      const data = JSON.parse(line);
-      const type = data.type || 'unknown';
-      const timestamp = data.timestamp || '';
-
-      // custom-title event（Claude /rename command）
-      if (type === CUSTOM_TITLE_TYPE) {
-        const customTitle = data.customTitle as string;
-        if (!customTitle) return null;
-        return {
+    // custom-title event（Claude /rename command）
+    if (type === CUSTOM_TITLE_TYPE) {
+      const customTitle = data.customTitle as string;
+      if (!customTitle) return [];
+      return [
+        {
           type: CUSTOM_TITLE_TYPE,
           timestamp,
           raw: data,
           formatted: `Session renamed: "${customTitle}"`,
           isCustomTitle: true,
           customTitleValue: customTitle,
-        };
-      }
-
-      // assistant message 需要特殊處理（可能包含多個 tool_use）
-      if (type === 'assistant') {
-        return this.parseAssistantMessage(data, timestamp);
-      }
-
-      // toolUseResult 記錄（subagent 完成時的回傳）
-      if (data.toolUseResult) {
-        return this.parseToolUseResult(data, timestamp);
-      }
-
-      const formatted = this.format(data);
-
-      // 空內容不輸出
-      if (!formatted) return null;
-
-      return {
-        type,
-        timestamp,
-        raw: data,
-        formatted,
-      };
-    } catch {
-      return null;
+        },
+      ];
     }
+
+    // assistant message 需要特殊處理（可能包含多個 tool_use）
+    if (type === 'assistant') {
+      return this.parseAssistantMessage(data, timestamp);
+    }
+
+    // toolUseResult 記錄（subagent 完成時的回傳）
+    if (data.toolUseResult) {
+      const result = this.parseToolUseResult(data, timestamp);
+      return result ? [result] : [];
+    }
+
+    const formatted = this.format(data);
+
+    // 空內容不輸出
+    if (!formatted) return [];
+
+    return [{ type, timestamp, raw: data, formatted }];
   }
 
   /**
-   * 解析 assistant message，拆分成多個部分
+   * 解析 assistant message，拆分成多個部分（text / tool_use）
    */
   private parseAssistantMessage(
     data: Record<string, unknown>,
-    _timestamp: string
-  ): ParsedLine | null {
+    timestamp: string
+  ): ParsedLine[] {
     const message = data.message as {
       model?: string;
       content: Array<{
@@ -645,76 +612,50 @@ class ClaudeLineParser implements LineParser {
         (part.type === 'tool_use' && part.name)
     );
 
-    if (validParts.length === 0) return null;
+    if (validParts.length === 0) return [];
 
-    // 初始化狀態
-    this.currentMessageState = {
-      data,
-      contentParts: validParts,
-      partIndex: 0,
-      modelShort,
-      hasTextBefore: false,
-    };
+    // 一次把全部部分映射成 ParsedLine（hasTextBefore 在映射時計算）
+    const parts: ParsedLine[] = [];
+    let hasTextBefore = false;
+    for (const part of validParts) {
+      if (part.type === 'text' && part.text) {
+        // modelInfo 只在第一個 text part 顯示（hasTextBefore 為 false 時）
+        const modelInfo = modelShort && !hasTextBefore ? `(${modelShort})` : '';
+        hasTextBefore = true;
+        const preview = truncateByLines(part.text, { verbose: this.verbose });
+        parts.push({
+          type: 'assistant',
+          timestamp,
+          raw: data,
+          formatted: `${modelInfo}${formatMultiline(preview)}`,
+        });
+      } else if (part.type === 'tool_use' && part.name) {
+        const isTask = isSubagentTool(part.name);
+        const isWorkflow = part.name === 'Workflow';
+        const taskDescription =
+          isTask && typeof part.input?.description === 'string'
+            ? part.input.description
+            : undefined;
+        const taskToolUseId =
+          isTask && typeof part.id === 'string' ? part.id : undefined;
 
-    return this.processAssistantPart();
-  }
-
-  /**
-   * 處理 assistant message 的下一個部分
-   */
-  private processAssistantPart(): ParsedLine | null {
-    if (!this.currentMessageState) return null;
-
-    const { data, contentParts, partIndex, modelShort, hasTextBefore } =
-      this.currentMessageState;
-    if (partIndex >= contentParts.length) return null;
-
-    const part = contentParts[partIndex];
-    if (!part) return null;
-
-    this.currentMessageState.partIndex++;
-    const timestamp = (data as { timestamp?: string }).timestamp || '';
-
-    if (part.type === 'text' && part.text) {
-      this.currentMessageState.hasTextBefore = true;
-      const preview = truncateByLines(part.text, { verbose: this.verbose });
-      const modelInfo = modelShort && !hasTextBefore ? `(${modelShort})` : '';
-      return {
-        type: 'assistant',
-        timestamp,
-        raw: data,
-        formatted: `${modelInfo}${formatMultiline(preview)}`,
-      };
+        parts.push({
+          type: 'function_call',
+          timestamp,
+          raw: part,
+          formatted: formatToolUse(part.name, part.input, {
+            verbose: this.verbose,
+          }),
+          toolName: part.name,
+          isTaskToolUse: isTask,
+          ...(isWorkflow ? { isWorkflowToolUse: true } : {}),
+          taskDescription,
+          taskToolUseId,
+        });
+      }
     }
-
-    if (part.type === 'tool_use' && part.name) {
-      const isTask = isSubagentTool(part.name);
-      const isWorkflow = part.name === 'Workflow';
-      const taskDescription =
-        isTask && typeof part.input?.description === 'string'
-          ? part.input.description
-          : undefined;
-      const taskToolUseId =
-        isTask && typeof part.id === 'string' ? part.id : undefined;
-
-      return {
-        type: 'function_call',
-        timestamp,
-        raw: part,
-        formatted: formatToolUse(part.name, part.input, {
-          verbose: this.verbose,
-        }),
-        toolName: part.name,
-        isTaskToolUse: isTask,
-        ...(isWorkflow ? { isWorkflowToolUse: true } : {}),
-        taskDescription,
-        taskToolUseId,
-      };
-    }
-
-    return null;
+    return parts;
   }
-
   /**
    * 解析 toolUseResult 記錄（subagent 完成時的回傳）
    */

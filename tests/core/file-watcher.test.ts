@@ -3,7 +3,7 @@ import { FileWatcher } from '../../src/core/file-watcher.ts';
 import { join } from 'node:path';
 import { mkdtemp, rm, writeFile, appendFile, truncate } from 'node:fs/promises';
 import { appendFileSync, writeFileSync } from 'node:fs';
-import type { Stats } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 describe('FileWatcher', () => {

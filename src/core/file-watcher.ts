@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs';
-import { open, stat, type FileHandle, type Stats } from 'node:fs/promises';
+import { open, stat, type FileHandle } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 
 export interface WatchOptions {
   follow: boolean;
