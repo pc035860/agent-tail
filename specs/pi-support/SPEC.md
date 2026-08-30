@@ -11,7 +11,7 @@ session-id 查找、`--auto-switch`、agent-pick、樹狀 active-path replay fil
 FileWatcher baseline race 修復。
 
 **v2 目標**：把 v1 期間暴露的結構性債務還清 — 讓「下一個 agent」的接入成本
-從 9 個接線點降到 1 個檔案 + registry 一行，讓樹狀格式過濾不再依賴隱含契約。
+從 9 個行為接線點降到 agent 檔案 + registry 一行（+ `AgentType` union 型別宣告），讓樹狀格式過濾不再依賴隱含契約。
 
 **非目標**：不改變任何已支援 agent 的行為；不新增 pi 的 subagent / interactive
 / pane 支援（理由見 §8）。
@@ -91,7 +91,10 @@ export const AGENT_REGISTRY: Record<AgentType, AgentCapabilities> = { ... };
 導出規則：`AGENT_TYPES = Object.keys(AGENT_REGISTRY)`。CLI 驗證、
 `index.ts` 的實例化 / stateful drain 清單 / parser 重建清單 / jsonMode 特判、
 `agent-pick` 的清單 — 全部從 registry 導出。新增 agent = 一個 agent 檔案 +
-registry 一行，**零個散落清單**。
+`AgentType` union + registry 一行；6 個行為接線點（CLI 驗證 / help text /
+實例化 / drain 清單 / jsonMode / agent-pick）全部從 registry 導出，**零個
+散落清單**。`AgentType` union 是型別宣告（`Record<AgentType, ...>` 由 TS
+強制 registry 完整），不是行為接線點 — 不像手抄清單那樣會漏。
 
 遷移：v1 已落地的 6 個 agent 逐一遷移（每個都是把既有特判搬進 registry），
 行為不變，測試不變。
@@ -309,8 +312,10 @@ v1 的教訓：FileWatcher 的 4 條 race 是 review 逼出來的。v2 的測試
    即時輸出（herdr pane e2e 已驗證）
 3. FileWatcher 邊界矩陣（§7 表）全數有確定性 regression test，且對照舊實作
    會紅（git stash 驗證法）
-4. 新增 agent 的接線點 ≤ 2（agent 檔案 + registry 一行）— 以 registry 遷移
-   完成後的下一個 agent 驗證
+4. 新增 agent 的接線點 ≤ 3（agent 檔案 + `AgentType` union + registry 一行），
+   其中**行為接線點 ≤ 2**（`AgentType` 是型別宣告，`Record<AgentType, ...>`
+   由 TS 強制 registry 完整，不計入行為接線點）— 以 registry 遷移完成後的
+   下一個 agent 驗證
 5. typecheck / lint / format / 全套測試乾淨
 
 ## 10. 落地狀態
