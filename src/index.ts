@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { basename, dirname } from 'node:path';
 import { parseArgs } from './cli/parser.ts';
 import { FileWatcher } from './core/file-watcher.ts';
+import { ActivePathFilter } from './core/active-path-filter.ts';
 import {
   MultiFileWatcher,
   type WatchedFile,
@@ -2525,6 +2526,30 @@ async function startSingleWatch(
     currentParser.setConversationId?.(uuid);
   }
 
+  // 樹狀 active-path replay（v2 §4.3）：registry.treeReplay 存在時包
+  // ActivePathFilter（初始 dump 緩衝 → onInitialDumpComplete flush → live 透傳）。
+  let replayFilter: ActivePathFilter | null = null;
+  const wrapForReplay = (parser: LineParser): LineParser => {
+    const replay = AGENT_REGISTRY[options.agentType].treeReplay;
+    if (replay) {
+      replayFilter = new ActivePathFilter(parser, replay.walkParent);
+      replayFilter.beginHistory();
+      return replayFilter;
+    }
+    return parser;
+  };
+  currentParser = wrapForReplay(currentParser);
+
+  // 初始 dump 完成 → flush replay filter（只輸出 active 路徑）
+  const flushReplay = (): void => {
+    if (replayFilter) {
+      const parts = replayFilter.flushHistory();
+      for (const part of parts) {
+        console.log(formatter.format(part));
+      }
+    }
+  };
+
   // 建立 onLine handler 函數（單一 agent 用，與 Claude 多檔案的 createOnLineHandler 不同）
   const makeSingleLineHandler =
     (parser: LineParser) =>
@@ -2564,6 +2589,8 @@ async function startSingleWatch(
         currentParser.setConversationId?.(uuid);
       }
     }
+    // 重新包 treeReplay filter（新 session 需要新的 filter 狀態）
+    currentParser = wrapForReplay(currentParser);
 
     watcher = new FileWatcher();
     await watcher.start(nextFile.path, {
@@ -2572,6 +2599,7 @@ async function startSingleWatch(
       initialLines: options.lines,
       jsonMode: AGENT_REGISTRY[options.agentType].jsonMode,
       onLine: makeSingleLineHandler(currentParser),
+      onInitialDumpComplete: flushReplay,
       onError: (error) => {
         console.error(chalk.red(`Error: ${error.message}`));
       },
@@ -2608,6 +2636,7 @@ async function startSingleWatch(
     // jsonMode（registry：Gemini/Agy 使用完整 JSON 檔案格式）
     jsonMode: AGENT_REGISTRY[options.agentType].jsonMode,
     onLine: makeSingleLineHandler(currentParser),
+    onInitialDumpComplete: flushReplay,
     onError: (error) => {
       console.error(chalk.red(`Error: ${error.message}`));
     },

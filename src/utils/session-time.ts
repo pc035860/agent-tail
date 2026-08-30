@@ -54,6 +54,70 @@ export async function readCwdFromHead(
 }
 
 /**
+ * Read the authoritative `cwd` from a pi session header (first line).
+ *
+ * ⚠️ 不要改用 `readCwdFromHead`：它會把 homedir 替換成 `~`，會破壞
+ * `findLatestInProject` 的 round-trip 精確比對（encoded dir name 不可逆，
+ * header cwd 是唯一權威來源）。pi 的 session header 一定在第一行且很小。
+ */
+export async function readPiCwdFromHead(
+  filePath: string
+): Promise<string | null> {
+  try {
+    const file = Bun.file(filePath);
+    const size = file.size;
+    if (size === 0) return null;
+
+    // 只讀第一行（session header）— 8KB 綽綽有餘
+    const head = file.slice(0, Math.min(size, 8192));
+    const text = await head.text();
+    const firstLine = text.split('\n')[0];
+    if (!firstLine) return null;
+
+    const data = JSON.parse(firstLine);
+    if (data.cwd && typeof data.cwd === 'string') {
+      return data.cwd as string; // 不 ~-substitute
+    }
+  } catch {
+    // File read or parse error
+  }
+  return null;
+}
+
+/**
+ * Read the last `session_info.name` (pi `/name`) from a pi JSONL file,
+ * tail-read. Maps to Claude custom-title semantics for `--list` TITLE.
+ */
+export async function readPiSessionNameFromTail(
+  filePath: string
+): Promise<string | null> {
+  try {
+    const file = Bun.file(filePath);
+    const size = file.size;
+    if (size === 0) return null;
+
+    const start = Math.max(0, size - TAIL_READ_SIZE);
+    const tail = file.slice(start, size);
+    const text = await tail.text();
+    const lines = text.split('\n').filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const data = JSON.parse(lines[i]!);
+        if (data.type === 'session_info' && data.name) {
+          return data.name as string;
+        }
+      } catch {
+        // Skip malformed JSON
+      }
+    }
+  } catch {
+    // File read error
+  }
+  return null;
+}
+
+/**
  * Read the last custom-title from a Claude JSONL file using tail-read.
  * Only reads the last 8KB instead of the entire file.
  */

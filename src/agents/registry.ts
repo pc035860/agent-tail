@@ -5,6 +5,7 @@ import { ClaudeAgent } from './claude/claude-agent.ts';
 import { GeminiAgent } from './gemini/gemini-agent.ts';
 import { CursorAgent } from './cursor/cursor-agent.ts';
 import { AgyAgent } from './agy/agy-agent.ts';
+import { PiAgent, piWalkParent } from './pi/pi-agent.ts';
 
 /**
  * Agent capabilities registry（v2 §4.1）— agent 資訊的單一來源。
@@ -38,6 +39,14 @@ export interface AgentCapabilities {
   supportsAutoSwitch: boolean;
   /** agent-pick 清單 */
   pickEnabled: boolean;
+  /**
+   * 樹狀 active-path replay（v2 §4.3）：提供 parentId walk 實作時，
+   * index.ts 會把 parser 包進 ActivePathFilter（初始 dump 緩衝 →
+   * onInitialDumpComplete flush → live 透傳）。
+   */
+  treeReplay?: {
+    walkParent: (entry: unknown) => string | null;
+  };
 }
 
 export const AGENT_REGISTRY: Record<AgentType, AgentCapabilities> = {
@@ -95,6 +104,18 @@ export const AGENT_REGISTRY: Record<AgentType, AgentCapabilities> = {
     supportsPane: false,
     supportsAutoSwitch: true,
     pickEnabled: true,
+  },
+  pi: {
+    factory: (opts) => new PiAgent(opts),
+    statefulParser: true,
+    recreateOnSwitch: true,
+    jsonMode: false,
+    supportsSubagent: false,
+    supportsInteractive: false,
+    supportsPane: false,
+    supportsAutoSwitch: true,
+    pickEnabled: true,
+    treeReplay: { walkParent: piWalkParent },
   },
 };
 
