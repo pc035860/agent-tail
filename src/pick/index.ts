@@ -15,8 +15,7 @@ import {
   extractPickListArgs,
   extractTailPassthroughArgs,
 } from './arg-passthrough.ts';
-
-const AGENT_TYPES = ['claude', 'codex', 'gemini', 'cursor', 'agy'];
+import { AGENT_TYPES } from '../agents/registry.ts';
 
 function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
@@ -45,7 +44,7 @@ async function main(): Promise<void> {
   }
 
   const agentType = rawArgs[0]!;
-  if (!AGENT_TYPES.includes(agentType)) {
+  if (!AGENT_TYPES.includes(agentType as (typeof AGENT_TYPES)[number])) {
     console.error(
       `Error: Invalid agent type "${agentType}". Use: ${AGENT_TYPES.join(', ')}`
     );
