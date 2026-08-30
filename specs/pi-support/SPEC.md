@@ -35,7 +35,7 @@ FileWatcher baseline race 修復。
 | type | 內容 | v2 處理 |
 |------|------|---------|
 | `session` | header（`cwd`、`id`、`version`），無 `id`/`parentId` | 跳過；`readPiCwdFromHead` 讀第一行取權威 cwd |
-| `message` | `message.role`: `user` / `assistant` / `toolResult` / `bashExecution` / `custom` | 見 §5 parser 規則 |
+| `message` | `message.role`: `user` / `assistant` / `toolResult` / `bashExecution` / `custom` | 見 §2.2.1 欄位規格 |
 | `session_info` | `name`（pi 的 `/name`） | 映射為 custom-title 事件（TITL） |
 | `custom_message` | extension 注入訊息（**頂層 entry**，content/display 在頂層） | `display !== false` 時輸出為 custom |
 | `model_change` / `thinking_level_change` / `compaction` / `branch_summary` / `label` / `custom` | metadata | 跳過（參與樹狀鏈但不輸出） |
@@ -51,6 +51,38 @@ FileWatcher baseline race 修復。
   metadata entry 也在 `parentId` 鏈上，leaf 可能是非 message entry
 - `/tree` 的「選舊訊息 → 編輯 → 重送」會在**同一檔案**留下死分支（實測
   25 個 session 有 2 個含分支，全部是「送出後 22 秒內重送改版」的日常操作）
+
+### 2.2.1 message role 欄位規格（v2 review 用 pi 官方 source `dist/core/messages.d.ts` + 真實 session 驗證）
+
+> ⚠️ **v2 初版把以下 4 個格式做錯，靠 Codex review 對照 v1 才修回**。欄位級
+> 規格寫死於此，未來接入 / 格式改版不靠猜。
+
+**message entry 的欄位在 `entry.message`（巢狀），不是頂層。**
+
+| role | 欄位 | 型別 | 處理 |
+|------|------|------|------|
+| `user` | `content` | block[] | 攤平成文字 → USER |
+| `assistant` | `content` | block[] | 逐 block 拆多筆（見下） |
+| `toolResult` | `toolCallId` / `toolName` / `content` / `isError` | string / string / block[] / boolean | `isError` 加 `[error]` 前綴；**空內容 + isError 仍輸出 `[error]`** |
+| `bashExecution` | `command` / `output` / `exitCode` | string / string / number | **沒有 `content`**！讀 `output`（空時 fallback `command`）；`exitCode` ≠ 0 加 `[exit N]` |
+| `custom` | `customType` / `content` / `display` | string / string\|block[] / boolean | **`display` 在 message 層級**（`entry.message.display`）；false 跳過 |
+
+**assistant `content` block 陣列：**
+
+| block type | 欄位 | 處理 |
+|-----------|------|------|
+| `text` | `text` | ASST |
+| `thinking` | `thinking`（**key 是 `thinking` 不是 `text`**） | 僅 verbose 輸出為 THINK |
+| `toolCall` | `id` / `name` / `arguments` | FUNC + `toolName` |
+
+**其他 entry：**
+
+| type | 欄位 | 處理 |
+|------|------|------|
+| `session` | `{cwd, id, version}` | 跳過；`readPiCwdFromHead` 讀第一行取 cwd |
+| `session_info` | `{name}` | → TITL（custom-title） |
+| `custom_message` | 頂層 `{content, display}` | → custom（`display !== false`） |
+| `model_change` / `thinking_level_change` / `compaction` / `branch_summary` / `label` | metadata | 跳過 |
 
 ### 2.3 Subagent
 
