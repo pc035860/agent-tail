@@ -2,6 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { FileWatcher } from '../../src/core/file-watcher.ts';
 import { join } from 'node:path';
 import { mkdtemp, rm, writeFile, appendFile, truncate } from 'node:fs/promises';
+import { appendFileSync, writeFileSync } from 'node:fs';
+import type { Stats } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 describe('FileWatcher', () => {
@@ -268,6 +270,157 @@ describe('FileWatcher', () => {
       // 應該收到 append 行，且不會重發前面 1–3 行
       expect(received).toHaveLength(3);
       expect(received[2]).toBe('{"line": 6}');
+    });
+  });
+
+  describe('v2 baseline semantics (SPEC §4.3 + §7 boundary matrix)', () => {
+    test('onInitialDumpComplete fires after the initial dump', async () => {
+      const testFile = join(tempDir, 'dump.jsonl');
+      await writeFile(testFile, '{"line": 1}\n{"line": 2}\n');
+
+      const received: string[] = [];
+      let dumpFired = false;
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: false,
+        onLine: (line) => received.push(line),
+        onInitialDumpComplete: () => {
+          dumpFired = true;
+          // 初始 dump 完成時，所有初始行都已被處理
+          expect(received).toHaveLength(2);
+        },
+      });
+
+      expect(dumpFired).toBe(true);
+    });
+
+    test('race#1: append during incremental read is drained (no lost tail lines)', async () => {
+      const testFile = join(tempDir, 'race1.jsonl');
+      await writeFile(testFile, '{"line": 1}\n');
+
+      const received: string[] = [];
+      let next = 2;
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: true,
+        pollInterval: 50,
+        onLine: (line) => {
+          received.push(line);
+          // read 期間同步 append 下一行 → 觸發 pending drain
+          appendFileSync(testFile, `{"line": ${next}}\n`);
+          next++;
+        },
+      });
+
+      // 等所有 append 被消化（pending drain 保證 read 期間 append 的尾行不遺失）
+      await new Promise((r) => setTimeout(r, 800));
+      w.stop();
+
+      expect(received.length).toBeGreaterThanOrEqual(5);
+      for (let i = 0; i < received.length; i++) {
+        expect(received[i]).toBe(`{"line": ${i + 1}}`);
+      }
+    });
+
+    test('race#2: JSONL baseline reflects processed content, not post-read stat', async () => {
+      const testFile = join(tempDir, 'race2.jsonl');
+      await writeFile(testFile, '{"line": 1}\n'); // 12 bytes
+
+      const received: string[] = [];
+      let appended = false;
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: false,
+        onLine: (line) => {
+          received.push(line);
+          if (!appended) {
+            appended = true;
+            // read 期間 append（baseline 空窗）：檔案變成 24 bytes
+            appendFileSync(testFile, '{"line": 2}\n');
+          }
+        },
+      });
+
+      // 斷言（poll 推進前）：baseline = 已處理內容 12 bytes，不是 append 後的 24
+      const state = w.getDebugState();
+      expect(state.lastSize).toBe(12);
+      expect(state.lastReadOffset).toBe(12);
+      expect(received).toEqual(['{"line": 1}']);
+    });
+
+    test('race#3: empty JSONL baseline aligns to 0 (first line not swallowed)', async () => {
+      const testFile = join(tempDir, 'race3.jsonl');
+      await writeFile(testFile, '');
+
+      const received: string[] = [];
+      // 模擬「read 後第一行寫入」：stat 一律回報 12 bytes（有內容），但真實檔案是空的
+      const fakeStat = { size: 12, mtimeMs: 1000 } as Stats;
+      const w = new FileWatcher({ injectedStat: async () => fakeStat });
+      await w.start(testFile, {
+        follow: false,
+        onLine: (line) => received.push(line),
+      });
+
+      // baseline 必須對齊「已處理內容」= 0，不是 stat 的 12
+      const state = w.getDebugState();
+      expect(state.lastSize).toBe(0);
+      expect(state.lastReadOffset).toBe(0);
+      expect(received).toHaveLength(0);
+    });
+
+    test('race#4: jsonMode baseline aligns to processed content length', async () => {
+      const testFile = join(tempDir, 'race4.json');
+      await writeFile(testFile, '{"a": 1}'); // 8 bytes
+
+      const received: string[] = [];
+      let first = true;
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: false,
+        jsonMode: true,
+        onLine: (content) => {
+          received.push(content);
+          if (first) {
+            first = false;
+            // read 期間同步 rewrite（baseline 空窗）：檔案變成 22 bytes
+            writeFileSync(testFile, '{"a": 1, "b": "longer"}');
+          }
+        },
+      });
+
+      // 斷言：baseline = 已處理內容長度 8，不是 rewrite 後的 22
+      const state = w.getDebugState();
+      expect(state.lastSize).toBe(8);
+      expect(state.lastContentLength).toBe(8);
+      expect(received).toEqual(['{"a": 1}']);
+    });
+
+    test('race#5: jsonMode same-size rewrite detected via mtime + hash', async () => {
+      const testFile = join(tempDir, 'race5.json');
+      await writeFile(testFile, '{"a": 1}'); // 8 bytes
+
+      const received: string[] = [];
+      const w = new FileWatcher();
+      await w.start(testFile, {
+        follow: true,
+        jsonMode: true,
+        pollInterval: 50,
+        onLine: (content) => received.push(content),
+      });
+
+      expect(received).toHaveLength(1);
+
+      // 確保 mtime 有機會變化
+      await new Promise((r) => setTimeout(r, 50));
+      // same-size rewrite：內容不同但 byte 長度相同（8 bytes）
+      await writeFile(testFile, '{"b": 2}');
+
+      await new Promise((r) => setTimeout(r, 250));
+
+      // mtime 變化觸發 poll 重讀，hash 比對命中 → 輸出新內容
+      expect(received).toHaveLength(2);
+      expect(received[1]).toBe('{"b": 2}');
+      w.stop();
     });
   });
 
