@@ -1,9 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { readFileSync } from 'node:fs';
 import { Glob } from 'bun';
-import type { Agent, LineParser, SessionFinder } from '../agent.interface.ts';
+import type { Agent, SessionFinder } from '../agent.interface.ts';
 import type {
   ParsedLine,
   ParserOptions,
@@ -11,7 +10,62 @@ import type {
   SessionFile,
   SessionListItem,
 } from '../../core/types.ts';
+import { MultiEmitParser } from '../multi-emit-parser.ts';
 import { formatMultiline } from '../../utils/text.ts';
+import { formatToolUse } from '../../utils/format-tool.ts';
+
+const CONVERSATION_ID_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** 從 session 檔（.pb/.db）或 brain transcript 路徑抽出 conversationId（UUID） */
+function extractConversationId(path: string): string {
+  // transcript: .../brain/{uuid}/.system_generated/logs/transcript.jsonl
+  const brainMatch = path.match(
+    new RegExp(`brain[\\/\\\\](${CONVERSATION_ID_RE.source})[\\/\\\\]`)
+  );
+  if (brainMatch) return brainMatch[1]!;
+  // session 檔: .../conversations/{uuid}.pb|.db
+  const fileMatch = path.match(
+    new RegExp(`(${CONVERSATION_ID_RE.source})\\.(?:db|pb)$`)
+  );
+  if (fileMatch) return fileMatch[1]!;
+  return basename(path).replace(/\.(?:db|pb)$/, '');
+}
+
+/** antigravity-cli 的 brain transcript 路徑（可讀 JSONL，tail 目標） */
+function transcriptPathFor(baseDir: string, uuid: string): string {
+  return join(
+    baseDir,
+    '..',
+    'brain',
+    uuid,
+    '.system_generated',
+    'logs',
+    'transcript.jsonl'
+  );
+}
+
+/**
+ * transcript 存在時回傳其路徑與 mtime；不存在回傳 null。
+ *
+ * 只收有 transcript 的 session：antigravity-cli 在第一次對話前不會建立
+ * transcript（只有 binary .db），而 FileWatcher 無法以 JSONL 模式 tail 二進位
+ * .db（會卡死在 SQLite 雜訊且永不切換到後續出現的 transcript）。無 transcript
+ * = 空 session，對 agent-tail 而言沒有可顯示內容，直接排除。
+ */
+async function resolveTailPath(
+  baseDir: string,
+  uuid: string
+): Promise<{ path: string; mtime: Date } | null> {
+  const transcriptPath = transcriptPathFor(baseDir, uuid);
+  try {
+    const s = await stat(transcriptPath);
+    if (s.isFile()) return { path: transcriptPath, mtime: s.mtime };
+  } catch {
+    // 沒有 transcript
+  }
+  return null;
+}
 
 export class AgySessionFinder implements SessionFinder {
   private baseDir: string;
@@ -87,13 +141,15 @@ export class AgySessionFinder implements SessionFinder {
     return idToWorkspace;
   }
 
-  // 掃描 conversations/*.pb，並藉由 history.jsonl 反查 project
+  // 掃描 conversations/*.{pb,db}（antigravity-cli 從 .pb protobuf 改為 .db SQLite，
+  // 但 studio 仍保留舊 .pb session），tail 目標只收有 brain transcript 的 session
   private async _collectSessions(
     options: { project?: string },
     idToWorkspace?: Map<string, string>
   ): Promise<SessionListItem[]> {
-    const glob = new Glob('*.pb');
+    const glob = new Glob('*.{pb,db}');
     const files: SessionListItem[] = [];
+    const seenUuids = new Set<string>();
 
     const mappings = idToWorkspace ?? (await this.loadWorkspaceMappings());
 
@@ -102,8 +158,12 @@ export class AgySessionFinder implements SessionFinder {
         cwd: this.baseDir,
         absolute: true,
       })) {
-        const filename = file.split('/').pop() || '';
-        const uuid = filename.replace('.pb', '');
+        const filename = basename(file);
+        const uuid = filename.replace(/\.(?:db|pb)$/, '');
+        // 同一 session 同時存在 .pb 與 .db 時去重
+        if (seenUuids.has(uuid)) continue;
+        seenUuids.add(uuid);
+
         const workspace = mappings.get(uuid);
         const project = workspace ? basename(workspace) : undefined;
 
@@ -118,10 +178,12 @@ export class AgySessionFinder implements SessionFinder {
         }
 
         try {
-          const stats = await stat(file);
+          // 無 transcript 的 session（空 session）直接排除
+          const tail = await resolveTailPath(this.baseDir, uuid);
+          if (!tail) continue;
           files.push({
-            path: file,
-            mtime: stats.mtime,
+            path: tail.path,
+            mtime: tail.mtime,
             agentType: 'agy',
             shortId: uuid.slice(0, 8),
             project: project || 'unknown',
@@ -163,11 +225,12 @@ export class AgySessionFinder implements SessionFinder {
     const files = await this._collectSessions(options);
     const search = sessionId.toLowerCase();
 
-    const found = files.find(
-      (f) =>
-        f.shortId.toLowerCase() === search ||
-        f.path.toLowerCase().includes(search)
-    );
+    // 只比對 UUID（前綴或完整），不比對整條路徑——
+    // 否則 "brain"/"logs"/"transcript" 等路徑關鍵字會誤傷
+    const found = files.find((f) => {
+      const uuid = extractConversationId(f.path).toLowerCase();
+      return uuid === search || uuid.startsWith(search);
+    });
     if (!found) return null;
     return {
       path: found.path,
@@ -177,7 +240,7 @@ export class AgySessionFinder implements SessionFinder {
   }
 
   async getProjectInfo(sessionPath: string): Promise<ProjectInfo | null> {
-    const uuid = basename(sessionPath).replace('.pb', '');
+    const uuid = extractConversationId(sessionPath);
     const idToWorkspace = await this.loadWorkspaceMappings();
     const workspace = idToWorkspace.get(uuid);
     if (workspace) {
@@ -191,7 +254,7 @@ export class AgySessionFinder implements SessionFinder {
     const files = await this._collectSessions({}, idToWorkspace);
     // 找出 workspace 吻合的最新的會話（防止多個同名 workspace 誤判）
     const found = files.find((f) => {
-      const uuid = basename(f.path).replace('.pb', '');
+      const uuid = extractConversationId(f.path);
       return idToWorkspace.get(uuid) === projectDir;
     });
     if (!found) return null;
@@ -203,63 +266,113 @@ export class AgySessionFinder implements SessionFinder {
   }
 }
 
-export class AgyLineParser implements LineParser {
-  private processedLines = new Set<string>();
-  private conversationId: string = '';
-  private historyPath: string;
-  private pendingLines: ParsedLine[] = [];
+/**
+ * 解析 antigravity-cli 的 brain transcript（JSONL）。
+ *
+ * 語意（對照實際 transcript 驗證）：
+ * - USER_INPUT → user 訊息
+ * - PLANNER_RESPONSE → 模型規劃/回覆；thinking（reasoning，僅 verbose）與
+ *   tool_calls（function_call）與 content（assistant）可並存，依序全部輸出
+ * - GENERIC（新格式）+ VIEW_FILE/RUN_COMMAND/GREP_SEARCH/LIST_DIRECTORY/
+ *   CODE_ACTION/ERROR_MESSAGE（舊 .pb 格式）→ tool 執行輸出（output）
+ * - SYSTEM_MESSAGE / CHECKPOINT / CONVERSATION_HISTORY / INVOKE_SUBAGENT → 跳過
+ */
+export class AgyLineParser extends MultiEmitParser {
   private verbose: boolean;
 
-  constructor(
-    options: ParserOptions = { verbose: false },
-    paths?: { historyPath?: string }
-  ) {
-    this.historyPath =
-      paths?.historyPath ??
-      join(homedir(), '.gemini', 'antigravity-cli', 'history.jsonl');
+  constructor(options: ParserOptions = { verbose: false }) {
+    super();
     this.verbose = options.verbose;
   }
 
-  setConversationId(id: string) {
-    this.conversationId = id;
-  }
+  protected toParts(entry: unknown): ParsedLine[] {
+    const data = entry as Record<string, unknown>;
+    if (!data || typeof data !== 'object') return [];
 
-  parse(line: string): ParsedLine | null {
-    if (this.pendingLines.length === 0) {
-      if (!this.conversationId && line) {
-        // 如果還沒有 conversationId，且被監控檔案的路徑/名稱就是 .pb
-      }
-
-      if (this.conversationId) {
-        try {
-          const content = readFileSync(this.historyPath, 'utf-8');
-          for (const rawLine of content.trim().split('\n')) {
-            if (!rawLine) continue;
-            try {
-              const data = JSON.parse(rawLine);
-              if (data.conversationId === this.conversationId && data.display) {
-                if (!this.processedLines.has(rawLine)) {
-                  this.processedLines.add(rawLine);
-                  const timestamp = data.timestamp || Date.now();
-                  this.pendingLines.push({
-                    type: 'user',
-                    timestamp: new Date(timestamp).toISOString(),
-                    raw: data,
-                    formatted: formatMultiline(data.display),
-                  });
-                }
-              }
-            } catch {
-              // ignore
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
+    const type = typeof data.type === 'string' ? data.type : '';
+    const content = typeof data.content === 'string' ? data.content : '';
+    let timestamp = new Date().toISOString();
+    if (typeof data.created_at === 'string') {
+      const d = new Date(data.created_at);
+      if (!Number.isNaN(d.getTime())) timestamp = d.toISOString();
     }
 
-    return this.pendingLines.shift() || null;
+    const parts: ParsedLine[] = [];
+
+    switch (type) {
+      case 'USER_INPUT':
+        if (content) {
+          parts.push({
+            type: 'user',
+            timestamp,
+            raw: data,
+            formatted: formatMultiline(content),
+          });
+        }
+        break;
+
+      case 'PLANNER_RESPONSE': {
+        // thinking 與 tool_calls/content 可並存：依序 emit reasoning → function_call → assistant
+        if (
+          this.verbose &&
+          typeof data.thinking === 'string' &&
+          data.thinking.trim()
+        ) {
+          parts.push({
+            type: 'reasoning',
+            timestamp,
+            raw: data,
+            formatted: formatMultiline(data.thinking),
+          });
+        }
+        if (Array.isArray(data.tool_calls)) {
+          for (const tc of data.tool_calls as {
+            name?: string;
+            args?: Record<string, unknown>;
+          }[]) {
+            parts.push({
+              type: 'function_call',
+              timestamp,
+              raw: data,
+              toolName: tc.name,
+              formatted: formatToolUse(tc.name || 'tool', tc.args),
+            });
+          }
+        }
+        if (content) {
+          parts.push({
+            type: 'assistant',
+            timestamp,
+            raw: data,
+            formatted: formatMultiline(content),
+          });
+        }
+        break;
+      }
+
+      // tool 執行輸出（新格式 GENERIC + 舊格式 VIEW_FILE 等）
+      case 'GENERIC':
+      case 'VIEW_FILE':
+      case 'RUN_COMMAND':
+      case 'GREP_SEARCH':
+      case 'LIST_DIRECTORY':
+      case 'CODE_ACTION':
+      case 'ERROR_MESSAGE':
+        if (content) {
+          parts.push({
+            type: 'output',
+            timestamp,
+            raw: data,
+            formatted: formatMultiline(content),
+          });
+        }
+        break;
+
+      default:
+        // SYSTEM_MESSAGE / CHECKPOINT / CONVERSATION_HISTORY / INVOKE_SUBAGENT 等跳過
+        break;
+    }
+    return parts;
   }
 }
 
@@ -273,6 +386,6 @@ export class AgyAgent implements Agent {
     paths?: { baseDir?: string; historyPath?: string; cachePath?: string }
   ) {
     this.finder = new AgySessionFinder(paths);
-    this.parser = new AgyLineParser(options, paths);
+    this.parser = new AgyLineParser(options);
   }
 }

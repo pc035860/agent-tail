@@ -16,6 +16,7 @@ import {
 } from './interactive/keyboard.ts';
 import type { Agent, LineParser } from './agents/agent.interface.ts';
 import { AGENT_REGISTRY } from './agents/registry.ts';
+import { extractFullId } from './list/session-lister.ts';
 import { CodexAgent } from './agents/codex/codex-agent.ts';
 import { ClaudeAgent } from './agents/claude/claude-agent.ts';
 import { CursorAgent } from './agents/cursor/cursor-agent.ts';
@@ -157,11 +158,6 @@ async function summaryCommand(
       console.log(line);
     }
     return;
-  }
-
-  if (options.agentType === 'agy') {
-    const uuid = basename(sessionFile.path, '.pb');
-    agent.parser.setConversationId?.(uuid);
   }
 
   const jsonMode = AGENT_REGISTRY[options.agentType].jsonMode;
@@ -2519,10 +2515,6 @@ async function startSingleWatch(
   // 為 Gemini 準備可重建的 parser（避免狀態殘留）
   // Codex parser 是無狀態的，不需要重建
   let currentParser = agent.parser;
-  if (options.agentType === 'agy') {
-    const uuid = basename(sessionFile.path, '.pb');
-    currentParser.setConversationId?.(uuid);
-  }
 
   // 樹狀 active-path replay（v2 §4.3）：registry.treeReplay 存在時包
   // ActivePathFilter（初始 dump 緩衝 → onInitialDumpComplete flush → live 透傳）。
@@ -2573,7 +2565,9 @@ async function startSingleWatch(
 
     log(
       options.quiet,
-      chalk.gray(`--- Switched to ${basename(nextFile.path)} ---`)
+      chalk.gray(
+        `--- Switched to ${extractFullId(nextFile.path).slice(0, 8)} ---`
+      )
     );
 
     // recreateOnSwitch：重建 parser 以清除狀態（processedMessageIds 等）
@@ -2582,10 +2576,6 @@ async function startSingleWatch(
         verbose: options.verbose,
       });
       currentParser = newAgent.parser;
-      if (options.agentType === 'agy') {
-        const uuid = basename(nextFile.path, '.pb');
-        currentParser.setConversationId?.(uuid);
-      }
     }
     // 重新包 treeReplay filter（新 session 需要新的 filter 狀態）
     currentParser = wrapForReplay(currentParser);
@@ -2631,7 +2621,7 @@ async function startSingleWatch(
     follow: options.follow,
     pollInterval: options.sleepInterval,
     initialLines: options.lines,
-    // jsonMode（registry：Gemini/Agy 使用完整 JSON 檔案格式）
+    // jsonMode（registry：Gemini 使用完整 JSON 檔案格式）
     jsonMode: AGENT_REGISTRY[options.agentType].jsonMode,
     onLine: makeSingleLineHandler(currentParser),
     onInitialDumpComplete: flushReplay,

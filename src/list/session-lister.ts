@@ -34,11 +34,15 @@ const HEX8_TRAIL_REGEX = /([0-9a-f]{8})$/i;
  * - Claude / Cursor: `{UUID}.jsonl` → UUID
  * - Codex: `rollout-{ts}-{UUID}.jsonl` → UUID
  * - Gemini: `session-{ts}-{hex8}.json` → hex8
+ * - Agy brain transcript: `.../brain/{UUID}/.system_generated/logs/transcript.jsonl` → UUID
  * - Fallback: basename 去副檔名
  */
 export function extractFullId(path: string): string {
-  const basename = path.split('/').pop() ?? '';
-  const stem = basename.replace(/\.(jsonl|json|pb)$/i, '');
+  // antigravity brain transcript：UUID 在目錄名，不在 basename（支援 / 與 \）
+  const brainMatch = path.match(/brain[/\\]([0-9a-f-]{36})[/\\]/i);
+  if (brainMatch) return brainMatch[1]!;
+  const basename = path.split(/[\\/]/).pop() ?? '';
+  const stem = basename.replace(/\.(jsonl|json|pb|db)$/i, '');
   const uuidMatch = UUID_REGEX.exec(stem);
   if (uuidMatch) return uuidMatch[1]!;
   const hex8Match = HEX8_TRAIL_REGEX.exec(stem);

@@ -98,7 +98,8 @@ export const AGENT_REGISTRY: Record<AgentType, AgentCapabilities> = {
     factory: (opts) => new AgyAgent(opts),
     statefulParser: true,
     recreateOnSwitch: true,
-    jsonMode: true,
+    // antigravity-cli brain transcript 是 JSONL（非 .pb/.db binary）
+    jsonMode: false,
     supportsSubagent: false,
     supportsInteractive: false,
     supportsPane: false,

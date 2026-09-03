@@ -208,7 +208,7 @@ export class FileWatcher {
   /**
    * 讀取並處理檔案內容
    *
-   * - jsonMode：整檔讀，比對 hash 後整體傳給 onLine（Gemini/Agy 語義）
+   * - jsonMode：整檔讀，比對 hash 後整體傳給 onLine（Gemini 語義）
    * - JSONL 模式：首次讀整檔（為了支援 initialLines），之後改用 byte
    *   offset 增量讀取，避免長時間 follow 大檔時每次都把整個檔案
    *   再讀進記憶體。

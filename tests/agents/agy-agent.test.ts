@@ -8,16 +8,26 @@ import {
   rmdirSync,
   existsSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import type { ParsedLine } from '../../src/core/types';
 
 describe('AgyAgent', () => {
   const tmpDir = join(__dirname, 'tmp-agy-test');
+  const baseDir = join(tmpDir, 'conversations');
   const tmpHistory = join(tmpDir, 'history.jsonl');
   const tmpCache = join(tmpDir, 'last_conversations.json');
   const sessionUuid = '483ea588-af5e-48c1-96bd-18151eb12c5c';
-  const sessionFile = join(tmpDir, `${sessionUuid}.pb`);
+  const sessionFile = join(baseDir, `${sessionUuid}.db`);
+  const transcriptPath = join(
+    tmpDir,
+    'brain',
+    sessionUuid,
+    '.system_generated',
+    'logs',
+    'transcript.jsonl'
+  );
   const customPaths = {
-    baseDir: tmpDir,
+    baseDir,
     historyPath: tmpHistory,
     cachePath: tmpCache,
   };
@@ -26,21 +36,44 @@ describe('AgyAgent', () => {
     if (!existsSync(tmpDir)) {
       mkdirSync(tmpDir, { recursive: true });
     }
+    if (!existsSync(baseDir)) {
+      mkdirSync(baseDir, { recursive: true });
+    }
   });
 
   afterEach(() => {
     try {
-      if (existsSync(tmpHistory)) unlinkSync(tmpHistory);
-      if (existsSync(tmpCache)) unlinkSync(tmpCache);
-      if (existsSync(sessionFile)) unlinkSync(sessionFile);
-      if (existsSync(tmpDir)) rmdirSync(tmpDir);
+      for (const f of [tmpHistory, tmpCache, sessionFile, transcriptPath]) {
+        if (existsSync(f)) unlinkSync(f);
+      }
+      // 由內而外移除空目錄（bun-types 的 rmdirSync 只接受單一參數）
+      const logsDir = join(
+        tmpDir,
+        'brain',
+        sessionUuid,
+        '.system_generated',
+        'logs'
+      );
+      const sysgenDir = join(tmpDir, 'brain', sessionUuid, '.system_generated');
+      const uuidDir = join(tmpDir, 'brain', sessionUuid);
+      const brainDir = join(tmpDir, 'brain');
+      for (const d of [
+        logsDir,
+        sysgenDir,
+        uuidDir,
+        brainDir,
+        baseDir,
+        tmpDir,
+      ]) {
+        if (existsSync(d)) rmdirSync(d);
+      }
     } catch {
       // ignore
     }
   });
 
-  test('AgySessionFinder lists and filters sessions (clean path injection and full-path project filtering)', async () => {
-    // 建立臨時歷史日誌
+  test('AgySessionFinder lists sessions and resolves brain transcript as tail path', async () => {
+    // 建立臨時歷史日誌（conversationId -> workspace 映射來源之一）
     const historyLine = JSON.stringify({
       display: 'Hello Antigravity',
       timestamp: 1779344903839,
@@ -55,122 +88,203 @@ describe('AgyAgent', () => {
     };
     writeFileSync(tmpCache, JSON.stringify(cacheData));
 
-    // 建立一個空的 .pb
+    // 建立 session 檔（.db SQLite）與 brain transcript（可讀 JSONL）
     writeFileSync(sessionFile, '');
+    mkdirSync(dirname(transcriptPath), { recursive: true });
+    writeFileSync(
+      transcriptPath,
+      JSON.stringify({ type: 'USER_INPUT', content: 'hi' }) + '\n'
+    );
 
-    // 使用優雅的路徑注入，不需使用 as any 進行私有屬性篡改！
     const agent = new AgyAgent({ verbose: false }, customPaths);
 
-    // 測試全域列表
+    // 全域列表
     const list = await agent.finder.listSessions({});
     expect(list).toHaveLength(1);
     expect(list[0]!.shortId).toBe(sessionUuid.slice(0, 8));
     expect(list[0]!.project).toBe('agent-tail');
+    // tail 目標應為 brain transcript，而非 binary .db
+    expect(list[0]!.path).toBe(transcriptPath);
 
-    // 測試 --project 支援路徑片段匹配 (如 "code/agent")
+    // --project 路徑片段匹配
     const listFiltered = await agent.finder.listSessions({
       project: 'code/agent',
     });
     expect(listFiltered).toHaveLength(1);
 
-    // 測試 findLatestInProject (重用 mapping 載入優化)
+    // findLatestInProject
     const latest = await agent.finder.findLatestInProject(
       '/Users/pc035860/code/agent-tail'
     );
     expect(latest).not.toBeNull();
-    expect(latest?.path).toContain(sessionUuid);
+    expect(latest?.path).toBe(transcriptPath);
 
-    const projectInfo = await agent.finder.getProjectInfo(sessionFile);
+    // getProjectInfo 接受 transcript 路徑
+    const projectInfo = await agent.finder.getProjectInfo(transcriptPath);
     expect(projectInfo).not.toBeNull();
     expect(projectInfo?.displayName).toBe('agent-tail');
   });
 
-  test('AgyLineParser parses and drains new history logs with exact line deduplication', () => {
-    // 建立臨時歷史日誌，包含重複的時間戳但不同的 display
-    const historyData = [
-      {
-        display: 'First prompt',
-        timestamp: 1000,
-        workspace: '/Users/pc035860/code/agent-tail',
-        conversationId: sessionUuid,
-      },
-      {
-        display: 'Second prompt with SAME timestamp',
-        timestamp: 1000, // 故意製造 timestamp 相同
-        workspace: '/Users/pc035860/code/agent-tail',
-        conversationId: sessionUuid,
-      },
-      {
-        display: 'Duplicate check for exact same line',
-        timestamp: 2000,
-        workspace: '/Users/pc035860/code/agent-tail',
-        conversationId: sessionUuid,
-      },
-      {
-        display: 'Duplicate check for exact same line', // 故意製造完全重複行
-        timestamp: 2000,
-        workspace: '/Users/pc035860/code/agent-tail',
-        conversationId: sessionUuid,
-      },
-    ];
-
-    writeFileSync(
-      tmpHistory,
-      historyData.map((d) => JSON.stringify(d)).join('\n') + '\n'
-    );
+  test('AgySessionFinder excludes sessions without a brain transcript', async () => {
+    writeFileSync(tmpCache, JSON.stringify({}));
+    writeFileSync(sessionFile, '');
+    // 不建立 transcript → 空 session，應被排除（避免 tail 卡死在 binary .db）
 
     const agent = new AgyAgent({ verbose: false }, customPaths);
-    agent.parser.setConversationId(sessionUuid);
-
-    // 第一次呼叫，輸出第一筆
-    const parsed1 = agent.parser.parse('dummy-line');
-    expect(parsed1).not.toBeNull();
-    expect(parsed1?.formatted).toContain('First prompt');
-
-    // 第二次呼叫，即使 timestamp 與上一筆完全相同，但因為 display 不同 (無損去重)，依舊能精確讀出！
-    const parsed2 = agent.parser.parse('dummy-line');
-    expect(parsed2).not.toBeNull();
-    expect(parsed2?.formatted).toContain('Second prompt with SAME timestamp');
-
-    // 第三次呼叫，輸出 Duplicate 訊息
-    const parsed3 = agent.parser.parse('dummy-line');
-    expect(parsed3).not.toBeNull();
-    expect(parsed3?.formatted).toContain('Duplicate check for exact same line');
-
-    // 第四次呼叫，因為是完全重複的行，會被精確去重過濾，直接回傳 null (空了)
-    const parsed4 = agent.parser.parse('dummy-line');
-    expect(parsed4).toBeNull();
+    const list = await agent.finder.listSessions({});
+    expect(list).toHaveLength(0);
   });
 
-  test('AgyLineParser supports extremely large session history (> 100 entries) without being truncated', () => {
-    // 建立 120 筆對話歷史
-    const historyData = [];
-    for (let i = 0; i < 120; i++) {
-      historyData.push({
-        display: `Prompt number ${i}`,
-        timestamp: 1000 + i,
-        workspace: '/Users/pc035860/code/agent-tail',
-        conversationId: sessionUuid,
-      });
-    }
-
-    writeFileSync(
-      tmpHistory,
-      historyData.map((d) => JSON.stringify(d)).join('\n') + '\n'
-    );
+  test('AgySessionFinder dedups .pb and .db with same uuid', async () => {
+    writeFileSync(tmpCache, JSON.stringify({}));
+    writeFileSync(sessionFile, '');
+    writeFileSync(sessionFile.replace('.db', '.pb'), '');
+    mkdirSync(dirname(transcriptPath), { recursive: true });
+    writeFileSync(transcriptPath, 'x\n');
 
     const agent = new AgyAgent({ verbose: false }, customPaths);
-    agent.parser.setConversationId(sessionUuid);
+    const list = await agent.finder.listSessions({});
+    expect(list).toHaveLength(1);
 
-    // 使用真實的 drainParser，模擬 tail / summary 行為
-    const emittedLines: string[] = [];
-    drainParser(agent.parser, 'dummy-line', (parsed) => {
-      emittedLines.push(parsed.formatted);
+    unlinkSync(sessionFile.replace('.db', '.pb'));
+  });
+
+  test('AgyLineParser parses transcript lines with correct semantics', () => {
+    const agent = new AgyAgent({ verbose: false }, customPaths);
+    const parser = agent.parser;
+    // MultiEmitParser drain 契約：每個 line 都要用 drainParser 完整消化
+    const drain = (line: string): ParsedLine[] => {
+      const out: ParsedLine[] = [];
+      drainParser(parser, line, (p) => out.push(p));
+      return out;
+    };
+
+    // USER_INPUT → user
+    const user = drain(
+      JSON.stringify({
+        type: 'USER_INPUT',
+        created_at: '2026-09-03T04:29:36Z',
+        content: 'hello',
+      })
+    );
+    expect(user).toHaveLength(1);
+    expect(user[0]?.type).toBe('user');
+    expect(user[0]?.formatted).toContain('hello');
+
+    // GENERIC → output（tool 執行輸出，不是 assistant 發言）
+    const gen = drain(
+      JSON.stringify({
+        type: 'GENERIC',
+        created_at: '2026-09-03T04:29:36Z',
+        content: 'Created At: ...\nFile Path: ...',
+      })
+    );
+    expect(gen).toHaveLength(1);
+    expect(gen[0]?.type).toBe('output');
+
+    // PLANNER_RESPONSE content → assistant（真正的模型回覆）
+    const asst = drain(
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-09-03T04:29:36Z',
+        content: 'I will check the code',
+      })
+    );
+    expect(asst).toHaveLength(1);
+    expect(asst[0]?.type).toBe('assistant');
+    expect(asst[0]?.formatted).toContain('I will check');
+
+    // PLANNER_RESPONSE with tool_calls → function_call（multi-emit，drain）
+    const emitted = drain(
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-09-03T04:29:36Z',
+        tool_calls: [
+          { name: 'view_file', args: { AbsolutePath: '"/a/b.py"' } },
+          { name: 'grep_search', args: { Pattern: '"foo"' } },
+        ],
+      })
+    );
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]?.type).toBe('function_call');
+    expect(emitted[0]?.toolName).toBe('view_file');
+    expect(emitted[1]?.type).toBe('function_call');
+    expect(emitted[1]?.toolName).toBe('grep_search');
+
+    // 舊格式 VIEW_FILE → output
+    const out = drain(
+      JSON.stringify({
+        type: 'VIEW_FILE',
+        created_at: '2026-09-03T04:29:36Z',
+        content: 'File: x',
+      })
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.type).toBe('output');
+
+    // SYSTEM_MESSAGE → 跳過
+    expect(
+      drain(JSON.stringify({ type: 'SYSTEM_MESSAGE', content: 'notice' }))
+    ).toHaveLength(0);
+
+    // 相同 line 去重
+    const dupLine = JSON.stringify({
+      type: 'GENERIC',
+      content: 'dup',
     });
+    expect(drain(dupLine)).toHaveLength(1);
+    expect(drain(dupLine)).toHaveLength(0);
+  });
 
-    // 確保 120 筆完全載入，徹底解決 100 筆被 DRAIN_GUARD_MAX 截斷的重大漏洞！
-    expect(emittedLines).toHaveLength(120);
-    expect(emittedLines[0]).toContain('Prompt number 0');
-    expect(emittedLines[119]).toContain('Prompt number 119');
+  test('AgyLineParser emits thinking alongside tool_calls/content in verbose mode', () => {
+    const verbose = new AgyAgent({ verbose: true }, customPaths);
+    const emitted: ParsedLine[] = [];
+    drainParser(
+      verbose.parser,
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-09-03T04:29:36Z',
+        thinking: 'thinking...',
+        tool_calls: [{ name: 'view_file', args: {} }],
+      }),
+      (p) => emitted.push(p)
+    );
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]?.type).toBe('reasoning');
+    expect(emitted[1]?.type).toBe('function_call');
+
+    const nonVerbose = new AgyAgent({ verbose: false }, customPaths);
+    const emitted2: ParsedLine[] = [];
+    drainParser(
+      nonVerbose.parser,
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        thinking: 'thinking...',
+        content: 'reply',
+      }),
+      (p) => emitted2.push(p)
+    );
+    expect(emitted2).toHaveLength(1);
+    expect(emitted2[0]?.type).toBe('assistant');
+  });
+
+  test('AgyLineParser drains large transcript without truncation', () => {
+    const agent = new AgyAgent({ verbose: false }, customPaths);
+    const parser = agent.parser;
+    const emitted: string[] = [];
+    for (let i = 0; i < 120; i++) {
+      drainParser(
+        parser,
+        JSON.stringify({
+          type: 'GENERIC',
+          created_at: '2026-09-03T04:29:36Z',
+          content: `Prompt number ${i}`,
+        }),
+        (p) => emitted.push(p.formatted)
+      );
+    }
+    expect(emitted).toHaveLength(120);
+    expect(emitted[0]).toContain('Prompt number 0');
+    expect(emitted[119]).toContain('Prompt number 119');
   });
 });
