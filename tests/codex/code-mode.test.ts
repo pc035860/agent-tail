@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  commandExecutionScript,
   formatCustomToolOutput,
   joinCustomToolOutput,
   parseCodeModeCalls,
@@ -212,5 +213,147 @@ describe('CodexLineParser code mode', () => {
       payload: { type: 'custom_tool_call_output', output: [] },
     });
     expect(parser.parse(line)).toBeNull();
+  });
+});
+
+describe('CommandExecution（item_completed）', () => {
+  // 真實樣本（codex-cli 0.156.0）：模型以變數批次呼叫，靜態解析拿不到 cmd
+  const BATCH_INPUT =
+    'const cmds=["pwd","git log -1"]; const rs=await Promise.allSettled(cmds.map(cmd=>tools.exec_command({cmd,workdir:"/x"}))); rs.forEach((r,i)=>text(JSON.stringify({cmd:cmds[i],result:r.value.output})));\n';
+
+  const call = (callId: string, input: string) =>
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call',
+        call_id: callId,
+        name: 'exec',
+        input,
+      },
+    });
+  const output = (callId: string, text: string) =>
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'custom_tool_call_output',
+        call_id: callId,
+        output: [{ type: 'input_text', text }],
+      },
+    });
+  const commandExecution = (
+    script: string,
+    aggregatedOutput: string,
+    exitCode = 0
+  ) =>
+    JSON.stringify({
+      timestamp: '2026-09-22T23:16:58.329Z',
+      type: 'event_msg',
+      payload: {
+        type: 'item_completed',
+        item: {
+          type: 'CommandExecution',
+          command: ['/bin/zsh', '-lc', script],
+          aggregated_output: aggregatedOutput,
+          exit_code: exitCode,
+          status: exitCode === 0 ? 'completed' : 'failed',
+        },
+      },
+    });
+
+  test('顯示實際指令與輸出', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    const parsed = parser.parse(commandExecution('git log -1', 'commit abc\n'));
+    expect(parsed!.type).toBe('output');
+    expect(parsed!.formatted).toContain('$ git log -1');
+    expect(parsed!.formatted).toContain('commit abc');
+  });
+
+  test('非 0 exit code 標在指令後；無輸出仍顯示指令', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    const parsed = parser.parse(commandExecution('false', '', 1));
+    expect(parsed!.formatted).toBe('$ false [exit: 1]');
+  });
+
+  test('多行 script（heredoc）標頭維持單行', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    const parsed = parser.parse(
+      commandExecution("cat <<'EOF' > a.txt\nline1\nEOF", '')
+    );
+    expect(parsed!.formatted).toBe("$ cat <<'EOF' > a.txt …");
+  });
+
+  test('只呼叫 write_stdin 的 script 也視為 exec-only', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    parser.parse(
+      call(
+        'c1',
+        'text((await tools.write_stdin({session_id:1,chars:""})).output);'
+      )
+    );
+    parser.parse(commandExecution('npm test', 'ok\n'));
+    expect(parser.parse(output('c1', 'ok'))).toBeNull();
+  });
+
+  test('其他 item_completed（與 response_item 重複）略過', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    const line = JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'item_completed',
+        item: { type: 'AgentMessage', content: [{ type: 'Text', text: 'hi' }] },
+      },
+    });
+    expect(parser.parse(line)).toBeNull();
+  });
+
+  test('exec-only script 已有 CommandExecution 時略過重複的 output', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    parser.parse(call('c1', BATCH_INPUT));
+    parser.parse(commandExecution('pwd', '/x\n'));
+    parser.parse(commandExecution('git log -1', 'commit abc\n'));
+    expect(
+      parser.parse(output('c1', '{"cmd":"pwd","result":"/x"}'))
+    ).toBeNull();
+  });
+
+  test('沒看到 CommandExecution（CLI <0.148）時 output 照常顯示', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    parser.parse(call('c1', BATCH_INPUT));
+    expect(parser.parse(output('c1', 'legacy stdout'))!.formatted).toContain(
+      'legacy stdout'
+    );
+  });
+
+  test('混用非 shell 工具的 script，output 照常顯示', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    parser.parse(
+      call(
+        'c1',
+        'await tools.update_plan({plan:[]}); text((await tools.exec_command({cmd:"ls"})).output);'
+      )
+    );
+    parser.parse(commandExecution('ls', 'a\n'));
+    expect(parser.parse(output('c1', 'plan updated'))).not.toBeNull();
+  });
+
+  test('CommandExecution 晚於 output 才到（長指令）時 output 照常顯示', () => {
+    const parser = new CodexAgent({ verbose: false }).parser;
+    parser.parse(call('c1', BATCH_INPUT));
+    expect(parser.parse(output('c1', 'partial'))).not.toBeNull();
+    // 之後到的 CommandExecution 不應影響下一個尚未開始的 call
+    parser.parse(commandExecution('pwd', '/x\n'));
+    parser.parse(call('c2', BATCH_INPUT));
+    expect(parser.parse(output('c2', 'second'))).not.toBeNull();
+  });
+});
+
+describe('commandExecutionScript', () => {
+  test('shell -lc 取 script，其他 argv join', () => {
+    expect(commandExecutionScript(['/bin/zsh', '-lc', 'git status'])).toBe(
+      'git status'
+    );
+    expect(commandExecutionScript(['/bin/bash', '-c', 'ls'])).toBe('ls');
+    expect(commandExecutionScript(['rg', '--files'])).toBe('rg --files');
+    expect(commandExecutionScript(undefined)).toBe('');
   });
 });

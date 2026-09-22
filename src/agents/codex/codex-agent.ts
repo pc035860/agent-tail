@@ -19,9 +19,25 @@ import {
   extractCodexSubagentIds,
 } from '../../codex/watch-builder.ts';
 import {
+  EXEC_TOOL_NAMES,
+  commandExecutionScript,
   formatCustomToolOutput,
   parseCodeModeCalls,
 } from '../../codex/code-mode.ts';
+
+/** execOnlyCalls 上限：正常情況 output 到了就刪，這只擋中斷 session 留下的孤兒 */
+const MAX_TRACKED_EXEC_CALLS = 200;
+
+const MAX_COMMAND_HEADER_LENGTH = 120;
+
+/** `$ cmd` 標頭維持單行：只取第一行，過長截斷（heredoc 等多行 script 以 … 標示） */
+function truncateCommandHeader(script: string): string {
+  const newlineIndex = script.indexOf('\n');
+  const firstLine = newlineIndex < 0 ? script : script.slice(0, newlineIndex);
+  if (firstLine.length > MAX_COMMAND_HEADER_LENGTH)
+    return `${firstLine.slice(0, MAX_COMMAND_HEADER_LENGTH)} …`;
+  return newlineIndex < 0 ? firstLine : `${firstLine} …`;
+}
 
 /**
  * Codex Session Finder
@@ -355,9 +371,33 @@ class CodexSessionFinder implements SessionFinder {
  */
 class CodexLineParser implements LineParser {
   private verbose: boolean;
+  /**
+   * 只跑 shell 指令的 exec script：call_id → 執行期間是否已看到 CommandExecution。
+   * 看到了，其 custom_tool_call_output 就是重複內容（且可能是模型自己拼的 JSON），
+   * 略過；沒看到（CLI <0.148 不寫 CommandExecution，或長指令晚於 output 才結束）
+   * 則照常顯示，確保不掉資料。
+   *
+   * CommandExecution 不帶 call_id，所以一律標記「所有」待決 call；誤標的 call
+   * 其指令內容仍會由自己的 CommandExecution 顯示，只少掉重複的 output。
+   */
+  private execOnlyCalls = new Map<string, boolean>();
 
   constructor(options: ParserOptions = { verbose: false }) {
     this.verbose = options.verbose;
+  }
+
+  private trackExecOnlyCall(callId: string): void {
+    this.execOnlyCalls.set(callId, false);
+    if (this.execOnlyCalls.size > MAX_TRACKED_EXEC_CALLS) {
+      const oldest = this.execOnlyCalls.keys().next().value;
+      if (oldest !== undefined) this.execOnlyCalls.delete(oldest);
+    }
+  }
+
+  private markExecCallsCovered(): void {
+    for (const callId of this.execOnlyCalls.keys()) {
+      this.execOnlyCalls.set(callId, true);
+    }
   }
 
   parse(line: string): ParsedLine | null {
@@ -436,6 +476,12 @@ class CodexLineParser implements LineParser {
       if (subType === 'reasoning') return 'reasoning';
     }
 
+    // CommandExecution（format 只為它產生內容，其他 item_completed 為空）
+    if (type === 'event_msg') {
+      const payload = data.payload as Record<string, unknown>;
+      if (payload.type === 'item_completed') return 'output';
+    }
+
     return type || 'unknown';
   }
 
@@ -485,6 +531,14 @@ class CodexLineParser implements LineParser {
           case 'custom_tool_call': {
             const input = (payload.input as string) ?? '';
             const calls = parseCodeModeCalls(input);
+            const callId = payload.call_id;
+            if (
+              typeof callId === 'string' &&
+              calls.length > 0 &&
+              calls.every((c) => EXEC_TOOL_NAMES.has(c.name))
+            ) {
+              this.trackExecOnlyCall(callId);
+            }
             if (calls.length > 0) {
               return calls
                 .map((c) =>
@@ -500,6 +554,12 @@ class CodexLineParser implements LineParser {
           }
 
           case 'custom_tool_call_output': {
+            const callId = payload.call_id;
+            if (typeof callId === 'string') {
+              const covered = this.execOnlyCalls.get(callId);
+              this.execOnlyCalls.delete(callId);
+              if (covered) return '';
+            }
             const content = formatCustomToolOutput(payload.output);
             if (!content.trim()) return '';
             const preview = truncateByLines(content, { verbose: this.verbose });
@@ -562,6 +622,32 @@ class CodexLineParser implements LineParser {
           case 'agent_reasoning': {
             // 與 response_item.reasoning 重複，略過
             return '';
+          }
+
+          // UserMessage / AgentMessage / Reasoning 與 response_item 重複；只取
+          // CommandExecution：每個實際跑完的指令一筆，不受 exec script 寫法影響
+          // （例如 cmds.map(cmd => tools.exec_command({cmd})) 靜態解析不出指令）
+          case 'item_completed': {
+            const item = payload.item as Record<string, unknown> | undefined;
+            if (item?.type !== 'CommandExecution') return '';
+            this.markExecCallsCovered();
+
+            const script = this.verbose
+              ? commandExecutionScript(item.command)
+              : truncateCommandHeader(commandExecutionScript(item.command));
+            const exitCode = item.exit_code;
+            const exitInfo =
+              typeof exitCode === 'number' && exitCode !== 0
+                ? ` [exit: ${exitCode}]`
+                : '';
+            const header = `$ ${script}${exitInfo}`;
+            const output =
+              typeof item.aggregated_output === 'string'
+                ? item.aggregated_output
+                : '';
+            if (!output.trim()) return header;
+            const preview = truncateByLines(output, { verbose: this.verbose });
+            return `${header}${formatMultiline(preview)}`;
           }
 
           // 略過其他事件

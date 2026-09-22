@@ -296,6 +296,29 @@ export function stripScriptHeader(text: string): string {
 }
 
 /**
+ * 只負責跑 shell 指令的 code mode 工具。只呼叫這些工具的 exec script，
+ * 其輸出可由 CommandExecution 完整取代
+ */
+export const EXEC_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'exec_command',
+  'write_stdin',
+]);
+
+/**
+ * 從 CommandExecution（`event_msg/item_completed`，CLI ≥0.148）的 argv
+ * 取出實際指令：`[shell, '-lc', script]` 取 script，其餘 join
+ */
+export function commandExecutionScript(command: unknown): string {
+  if (typeof command === 'string') return command;
+  if (!Array.isArray(command)) return '';
+  const argv = command.filter((a): a is string => typeof a === 'string');
+  const flagIndex = argv.length - 2;
+  if (flagIndex >= 1 && (argv[flagIndex] === '-lc' || argv[flagIndex] === '-c'))
+    return argv[argv.length - 1]!;
+  return argv.join(' ');
+}
+
+/**
  * 把 custom_tool_call_output 整理成可讀文字：
  * 逐段剝掉 script 樣板、拆出 exec_command 的 stdout，再串接
  */
