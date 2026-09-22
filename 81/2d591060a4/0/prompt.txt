@@ -1,0 +1,75 @@
+codex cli 最新版似乎改了 command log 格式
+你看一下 session 01a0cb68-5efd-7760-8554-3c402d3aae9f
+
+整理一下，跟我討論下一步動作
+
+---
+
+<task-notification>
+<task-id>a9ba6db7d3a060d40</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/04951ce3-d4a5-4ec8-8dc5-6e29f66d26f8/tasks/a9ba6db7d3a060d40.output</output-file>
+<status>completed</status>
+<summary>Agent "Search memory for codex format" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Codex gpt-5.6+ switched to code mode: tool calls now appear as `custom_tool_call` entries (not `function_call`) with a fixed tool name `exec`. The actual tool invocation is JavaScript inside `payload.input` (e.g., `await tools.exec_command({...})`). The output format changed from a JSON string to an array `[{type:'input_text',text}]` with embedded shell templates that must be stripped. Older gpt-5.5 sessions still use `function_call`, so both formats coexist. Parser uses `src/codex/code-mode.ts:parseCodeModeCalls()` with a tokenizer to extract calls from the JS code (skipping string/comment literals), trying `JSON.parse` first then falling back to loose parsing for keys without quotes. Codex subagent detection in code mode has unit test coverage only, no real spawn samples verified.
+
+Referenced entities: agent-tail:codex_code_mode, agent-tail:codex_subagent_detection
+
+Search modes used:
+- semantic: "How Codex code mode changed from function_call to custom_tool_call and exec tool, what the parser needs to handle"
+- keywords: "codex custom_tool_call exec code mode"</result>
+<usage><subagent_tokens>37570</subagent_tokens><tool_uses>3</tool_uses><duration_ms>19384</duration_ms></usage>
+</task-notification>
+
+---
+
+A
+
+---
+
+run review-loop(glm)
+
+---
+
+<task-notification>
+<task-id>a86efab7bd9758ae3</task-id>
+<tool-use-id>toolu_01FTJwQDJBA6sZ9kd95hFZcF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-pc035860-code-agent-tail/04951ce3-d4a5-4ec8-8dc5-6e29f66d26f8/tasks/a86efab7bd9758ae3.output</output-file>
+<status>completed</status>
+<summary>Agent "pi review (GLM 5.3 Flash) of codex CommandExecution" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. I read all four changed files in full, the unchanged collaborators (`src/utils/text.ts`, `src/codex/watch-builder.ts`), and verified the event structures against the real sample session (123 lines: 33 CommandExecution events, 9 custom_tool_call/output pairs — all sequential call → CommandExecutions → output, matching the parser's assumptions). All 27 tests in `tests/codex/code-mode.test.ts` pass.
+
+---
+
+## 1. Blocking Issues
+
+None. I specifically tried to break the suppression heuristic and could not construct a permanent data-loss scenario:
+
+- **`markExecCallsCovered` marks *all* pending calls covered** (`src/agents/codex/codex-agent.ts:387-390`): CommandExecution events carry no `call_id` (verified in the sample — the item has `id: "exec-…"`, no call reference), so per-call association is impossible and mark-all is the only option. The risky window (a foreign CommandExecution arriving while call B is pending) requires overlapping scripts, and even then B's real content still surfaces unconditionally via its own later CommandExecution line — only the model-assembled duplicate is dropped, which is the documented intent.
+- **Eviction is fail-safe** (`codex-agent.ts:381-383`): evicting the oldest pending call only risks *showing* a duplicate, never hiding data; `markExecCallsCovered` uses `set` on existing keys so Map insertion order (and thus "oldest") is preserved.
+- **Fallback correctness**: CLI &lt;0.148 (no CommandExecution → never marked) and late-yielding commands (output arrives while `covered === false`) both display the output, confirmed by tests at `tests/codex/code-mode.test.ts:296-303` and `:318-326`, and by the sample's strictly sequential call/output ordering.
+
+## 2. Suggestions
+
+- [`src/agents/codex/codex-agent.ts:547`] `const callId = payload.call_id as string;` — unsafe cast; the sibling call site (line 525) correctly guards with `typeof callId === 'string'`. A missing `call_id` happens to work (`Map.get(undefined)` → `undefined` → output shown), but the cast hides that; mirror the guard for consistency.
+- [`src/agents/codex/codex-agent.ts:623-626`] `truncate(..., { headLength: 80, tailLength: 40 })` on the script injects `\n\n… (N chars omitted) …\n\n` (chalk-colored) into the `$ ` header, making a single command render as a 3-line block. Consider `truncateByLines` with `headLines: 1` or a single-line ellipsis so one command stays one visual line.
+- [`src/agents/codex/codex-agent.ts:387-390`] Add one sentence to the `execOnlyCalls` doc comment stating that CommandExecution has no `call_id`, so coverage is intentionally attributed to *all* pending calls, and that any wrongly-marked call's content still appears via its own CommandExecution line. This is the subtlest invariant in the diff and is currently only implicit.
+- [`src/agents/codex/codex-agent.ts:469-472`] `getDisplayType` returns `'output'` for every `item_completed`, including UserMessage/AgentMessage/Reasoning, which `format` then reduces to `''` (line dropped). Harmless but slightly misleading; the existing comment covers it — fine to leave.
+- [`tests/codex/code-mode.test.ts`] Coverage gaps worth adding: (a) an exec-only `write_stdin` script (the other `EXEC_TOOL_NAMES` member — currently untested end-to-end), (b) the `MAX_TRACKED_EXEC_CALLS` eviction path, (c) `commandExecutionScript` with an empty array or non-string elements (currently renders as a bare `$ `).
+- [`src/agents/codex/codex-agent.ts:524-531`] Pre-existing, but now on the hot path: `parseCodeModeCalls` runs twice per `custom_tool_call` line (once in `format`, once in `getToolName`). Not introduced by this diff; noting only since exec scripts can be large.
+
+## 3. Questions
+
+- Should the suppressed `custom_tool_call_output` show a placeholder in verbose mode (e.g. `[output suppressed — shown via CommandExecution]`)? — If a script prints `text()` extras beyond command output (e.g. `"summary: " + r.output` prefixes), those fragments are silently dropped when covered; a verbose-only hint would make the suppression auditable without affecting normal rendering.
+- Is `exec_command`/`write_stdin` the complete exec-tool surface for CLI ≥0.148? — If Codex later adds e.g. `exec_patch` or renames these, scripts using them would fall outside `EXEC_TOOL_NAMES` and silently revert to showing the model-assembled output (safe but duplicated). A periodic re-check against a fresh sample would keep this honest.
+
+## 4. Summary
+
+A well-engineered, defensively-designed change: the suppression heuristic is deliberately conservative (fail-open in every ambiguous direction), is validated against a real 0.156.0 session whose structure matches the assumptions exactly, and ships with targeted tests plus updated CLAUDE.md documentation. The only findings are minor type-safety and cosmetics; no correctness or security concerns.
+
+(model: fireworks/accounts/fireworks/models/glm-5p3-flash — supplied by caller)
+(pi session key: review-codex-command-execution — pass `session key: review-codex-command-execution` to resume this pi session)</result>
+<usage><subagent_tokens>41475</subagent_tokens><tool_uses>1</tool_uses><duration_ms>117777</duration_ms></usage>
+</task-notification>
